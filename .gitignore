@@ -3,3 +3,12 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# vídeos baixados, arquivos temporários e clipes gerados
+.autoclip_work/
+output/
+# whisper.cpp compilado localmente + modelos
+whisper.cpp/
+*.mp4
+*.mkv
+*.webm
