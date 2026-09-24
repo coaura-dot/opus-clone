@@ -270,6 +270,14 @@ Tudo é configurável em um único arquivo:
 | Fonte da legenda | `CAPTION_FONT` (Anton, incluída em `assets/fonts/`) |
 | Altura da legenda / margem lateral (zona segura do app) | `CAPTION_MARGIN_V` (padrão 560), `CAPTION_MARGIN_H` |
 | Hashtags fixas do seu canal no `.post.txt` | `POST_EXTRA_HASHTAGS` |
+| Corte das pausas (jump cuts) — ligar/desligar, sensibilidade | `JUMPCUT_ENABLED`, `JUMPCUT_MIN_GAP_SECONDS`, `JUMPCUT_PUNCH_ZOOM` |
+| Título-gancho no topo — ligar/desligar, duração, tamanho | `HOOK_ENABLED`, `HOOK_SECONDS`, `HOOK_FONT_SIZE` |
+| Efeito sonoro (whoosh) | `SFX_ENABLED`, `SFX_WHOOSH_DB` |
+| Cores da legenda: palavra falada / palavras de impacto | `CAPTION_HIGHLIGHT_BGR`, `CAPTION_EMPHASIS_BGR` |
+| Zoom em plano médio / quando usar o layout fit | `SUBJECT_TARGET_FACE_FRAC`, `SUBJECT_MAX_UPSCALE`, `SUBJECT_FIT_GROUP_FACE_FRAC` |
+| Aproximação lenta (Ken Burns) no plano aberto | `WIDE_PUSH_IN_PER_SECOND`, `WIDE_PUSH_IN_MAX` |
+| Versão sem música de cada clipe | `EXPORT_NO_MUSIC_VERSION` |
+| Detector de rosto (`yunet` ou `haar`) | `FACE_DETECTOR` |
 | A partir de quanto tempo um vídeo é "longo" (transcrição por blocos) | `LONG_VIDEO_THRESHOLD_SECONDS` (padrão: 39 min) |
 | Duração de cada bloco de um vídeo longo | `CHUNK_DURATION_SECONDS` (padrão: 20 min) |
 | Viral score mínimo pra aceitar um bloco (senão tenta o próximo) | `CHUNK_VIRAL_SCORE_MIN` (**não calibrado contra vídeo real, ver comentário em `config.py`**) |
