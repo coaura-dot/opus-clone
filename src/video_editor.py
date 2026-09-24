@@ -144,7 +144,10 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
 
     print(f"[5/6] Clip {clip_index}: gerando legendas e mixando música...")
     ass_path = work / "captions.ass"
-    hook_text = make_title(candidate.text) if getattr(config, "HOOK_ENABLED", True) else None
+    # título = a frase-gancho que originou o clipe (a mesma no balão do topo
+    # e no .post.txt)
+    title = make_title(getattr(candidate, "hook_text", "") or candidate.text)
+    hook_text = title if getattr(config, "HOOK_ENABLED", True) else None
     generate_ass(clip_words, clip_offset=0.0, output_path=str(ass_path),
                  clip_duration=out_duration, hook_text=hook_text)
     if hook_text:
@@ -167,7 +170,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     _write_context_dump(transcript_words, candidate, str(context_txt_path))
     post_txt_path = final_path.with_suffix(".post.txt")
     write_post_kit(str(post_txt_path), candidate.text, load_track_credit(music_track),
-                   source_title, source_url)
+                   source_title, source_url, title=title)
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")

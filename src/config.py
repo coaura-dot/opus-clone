@@ -11,13 +11,18 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 
 # --- Duração dos clipes (segundos) ---
-# Shorts/Reels/TikTok: 30-60s é a faixa que mais retém. Clipes reais de
-# 80s+ (teto antigo 75s + folga 20s) passavam por 4-5 assuntos e perdiam a
-# força; agora o alvo é 40s e o teto real 60s + TOPIC_BOUNDARY_GRACE (15s)
-# só pra fechar a frase/assunto. Os jump cuts ainda tiram mais uns 3-8%.
-MIN_CLIP_DURATION = 15
-MAX_CLIP_DURATION = 60
-IDEAL_CLIP_DURATION = 40
+# Seleção por gancho (clip_selector.py, V10): acha o gancho, volta até o
+# começo do assunto dele (contexto) e vai até o assunto fechar — o clipe
+# pode ter QUALQUER duração nesta faixa, quem decide é o assunto.
+# (YouTube Shorts, Reels e TikTok aceitam até 3 min.)
+MIN_CLIP_DURATION = 40
+MAX_CLIP_DURATION = 180
+IDEAL_CLIP_DURATION = 40             # não usado pela seleção por gancho (só pelo teste)
+HOOK_MIN_SCORE = 2.0                 # pontuação mínima de uma frase pra contar como gancho
+HOOK_CONTEXT_MAX_SECONDS = 30.0      # até quanto antes do gancho o clipe pode começar (contexto)
+HOOK_PAYOFF_MIN_SECONDS = 12.0       # mínimo de "resposta" depois do gancho antes de poder fechar
+HOOK_ENERGY_WEIGHT = 1.5             # peso de voz mais animada/alta que o normal na frase-gancho
+STRONG_TOPIC_CHANGES_PER_MINUTE = 0.6  # quantas trocas de assunto "fortes" por minuto contam pra fechar clipe (menor = clipes mais longos)
 
 # --- Whisper (transcrição) ---
 WHISPER_MODEL_SIZE = "small"       # tiny, base, small, medium, large-v3
@@ -113,6 +118,7 @@ FACE_DETECT_WIDTH_FALLBACK = 960
 FACE_DETECTOR = "yunet"
 YUNET_DETECT_WIDTH = 640
 YUNET_SCORE_THRESHOLD = 0.6
+FACE_LOOK_ROOM = 0.3                 # espaço na direção do olhar (fração da largura do rosto)
 # Fração máxima de altura do frame onde o centro de um rosto detectado pode
 # estar. Detecções abaixo desse limite (ex.: logos, brinquedos, placas de mesa
 # num plano aberto de podcast) são descartadas como falsos positivos — rostos
@@ -330,10 +336,11 @@ FALLBACK_BG_BLUR_SIGMA = 25.0       # intensidade do desfoque do fundo no modo "
 FALLBACK_BG_DARKEN = 0.55           # 0-1: quanto o fundo desfocado é escurecido
 WIDE_FIT_ZOOM = 1.12                # layout fit: amplia o quadro central 12% (corta só as bordas laterais)
 # Ken Burns no layout fit: plano aberto longo fica parado demais no celular;
-# a imagem central vai aproximando devagar (2.5%/s, até +20%) em direção a
-# quem está falando, e zera no próximo corte de câmera. 0 = desliga.
-WIDE_PUSH_IN_PER_SECOND = 0.025
-WIDE_PUSH_IN_MAX = 1.20
+# a imagem central vai aproximando devagar (2%/s, até +35% — num plano de
+# mesa de 30s real, +20% chegava em 8s e ficava parado o resto) em direção
+# a quem está falando, e zera no próximo corte de câmera. 0 = desliga.
+WIDE_PUSH_IN_PER_SECOND = 0.02
+WIDE_PUSH_IN_MAX = 1.35
 
 # Detecção de CORTE DE CÂMERA real (o vídeo de origem alterna para outra
 # pessoa/ângulo — comum em podcast de duas câmeras). Um salto de posição
@@ -475,6 +482,12 @@ MUSIC_VOLUME_DB = -20.94  # +50% de ganho linear sobre o valor anterior
                           # -24.46 + 3.52 ≈ -20.94. Se ainda estiver baixa
                           # (ou alta demais) pro seu gosto, é só esse
                           # número — mais perto de 0 = mais alto.
+# Volume da música RELATIVO À VOZ de cada clipe (medido em LUFS antes da
+# mixagem): a trilha fica este tanto de dB abaixo da fala, e o ducking
+# abaixa mais ainda enquanto alguém fala. Maior = música mais baixa.
+# (Com o valor fixo acima, medido em clipes reais, a música ficava só ~9 dB
+# abaixo da voz — alta demais.) None = usa MUSIC_VOLUME_DB fixo.
+MUSIC_BELOW_VOICE_DB = 24.0
 MUSIC_DUCKING = True
 MUSIC_DUCKING_RATIO = 4              # compressão do ducking (era 8 = quase mutava a música
                                       # inteira enquanto havia qualquer fala)

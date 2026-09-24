@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 from . import config
 from .utils import run
 
@@ -209,6 +211,34 @@ def _db_to_factor(db: float) -> float:
     return 10 ** (db / 20)
 
 
+def _integrated_lufs(path: str) -> Optional[float]:
+    """Loudness integrada (LUFS, EBU R128) de um arquivo de áudio, ou None
+    se não der pra medir (arquivo mudo, ffmpeg sem o filtro etc.)."""
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(path),
+                           "-af", "ebur128", "-f", "null", "-"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    matches = re.findall(r"^\s+I:\s+(-?[\d.]+) LUFS", proc.stderr.decode(errors="ignore"), re.M)
+    if not matches:
+        return None
+    value = float(matches[-1])
+    return value if value > -70 else None
+
+
+def _music_gain_db(voice_audio: str, music_path: str) -> float:
+    """Ganho a aplicar na trilha pra ela ficar MUSIC_BELOW_VOICE_DB abaixo
+    da voz DESTE clipe (antes do ducking). Um valor fixo em dB dependia de
+    quão alto o podcast foi gravado: medido em clipes reais do Flow, a voz
+    vinha a -28 LUFS e a música ficava só ~9 dB abaixo dela — alta demais,
+    ainda mais com phonk (muito grave)."""
+    below = getattr(config, "MUSIC_BELOW_VOICE_DB", None)
+    if below is not None:
+        voice_i = _integrated_lufs(voice_audio)
+        music_i = _integrated_lufs(music_path)
+        if voice_i is not None and music_i is not None:
+            return float(np.clip((voice_i - below) - music_i, -60.0, 6.0))
+    return config.MUSIC_VOLUME_DB
+
+
 def load_track_credit(track: Optional[MusicTrack]) -> Optional[str]:
     """Linha de crédito da trilha, lida de assets/music/track_credits.txt
     (formato "Título | crédito" por linha, casado com o nome do arquivo do
@@ -268,7 +298,7 @@ def mix_with_music(voice_audio: str, duration: float, output_path: str,
     else:
         _generate_ambient_bed(duration, str(music_path))
 
-    music_vol = _db_to_factor(config.MUSIC_VOLUME_DB)
+    music_vol = _db_to_factor(_music_gain_db(voice_audio, str(music_path)))
     ratio = getattr(config, "MUSIC_DUCKING_RATIO", 4)
     threshold = getattr(config, "MUSIC_DUCKING_THRESHOLD", 0.08)
     # loudnorm normaliza o volume final para -14 LUFS (padrão usado por

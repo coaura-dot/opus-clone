@@ -110,10 +110,22 @@ def _detect_yunet(detector, frame_bgr, det_width: int, min_score: float) -> list
     _, faces = detector.detect(small)
     if faces is None:
         return []
-    return [
-        ((f[0] + f[2] / 2.0) / scale, (f[1] + f[3] / 2.0) / scale, f[2] / scale, f[3] / scale)
-        for f in faces if float(f[-1]) >= min_score
-    ]
+    # Centro horizontal: nos OLHOS (não no centro da caixa -- num perfil a
+    # caixa pega cabelo/nuca e fica ~100px atrás do rosto, que acabava
+    # colado na borda do quadro) + "espaço de olhar": desloca pro lado em
+    # que o nariz aponta, deixando o rosto no terço oposto, como um
+    # cinegrafista enquadra (FACE_LOOK_ROOM x largura do rosto).
+    look_room = getattr(config, "FACE_LOOK_ROOM", 0.3)
+    out = []
+    for f in faces:
+        if float(f[-1]) < min_score:
+            continue
+        x, y, fw, fh = f[0], f[1], f[2], f[3]
+        eyes_x = (f[4] + f[6]) / 2.0
+        yaw = float(np.clip((f[8] - eyes_x) / max(fw * 0.25, 1e-3), -1.0, 1.0))
+        cx = eyes_x + yaw * look_room * fw
+        out.append((cx / scale, (y + fh / 2.0) / scale, fw / scale, fh / scale))
+    return out
 
 
 def _detect_profile_faces(cascade, gray) -> list:

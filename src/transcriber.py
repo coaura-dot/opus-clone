@@ -38,6 +38,57 @@ class Transcript:
         return " ".join(s.text.strip() for s in self.segments)
 
 
+def _norm_token(text: str) -> str:
+    return "".join(c for c in text.lower() if c.isalnum())
+
+
+def _drop_repetition_loops(words: List[Word]) -> List[Word]:
+    """Remove "loops" de alucinação do Whisper: a mesma frase curta repetida
+    em sequência dezenas de vezes (achado real num podcast: "Foi 99." 62
+    vezes seguidas, num trecho de risada/música) — que ia parar na legenda e
+    na seleção de cortes. Uma sequência de 2-6 palavras repetida 3+ vezes
+    seguidas (ou 1 palavra repetida 4+ vezes — "não, não, não" é fala
+    normal) fica só com a primeira ocorrência."""
+    toks = [_norm_token(w.text) for w in words]
+    out: List[Word] = []
+    i = 0
+    while i < len(words):
+        skipped = False
+        for n in range(1, 7):  # período mais curto primeiro (senão "foi 99" x3 vira um bloco de 6 mantido inteiro)
+            chunk = toks[i:i + n]
+            if len(chunk) < n or not any(chunk):
+                continue
+            reps = 1
+            while toks[i + reps * n:i + (reps + 1) * n] == chunk:
+                reps += 1
+            if reps >= (4 if n == 1 else 3):
+                out.extend(words[i:i + n])
+                i += reps * n
+                skipped = True
+                break
+        if not skipped:
+            out.append(words[i])
+            i += 1
+    return out
+
+
+def _clean_transcript(t: "Transcript") -> "Transcript":
+    # o filtro roda na sequência de palavras do vídeo INTEIRO (um loop
+    # costuma atravessar vários segmentos do Whisper) e depois devolve cada
+    # palavra mantida ao seu segmento de origem
+    owner = {id(w): i for i, seg in enumerate(t.segments) for w in seg.words}
+    kept = {id(w) for w in _drop_repetition_loops(t.words)}
+    segments = []
+    for i, seg in enumerate(t.segments):
+        words = [w for w in seg.words if id(w) in kept and owner[id(w)] == i]
+        if len(words) != len(seg.words):
+            seg = Segment(start=seg.start, end=seg.end,
+                          text=" ".join(w.text for w in words), words=words)
+        if seg.words or (seg.text.strip() and not t.segments[i].words):
+            segments.append(seg)
+    return Transcript(language=t.language, segments=segments)
+
+
 def transcribe(audio_path: str, model_size: str = "small",
                device: str = "auto", compute_type: str = "auto") -> Transcript:
     """Ponto de entrada único usado pelo resto do pipeline. Escolhe o motor
@@ -57,8 +108,8 @@ def transcribe(audio_path: str, model_size: str = "small",
         if problem:
             print(f"    [aviso] whisper.cpp indisponível ({problem}) — usando "
                   "faster-whisper. Confira WHISPERCPP_BIN/WHISPERCPP_MODEL em config.py.")
-            return _transcribe_faster_whisper(audio_path, model_size, device, compute_type)
-        return transcribe_whispercpp(
+            return _clean_transcript(_transcribe_faster_whisper(audio_path, model_size, device, compute_type))
+        return _clean_transcript(transcribe_whispercpp(
             audio_path,
             model_path=config.WHISPERCPP_MODEL,
             bin_path=config.WHISPERCPP_BIN,
@@ -66,8 +117,8 @@ def transcribe(audio_path: str, model_size: str = "small",
             threads=getattr(config, "WHISPERCPP_THREADS", 0),
             use_gpu=getattr(config, "WHISPERCPP_USE_GPU", True),
             gpu_device=getattr(config, "WHISPERCPP_GPU_DEVICE", 0),
-        )
-    return _transcribe_faster_whisper(audio_path, model_size, device, compute_type)
+        ))
+    return _clean_transcript(_transcribe_faster_whisper(audio_path, model_size, device, compute_type))
 
 
 def _transcribe_faster_whisper(audio_path: str, model_size: str = "small",

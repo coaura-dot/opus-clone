@@ -121,8 +121,9 @@ def make_description(clip_text: str) -> str:
 
 
 def build_post_text(clip_text: str, music_credit: Optional[str] = None,
-                    source_title: Optional[str] = None, source_url: Optional[str] = None) -> str:
-    title = make_title(clip_text)
+                    source_title: Optional[str] = None, source_url: Optional[str] = None,
+                    title: Optional[str] = None) -> str:
+    title = title or make_title(clip_text)
     description = make_description(clip_text)
     topic_tags = make_topic_hashtags(clip_text)
     extra_tags = [t if t.startswith("#") else f"#{t}"
@@ -152,7 +153,8 @@ def build_post_text(clip_text: str, music_credit: Optional[str] = None,
 
 
 def write_post_kit(path: str, clip_text: str, music_credit: Optional[str] = None,
-                   source_title: Optional[str] = None, source_url: Optional[str] = None) -> str:
+                   source_title: Optional[str] = None, source_url: Optional[str] = None,
+                   title: Optional[str] = None) -> str:
     Path(path).write_text(
-        build_post_text(clip_text, music_credit, source_title, source_url), encoding="utf-8")
+        build_post_text(clip_text, music_credit, source_title, source_url, title), encoding="utf-8")
     return path

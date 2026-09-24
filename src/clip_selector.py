@@ -11,6 +11,8 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+import numpy as np
+
 from .transcriber import Transcript, Word
 from .audio import audio_energy
 from . import config
@@ -18,10 +20,10 @@ from . import config
 
 HOOK_PATTERNS_PT = [
     r"\bvocê (sabia|acredita|imagina)\b", r"\bninguém (te|fala|conta|ensina|mostra)\b",
-    r"\bsegredo\b", r"\bo (maior|pior|melhor) erro\b", r"\bverdade\b", r"\bisso mudou\b",
-    r"\bnunca\b", r"\bsempre\b", r"\bpor que\b", r"\bcomo (eu|fazer|fiz|consigo)\b",
+    r"\bsegredo\b", r"\bo (maior|pior|melhor) erro\b", r"\bisso mudou\b",
+    r"\bpor que\b", r"\bcomo (eu|fazer|fiz|consigo)\b",
     r"\b\d+ (dicas|passos|motivos|razões|formas|maneiras|coisas|erros)\b",
-    r"\bimportante\b", r"\bo que ninguém\b",
+    r"\bo que ninguém\b",
     r"\bvocê está fazendo (errado|isso errado)\b",
     r"\bimagina (se|só)\b", r"\bisso (é|foi) loucura\b",
     # PT-BR coloquial / viral
@@ -30,7 +32,7 @@ HOOK_PATTERNS_PT = [
     r"\bperdendo (dinheiro|tempo|oportunidade)\b", r"\bvai mudar\b",
     r"\bse você (faz|fizer|está)\b", r"\bpresta atenção\b",
     r"\bcalma (que|aí)\b", r"\bespera (aí|só)\b", r"\bsó (uma|um) (coisa|momento)\b",
-    r"\bfato (é|curioso)\b", r"\bna real\b", r"\bé sério\b",
+    r"\bfato (é|curioso)\b",
     r"\bfui (eu|buscar|fazer|descobrir)\b", r"\bestou aqui\b",
     r"\bvou (te|contar|revelar|mostrar)\b", r"\btem (gente|pessoas) (que|fazendo)\b",
 ]
@@ -89,6 +91,10 @@ CONCLUSIVE_END_PATTERNS_PT = [
     r"\be (foi|é) isso\b", r"\be pronto\b", r"\bno final das contas\b",
     r"\bresumindo\b", r"\bé (basicamente|praticamente) isso\b",
     r"\bentão (é|foi) isso\b", r"\bdito isso\b",
+    # fechamento no FIM da frase ("A gente nasce perdendo, é isso.") —
+    # achado real: o clipe cortava logo antes dessa frase-conclusão
+    r"\b(é|foi) isso( aí)?[.!]*\s*$", r"\bsimples assim\b", r"\bacabou[.!]*\s*$",
+    r"\bponto final\b",
 ]
 CONCLUSIVE_END_PATTERNS_EN = [
     r"\bthat'?s (basically |pretty much )?it\b", r"\bat the end of the day\b",
@@ -342,6 +348,15 @@ STARTS_MID_THOUGHT_PATTERNS_PT = [
     r"^mas\b", r"^só que\b", r"^porém\b", r"^contudo\b", r"^entretanto\b",
     r"^no entanto\b", r"^apesar disso\b", r"^mesmo assim\b",
 ]
+# frase que abre com pronome/muleta depende do contexto anterior
+_WEAK_OPENER_RE = re.compile(
+    r"^\s*(ele|ela|eles|elas|isso|isto|esse|essa|esses|essas|aquilo|aquele|aquela|"
+    r"aí|daí|também|tipo|he|she|they|it|that|this)\b", re.IGNORECASE)
+# pergunta-muleta no fim da frase ("..., né?", "tá ligado?"): não conta
+# como pergunta-gancho
+_TAG_QUESTION_RE = re.compile(
+    r"[,\s]*\b(né|não é|tá ligado|entendeu|sabe|certo|cara|mano|right|you know)\?+\s*$",
+    re.IGNORECASE)
 STARTS_MID_THOUGHT_PATTERNS_EN = [
     r"^but\b", r"^however\b", r"^yet\b", r"^even so\b", r"^that said\b",
 ]
@@ -373,10 +388,21 @@ class ClipCandidate:
     # transcrição parcial e não existe um transcript.words único do vídeo
     # inteiro para passar adiante.
     words: List[Word] = field(default_factory=list)
+    # frase-gancho que originou o clipe (vira o título / balão do topo)
+    hook_text: str = ""
 
     @property
     def duration(self):
         return self.end - self.start
+
+
+# palavras de gancho GENÉRICAS demais pra valer como um padrão de gancho
+# inteiro: achado real — "Nunca vi, eu preciso ver, vamos ver!" virava o
+# melhor gancho do vídeo só por ter "nunca"
+WEAK_HOOK_PATTERNS = [
+    r"\bnunca\b", r"\bsempre\b", r"\bverdade\b", r"\bimportante\b",
+    r"\bna real\b", r"\bé sério\b",
+]
 
 
 def _text_score(text: str) -> float:
@@ -385,6 +411,9 @@ def _text_score(text: str) -> float:
     for pat in HOOK_PATTERNS_PT + HOOK_PATTERNS_EN:
         if re.search(pat, t):
             score += 3.0
+    for pat in WEAK_HOOK_PATTERNS:
+        if re.search(pat, t):
+            score += 1.0
     for w in EMOTION_WORDS:
         score += 2.0 * t.count(w)
     score += 1.5 * t.count("?")
@@ -725,154 +754,194 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
     # bordas deixam de contar como início/fim de assunto automático, PASSAM
     # A EXIGIR o mesmo sinal real (pausa longa, frase de fechamento, troca
     # de assunto) que qualquer fronteira NO MEIO do transcript já exigia.
+    boundary_cache: dict = {}
+
+    def boundary(idx: int) -> bool:
+        if idx not in boundary_cache:
+            boundary_cache[idx] = is_topic_boundary(idx)
+        return boundary_cache[idx]
+
     def starts_clean(start_idx: int) -> bool:
         if _starts_mid_thought(sentences[start_idx]["text"]):
             return False
         if start_idx == 0:
             return is_first_segment
-        return is_topic_boundary(start_idx - 1)
+        return boundary(start_idx - 1)
 
-    # Histórico de por que início E fim de assunto são checados (V4/V5) e
-    # por que a checagem virou pontuação em vez de filtro rígido (V5) está
-    # documentado em starts_clean()/is_topic_boundary() acima.
+    # V10 — SELEÇÃO POR GANCHO (pedido do usuário: "procura gancho, pega
+    # contexto, faz o clip de 40 segundos a 3 minutos, pode ser qualquer
+    # tamanho dentro dessa faixa"). Antes, cada início de frase virava uma
+    # janela fechada no fim de assunto MAIS PRÓXIMO de IDEAL_CLIP_DURATION —
+    # todos os clipes saíam com a mesma cara de duração (curtos), e o gancho
+    # podia nem estar neles. Agora a ordem é a de um editor:
+    #   1. acha as frases-GANCHO (padrão de gancho, pergunta, número,
+    #      palavra de emoção, pico de energia na voz);
+    #   2. volta até o COMEÇO DO ASSUNTO em que o gancho está (o contexto
+    #      que faz ele fazer sentido), até HOOK_CONTEXT_MAX_SECONDS antes;
+    #   3. vai até o PRIMEIRO fim de assunto confirmado depois do gancho
+    #      (com pelo menos HOOK_PAYOFF_MIN_SECONDS de "resposta" depois
+    #      dele) — sem alvo de duração: o assunto é que decide, dentro de
+    #      [MIN_CLIP_DURATION, MAX_CLIP_DURATION];
+    #   4. ranqueia pela força do gancho + densidade de conteúdo + energia,
+    #      com prêmio pra começo/fim limpos.
+    clean_cache: dict = {}
+
+    def clean_start_at(idx: int) -> bool:
+        if idx not in clean_cache:
+            clean_cache[idx] = starts_clean(idx)
+        return clean_cache[idx]
+
+    hop = 0.5  # resolução de `energies` (audio_energy padrão)
+    e_mean = float(energies.mean()) if len(energies) else 0.0
+    e_std = float(energies.std()) if len(energies) else 0.0
+    energy_weight = getattr(config, "HOOK_ENERGY_WEIGHT", 1.5)
+
+    def hook_score(idx: int) -> float:
+        sent = sentences[idx]
+        text = sent["text"].strip()
+        # pergunta-muleta no fim ("..., né?", "tá ligado?") não é pergunta
+        core = _TAG_QUESTION_RE.sub("", text)
+        if len(core.split()) < 6 or len(_content_words(core)) < 3:
+            return 0.0  # "É muito louco né?", "Tu falou a língua?" — curto demais pra gancho
+        score = _text_score(core)
+        # nomes próprios (palavra capitalizada fora do início de frase):
+        # gancho que cita alguém/algum lugar/marca é mais concreto
+        proper = re.findall(r"(?<![.!?]\s)(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}", core)
+        score += min(len(proper), 3) * 0.8
+        if text.endswith(("...", "…")):
+            score -= 2.5  # frase que morre no meio não segura ninguém
+        window = energies[int(sent["start"] / hop):int(sent["end"] / hop) + 1]
+        if len(window) and e_std > 1e-6:
+            score += float(np.clip((window.mean() - e_mean) / e_std, 0.0, 3.0)) * energy_weight
+        return score
+
+    min_dur, max_dur = config.MIN_CLIP_DURATION, config.MAX_CLIP_DURATION
+    context_max = min(getattr(config, "HOOK_CONTEXT_MAX_SECONDS", 30.0), max_dur * 0.4)
+    payoff_min = min(getattr(config, "HOOK_PAYOFF_MIN_SECONDS", 12.0), min_dur * 0.5)
+
+    # Força de cada fim de assunto: marcador explícito ("enfim", "mudando de
+    # assunto") vale mais; pausa longa pro ritmo do vídeo e vale forte do
+    # TextTiling somam. Medido num podcast real: o detector confirma uma
+    # troca a cada ~24s (qualquer pausa um pouco maior) — fechar o clipe na
+    # primeira delas depois do mínimo dava sempre clipes curtos. Pra FECHAR
+    # um clipe só contam as trocas FORTES, calibradas por vídeo:
+    # ~STRONG_TOPIC_CHANGES_PER_MINUTE delas (as mais fortes do vídeo).
+    def strength(idx: int) -> float:
+        if idx + 1 >= len(sentences):
+            return 3.0 if is_last_segment else 0.0
+        st = 0.0
+        if (_ends_on_topic_conclusion(sentences[idx]["text"])
+                or _starts_new_topic(sentences[idx + 1]["text"])):
+            st += 2.0
+        pause = sentences[idx + 1]["start"] - sentences[idx]["end"]
+        if pause >= pause_threshold:
+            st += min(pause / max(pause_threshold, 1e-3), 3.0) * 0.5
+        return st + lexical_scores[idx] * 1.5
+
+    all_strengths = sorted((strength(i) for i in range(len(sentences)) if boundary(i)),
+                           reverse=True)
+    minutes = max((sentences[-1]["end"] - sentences[0]["start"]) / 60.0, 1.0)
+    n_strong = max(int(round(minutes * getattr(config, "STRONG_TOPIC_CHANGES_PER_MINUTE", 0.6))), 1)
+    strong_min = (all_strengths[min(n_strong, len(all_strengths)) - 1]
+                  if all_strengths else float("inf"))
+
+    ranked_hooks = sorted(((hook_score(i), i) for i in range(len(sentences))), reverse=True)
+    hooks = [h for h in ranked_hooks if h[0] >= getattr(config, "HOOK_MIN_SCORE", 2.0)]
+    if len(hooks) < n_clips:
+        hooks = ranked_hooks  # vídeo sem gancho claro: usa os melhores que houver
+    hooks = hooks[:max(n_clips * 8, 24)]
+
     candidates: List[ClipCandidate] = []
-    for start_idx in range(len(sentences)):
+    for h_score, h in hooks:
+        hook_t = sentences[h]["start"]
+
+        # ETAPA 1: contexto — começo do assunto em que o gancho está
+        start_idx, clean_start = h, clean_start_at(h)
+        j = h
+        while not clean_start and j > 0 and hook_t - sentences[j - 1]["start"] <= context_max:
+            j -= 1
+            if clean_start_at(j):
+                start_idx, clean_start = j, True
+        opener = sentences[start_idx]["text"].lstrip()
+        if clean_start and start_idx != h and (_WEAK_OPENER_RE.match(opener)
+                                               or opener[:1].islower()):
+            # o "começo de assunto" achado abre com pronome/muleta ("Eles
+            # viraram...", "Isso aí...") ou em minúscula (o Whisper marca
+            # assim frase que continua a anterior) — depende do que veio
+            # antes; o próprio gancho é uma abertura melhor
+            start_idx, clean_start = h, clean_start_at(h)
+        if not clean_start:
+            # nenhum começo de assunto ao alcance: começa no próprio gancho,
+            # recuando só enquanto a frase abre com conectivo ("Mas...")
+            start_idx = h
+            while (start_idx > 0 and _starts_mid_thought(sentences[start_idx]["text"])
+                   and hook_t - sentences[start_idx - 1]["start"] <= context_max):
+                start_idx -= 1
         start_t = sentences[start_idx]["start"]
-        clean_start = starts_clean(start_idx)
 
-        # ETAPA 1: escolhe QUAL fim de assunto usar para este início — a
-        # duração (proximidade de IDEAL_CLIP_DURATION) é o critério
-        # DOMINANTE aqui; um pequeno ajuste de conteúdo só desempata entre
-        # limites de assunto de duração parecida (prefere uma conclusão
-        # explícita a uma pergunta-gancho sem resposta, por exemplo) — nunca
-        # o suficiente pra justificar pular pra um limite muito mais distante
-        # só por ter mais texto-gancho acumulado.
-        best_end_idx = None
-        best_fit_score = None
-        best_is_boundary = False
-        fallback_end_idx = None  # melhor fim de FRASE simples (sem exigir
-                                  # fim de assunto), só usado se nenhum fim
-                                  # de assunto existir dentro do alcance
-        fallback_fit = None
-
-        for end_idx in range(start_idx, len(sentences)):
-            end_t = sentences[end_idx]["end"]
+        # ETAPA 2: fim — primeira troca de assunto FORTE depois da
+        # "resposta" ao gancho; sem nenhuma ao alcance, a troca de assunto
+        # mais forte dentro da faixa; sem nenhuma, o fim de frase com o
+        # sinal mais forte (pausa + vale lexical)
+        end_idx, end_is_boundary, fallback, weak_best = None, False, None, None
+        for k in range(h, len(sentences)):
+            end_t = sentences[k]["end"]
             dur = end_t - start_t
-            if dur < config.MIN_CLIP_DURATION:
+            if dur > max_dur:
+                break
+            if dur < min_dur or end_t < sentences[h]["end"] + payoff_min:
                 continue
-            if dur > hard_max_duration:
+            has_next = k + 1 < len(sentences)
+            more_content_exists = has_next or not is_last_segment
+            dangling = ((more_content_exists and _ends_on_open_question(sentences[k]["text"]))
+                        or (has_next and _starts_mid_thought(sentences[k + 1]["text"])))
+            if dangling:
+                continue  # pergunta sem resposta / próxima frase é "Mas..."
+            if boundary(k):
+                if strength(k) >= strong_min:
+                    end_idx, end_is_boundary = k, True
+                    break
+                if weak_best is None or strength(k) > weak_best[0]:
+                    weak_best = (strength(k), k)
+                continue
+            sig = (sentences[k + 1]["start"] - end_t if has_next else 0.0) + lexical_scores[k]
+            if fallback is None or sig > fallback[0]:
+                fallback = (sig, k)
+        if end_idx is None and weak_best is not None:
+            end_idx, end_is_boundary = weak_best[1], True
+        if end_idx is None and fallback is not None:
+            end_idx = fallback[1]
+        if end_idx is None:
+            continue  # nem a duração mínima coube a partir deste gancho
+
+        # a conclusão do raciocínio às vezes vem logo DEPOIS do fim de
+        # assunto detectado ("...não tem vitória." + "A gente nasce
+        # perdendo, é isso.") — estica até ela se estiver a 1-2 frases
+        for k in range(end_idx + 1, min(end_idx + 3, len(sentences))):
+            if (sentences[k]["end"] - start_t > max_dur
+                    or sentences[k]["end"] - sentences[end_idx]["end"] > 12.0):
+                break
+            if _ends_on_topic_conclusion(sentences[k]["text"]):
+                end_idx = k
                 break
 
-            dur_penalty = abs(dur - config.IDEAL_CLIP_DURATION) * duration_fit_weight
-            has_next = end_idx + 1 < len(sentences)
-            # Achado real (clipe do usuário terminando em "...que eu vou
-            # fazer?", uma pergunta aberta): `has_next` só enxerga a lista
-            # de frases DESTE bloco/chunk (ver long_video.py) — quando o
-            # vídeo é longo e processado em blocos de ~20min, a pergunta
-            # caiu bem na ÚLTIMA frase TRANSCRITA daquele bloco. `has_next`
-            # dava False ali (não achou mais nada na lista local), então a
-            # penalidade de pergunta-sem-resposta nunca disparava — mesmo
-            # com `is_last_segment=False` já sabendo corretamente que o
-            # vídeo de origem CONTINUA depois daquele bloco (a resposta
-            # bem provavelmente está a poucos segundos dali, só que no
-            # próximo bloco, que ainda nem foi transcrito). "Não achei mais
-            # frase na minha lista" e "não existe mais vídeo depois disso"
-            # são coisas DIFERENTES, e o código tratava as duas como se
-            # fossem a mesma. `is_last_segment` já existe e já é usado pra
-            # esse exato propósito em outro ponto (ver linha ~559) — só não
-            # tinha sido conectado aqui.
-            # Duas variantes: pra pergunta-sem-resposta (só olha a frase
-            # ATUAL, `sentences[end_idx]`) basta saber que existe algo
-            # depois, mesmo sem ter o texto — `more_content_exists` cobre
-            # isso. Já a checagem de "próxima frase começa com Mas..."
-            # PRECISA do texto de verdade da próxima frase pra funcionar,
-            # que só existe se ela estiver na nossa lista local — por isso
-            # continua exigindo `has_next` (índice válido), não o mais
-            # amplo `more_content_exists` (evita também IndexError).
-            more_content_exists = has_next or not is_last_segment
-            effective_penalty = dur_penalty
-            if more_content_exists and _ends_on_open_question(sentences[end_idx]["text"]):
-                effective_penalty += config.DANGLING_QUESTION_PENALTY
-            # Simétrico ao caso de "Mas ao fazer..." corrigido no início da
-            # janela (ver item 17 do RELATORIO_PROXIMOS_PASSOS.txt): lá, o
-            # problema era o clipe COMEÇAR em cima de um conectivo de
-            # contraste/continuação. Aqui é o espelho — o clipe TERMINA bem
-            # antes de uma frase (excluída, fora do clipe) que abre com um
-            # desses conectivos. Ex.: corta em "...e conseguimos reduzir o
-            # déficit." e a próxima frase (fora do clipe) é "Mas isso trouxe
-            # um problema seríssimo pro emprego." — o espectador fica com uma
-            # versão só otimista/só pessimista de um argumento que na
-            # gravação original tinha as duas pontas. Reaproveita
-            # `_starts_mid_thought` (mesma lista de conectivos fortes) em vez
-            # de duplicar a lista — o sinal é o mesmo, só o lado que muda.
-            if has_next and _starts_mid_thought(sentences[end_idx + 1]["text"]):
-                effective_penalty += config.DANGLING_QUESTION_PENALTY
-
-            if dur <= config.MAX_CLIP_DURATION and (fallback_fit is None or effective_penalty < fallback_fit):
-                fallback_fit, fallback_end_idx = effective_penalty, end_idx
-
-            if not is_topic_boundary(end_idx):
-                continue
-
-            fit_score = -dur_penalty
-            if has_next and _ends_on_topic_conclusion(sentences[end_idx]["text"]):
-                fit_score += config.TOPIC_BOUNDARY_BONUS
-            if more_content_exists and _ends_on_open_question(sentences[end_idx]["text"]):
-                fit_score -= config.DANGLING_QUESTION_PENALTY
-            if has_next and _starts_mid_thought(sentences[end_idx + 1]["text"]):
-                fit_score -= config.DANGLING_QUESTION_PENALTY
-            # pequeno desempate: entre limites de assunto de duração
-            # parecida, inclina levemente pro que tem um "vale" lexical
-            # mais forte (mais confiança de que é troca de assunto de
-            # verdade, não só uma pausa comum) — não decide sozinho
-            # (peso pequeno), só ajuda a desempatar.
-            if has_next:
-                fit_score += lexical_scores[end_idx] * getattr(
-                    config, "TOPIC_LEXICAL_FIT_BONUS", 1.0)
-
-            if best_fit_score is None or fit_score > best_fit_score:
-                best_fit_score, best_end_idx, best_is_boundary = fit_score, end_idx, True
-
-        if best_end_idx is None:
-            # nenhum fim de ASSUNTO detectável dentro do alcance permitido —
-            # cai pro fim de FRASE mais próximo da duração ideal, sem
-            # esticar até a folga (não há sinal nenhum que justifique
-            # esticar; ver honestidade no comentário de config.py).
-            best_end_idx = fallback_end_idx
-
-        if best_end_idx is None:
-            continue  # nem a duração mínima coube a partir deste início
-
-        # ETAPA 2: com a janela já fechada, o conteúdo decide o quão boa ela
-        # é (usado só pra comparar ESTE início contra os outros, não pra
-        # escolher o próprio fim — isso já foi decidido acima).
-        end_t = sentences[best_end_idx]["end"]
-        text = " ".join(sentences[i]["text"] for i in range(start_idx, best_end_idx + 1))
-        score = _text_score(text) + _energy_score(energies, start_t, end_t)
-        # normaliza pelo comprimento — sem isso clipes longos acumulam mais
-        # hooks que clipes curtos e sempre ganham mesmo sendo piores pra Shorts
-        dur_ratio = (end_t - start_t) / max(config.IDEAL_CLIP_DURATION, 1.0)
-        if dur_ratio > 1.0:
-            score /= dur_ratio ** 0.55
-        if best_is_boundary:
-            score += config.TOPIC_BOUNDARY_BONUS * 0.5  # pequeno prêmio por
-                                                          # ser um fechamento
-                                                          # de assunto de
-                                                          # verdade, não só
-                                                          # o encaixe de
-                                                          # duração do
-                                                          # fallback
-        if clean_start:
-            score += config.TOPIC_BOUNDARY_BONUS * 0.5  # mesmo prêmio, agora
-                                                          # simétrico pro início
-        else:
-            score -= getattr(config, "TOPIC_START_PENALTY", 6.0)  # começa no
-                                                                    # MEIO de
-                                                                    # um assunto
-                                                                    # em andamento
+        # ETAPA 3: pontuação
+        end_t = sentences[end_idx]["end"]
+        dur = end_t - start_t
+        text = " ".join(sentences[i]["text"] for i in range(start_idx, end_idx + 1))
+        density = _text_score(text) / max(dur / 60.0, 0.5)  # pontos por minuto
+        score = 2.0 * h_score + 0.5 * density + _energy_score(energies, start_t, end_t)
+        # gancho enterrado no meio do clipe perde força (quem rola o feed
+        # decide nos primeiros segundos)
+        score -= max(hook_t - start_t - 10.0, 0.0) * 0.08
+        score += config.TOPIC_BOUNDARY_BONUS * 0.5 if clean_start else -getattr(
+            config, "TOPIC_START_PENALTY", 6.0)
+        if end_is_boundary:
+            score += config.TOPIC_BOUNDARY_BONUS * 0.5
 
         candidates.append(ClipCandidate(start=start_t, end=end_t, text=text,
-                                         score=score, title=""))
+                                         score=score, title="",
+                                         hook_text=sentences[h]["text"]))
 
     if not candidates:
         raise RuntimeError(
@@ -892,7 +961,7 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
             for o in chosen
         )
         if not overlaps:
-            c.title = _make_title(c.text)
+            c.title = _make_title(c.hook_text or c.text)
             chosen.append(c)
 
     if not chosen:
