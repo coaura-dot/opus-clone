@@ -1076,3 +1076,58 @@ Observado no teste real e NÃO mexido (vale olhar com os seus vídeos):
   - Um clipe saiu com 83.6s, acima de MAX_CLIP_DURATION=75 (extensão pra
     fechar o assunto). Serve pro Reels/TikTok/Shorts, mas fica acima do
     ideal de 30-60s.
+
+
+18) EDIÇÃO PROFISSIONAL — resposta aos clipes reais do Flow Podcast
+    ("o segundo ficou com tela preta, os outros mal editados")
+--------------------------------------------------------------------------
+Testado com um trecho real de 15 min de um episódio do Flow Podcast
+(archive.org, 720p 23.976fps, closes + plano médio + plano aberto de 4
+pessoas na mesa), mesmo estúdio dos clipes enviados.
+
+a) "TELA PRETA" = plano aberto/médio. Nenhum quadro era preto de verdade
+   (medido): o crop usava a ALTURA INTEIRA da fonte, então a pessoa ficava
+   pequena no meio e a cortina escura do estúdio ocupava metade da tela.
+   Agora (reframer.py + SUBJECT_* no config):
+   - crop dimensionado pelo tamanho do rosto (zoom em plano médio, limitado
+     a 3x de ampliação pra não borrar);
+   - plano de GRUPO (2+ rostos pequenos) -> layout "fit" (quadro inteiro
+     sobre fundo desfocado), fixo até o próximo corte de câmera;
+   - troca de modo junto com corte de câmera da fonte = corte seco (antes:
+     crossfade de 1.5s, parecia erro de edição);
+   - Ken Burns: plano aberto longo aproxima devagar em quem fala.
+
+b) Detector de rosto trocado de Haar pra YuNet (rede neural do OpenCV,
+   modelo MIT de 230KB em assets/models/). Achado real: num close de perfil
+   com óculos escuros o Haar via 4 "rostos" (parede de espuma, camisa,
+   microfone) e o programa achava que era plano de grupo. YuNet: 1 rosto,
+   ~0.9 de confiança, e o reenquadramento ficou ~2x mais rápido. Haar
+   continua como fallback (FACE_DETECTOR = "haar").
+
+c) Jump cuts (src/jumpcut.py): corta pausas de silêncio de dentro do clipe
+   (só se o áudio estiver em silêncio de verdade — risada/reação ficam),
+   cortes alinhados à grade de quadros (medido: áudio e vídeo terminam
+   juntos, <1 quadro de diferença), e o enquadramento alterna normal/+8% a
+   cada corte. Em podcast denso tirou 1-2s por clipe (3-5%).
+
+d) Legendas estilo corte viral: 3 palavras em CAIXA ALTA, "pop" de
+   entrada, palavra falada em amarelo crescendo, números/dinheiro/palavras
+   de impacto em verde, contorno 8 + sombra, fonte 135.
+
+e) Título-gancho no topo (balão branco, primeiros 3.2s) + whoosh
+   sintetizado (src/sfx.py).
+
+f) Música: biblioteca trocada por 23 faixas de edit do NCS (Brazilian
+   Phonk, Phonk, Jersey Club, Future Trap — lançamentos 2024-2026), trechos
+   de ~95s a partir do drop, normalizados pra -16 LUFS (as masters do NCS
+   são até 13dB mais altas). NCS libera uso monetizado com crédito (vai no
+   .post.txt). Hits comerciais NÃO foram baixados (Content ID / áudio
+   silenciado): cada clipe sai também como *_sem_musica.mp4 pra postar com
+   som em alta escolhido no próprio app.
+
+g) Duração: ideal 40s, máx 60s + 15s de folga (antes 45 / 75+20 — o clipe
+   3 enviado tinha 80.9s e passava por 5 assuntos).
+
+NÃO testado aqui (precisa da sua máquina): AMF/RX 580 e whisper.cpp
+Vulkan com o código novo, vídeo 1080p60 da fonte original, download do
+YouTube.
