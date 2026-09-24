@@ -1,4 +1,7 @@
-yt-dlp>=2024.1.0
+# [default] inclui o yt-dlp-ejs, que resolve os desafios JavaScript do
+# YouTube (junto com um runtime JS: Deno ou Node -- ver README.md). Sem isso,
+# versões novas do yt-dlp perdem formatos ou falham com 403 no YouTube.
+yt-dlp[default]>=2025.11.12
 faster-whisper>=1.0.0
 # headless: sem dependências de GUI (Qt/GTK) desnecessárias num servidor sem
 # monitor. Se você usa OpenCV para outra coisa com janelas/GUI, troque por

@@ -1,8 +1,28 @@
 """
 Download de vídeos do YouTube via yt-dlp.
 """
+import shutil
+from functools import lru_cache
 from pathlib import Path
 from .utils import run, ensure_dir
+
+
+@lru_cache(maxsize=1)  # decide (e avisa) uma vez só por execução
+def _js_runtime_args() -> tuple:
+    """O YouTube passou a exigir a execução de um desafio JavaScript pra
+    liberar os links de vídeo, e o yt-dlp só usa o Deno por padrão. Se o
+    Deno não estiver instalado mas o Node estiver (comum no Windows), ativa
+    o Node explicitamente -- sem runtime nenhum, o yt-dlp perde formatos
+    (qualidade pior) ou falha com HTTP 403."""
+    if shutil.which("deno"):
+        return ()
+    for runtime in ("node", "bun"):
+        if shutil.which(runtime):
+            return ("--js-runtimes", runtime)
+    print("    [aviso] nenhum runtime JavaScript (Deno/Node) encontrado -- o "
+          "download do YouTube pode falhar ou vir em qualidade menor. "
+          "Instale o Deno: winget install DenoLand.Deno")
+    return ()
 
 
 def download_youtube_video(url: str, work_dir: str) -> Path:
@@ -26,6 +46,7 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
         "-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--no-playlist",
+        *_js_runtime_args(),
         "-o", out_template,
         url,
     ]
@@ -41,6 +62,6 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
 
 
 def get_video_title(url: str) -> str:
-    cmd = ["yt-dlp", "--get-title", "--no-playlist", url]
+    cmd = ["yt-dlp", "--get-title", "--no-playlist", *_js_runtime_args(), url]
     out = run(cmd).stdout.decode(errors="ignore").strip()
     return out or "video"

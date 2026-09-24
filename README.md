@@ -87,10 +87,19 @@ py -3 -m venv .venv
 .venv\Scripts\activate
 
 pip install -r requirements.txt
+
+# runtime JavaScript que o yt-dlp usa pra passar pelo desafio do YouTube
+# (sem ele o download perde formatos ou falha com 403). Se você já tem o
+# Node.js instalado, o programa usa ele e este passo é opcional.
+winget install DenoLand.Deno
 ```
 
 Depois, confirme que `ffmpeg -version` funciona num terminal novo (PATH só
 atualiza em janelas abertas depois da instalação).
+
+Se o download começar a falhar do nada (403, "Sign in to confirm you're not
+a bot"), quase sempre é o YouTube mudando algo e o yt-dlp já tendo correção:
+`pip install -U "yt-dlp[default]"`.
 
 <details>
 <summary>Instalação em Linux/Mac</summary>
