@@ -52,6 +52,12 @@ def transcribe(audio_path: str, model_size: str = "small",
     engine = getattr(config, "TRANSCRIBE_ENGINE", "faster-whisper")
     if engine == "whispercpp":
         from .transcriber_whispercpp import transcribe as transcribe_whispercpp
+        from .transcriber_whispercpp import missing_setup
+        problem = missing_setup(config.WHISPERCPP_MODEL, config.WHISPERCPP_BIN)
+        if problem:
+            print(f"    [aviso] whisper.cpp indisponível ({problem}) — usando "
+                  "faster-whisper. Confira WHISPERCPP_BIN/WHISPERCPP_MODEL em config.py.")
+            return _transcribe_faster_whisper(audio_path, model_size, device, compute_type)
         return transcribe_whispercpp(
             audio_path,
             model_path=config.WHISPERCPP_MODEL,

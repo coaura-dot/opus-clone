@@ -86,6 +86,18 @@ def _group_into_segments(words: list) -> list:
     ]
 
 
+def missing_setup(model_path: str, bin_path: str = "whisper-cli") -> Optional[str]:
+    """Retorna None se o binário e o modelo do whisper.cpp existem, ou uma
+    descrição curta do que está faltando. Usado por transcriber.transcribe
+    pra cair no faster-whisper em vez de travar quando o whisper.cpp não
+    está instalado nesta máquina (ex.: config.py copiado de outro PC)."""
+    if not (shutil.which(bin_path) or Path(bin_path).exists()):
+        return f"binário '{bin_path}' não encontrado"
+    if not Path(model_path).exists():
+        return f"modelo '{model_path}' não encontrado"
+    return None
+
+
 def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
                language: str = "auto", threads: int = 0,
                use_gpu: bool = True, gpu_device: int = 0,
