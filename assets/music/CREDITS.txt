@@ -1,28 +1,49 @@
-Músicas placeholder (substitua pelas suas quando quiser — basta colocar os
-arquivos nesta pasta e listar cada um em track_drops.txt no formato
-"Título - M:SS", onde M:SS é o início do drop/refrão).
+Biblioteca de música de fundo — estilo edit/viral (Brazilian Phonk, Phonk,
+Jersey Club, Future Trap), todas do NoCopyrightSounds (NCS, ncs.io).
 
-Todas as faixas abaixo são de Kevin MacLeod (incompetech.com), licenciadas
-sob Creative Commons: By Attribution 4.0
-https://creativecommons.org/licenses/by/4.0/
+LICENÇA (política de uso do NCS, https://ncs.io/usage-policy): criadores
+independentes podem usar estas faixas nos seus vídeos, INCLUSIVE
+MONETIZADOS, desde que deem o crédito na descrição. O .post.txt de cada
+clipe já traz a linha de crédito da faixa sorteada — copie junto com a
+descrição. Não vale pra conteúdo publicitário de marca (aí precisa de
+licença comercial do NCS).
 
-Ao publicar um clipe com uma delas, coloque na descrição, por exemplo:
-  "<Título>" Kevin MacLeod (incompetech.com)
-  Licensed under Creative Commons: By Attribution 4.0 License
-  http://creativecommons.org/licenses/by/4.0/
+Cada arquivo aqui é um trecho de ~95s começando 1s antes do "drop" da
+música, em mono 96 kbps, normalizado pra -16 LUFS (as masters do NCS são
+bem mais altas; sem isso o volume da música no config.py passaria por cima
+da voz).
+
+Pra usar suas próprias músicas: coloque o arquivo nesta pasta e adicione
+uma linha em track_drops.txt ("Título - M:SS", onde começa o drop) e, se a
+licença pedir crédito, uma em track_credits.txt ("Título | crédito").
+
+Música comercial "do momento" (hits virais) NÃO deve ir aqui: no YouTube o
+Content ID reivindica o clipe e no Instagram/TikTok o áudio pode ser
+silenciado. Pra trend com som famoso, use a versão *_sem_musica.mp4 que o
+programa gera junto e escolha o som pela biblioteca do próprio app na hora
+de postar.
 
 Faixas:
-  - Carefree
-  - Fluffing a Duck
-  - Funkorama
-  - Hustle
-  - Investigations
-  - Local Forecast - Elevator
-  - Monkeys Spinning Monkeys
-  - Pixel Peeker Polka - faster
-  - Scheming Weasel faster
-  - Sneaky Snitch
-
-Os tempos em track_drops.txt foram calculados automaticamente (janela de 4s
-com mais energia, deixando ao menos ~35s de música depois) — ajuste à mão
-se algum não cair no melhor trecho.
+  - Syn Cole, Nakama - Feel Good Funk (Brazilian Phonk, 6 Mar 2026) — http://ncs.io/feelgoodfunk
+  - cape, crysstales - COM BOTA (Brazilian Phonk, 19 Feb 2026) — http://ncs.io/COMBOTA
+  - MXZI, Deno - FAVELA (Brazilian Phonk, 7 Nov 2025) — http://ncs.io/FAVELA
+  - crysstales, DJ YHR, HRXSTAL - Take The Sky (Brazilian Phonk, 6 Nov 2025) — http://ncs.io/takethesky
+  - DIPIENS, HRXSTAL - INDUSTRY KISS (Brazilian Phonk, 9 Oct 2025) — http://ncs.io/INDUSTRYKISS
+  - MXRCVRY - AYUDA (Brazilian Phonk, 4 Sep 2025) — http://ncs.io/AYUDA
+  - CHASHKAKEFIRA - MONTAGEM FAVELA (Brazilian Phonk, 22 Aug 2025) — http://ncs.io/MONTAGEMFAVELA
+  - DR MØB, Chris Linton - Fearless Funk (Brazilian Phonk, 19 Aug 2025) — http://ncs.io/FearlessFunk
+  - BVSSL7ON, ANIZYZ - THE REDEEMER (Brazilian Phonk, 12 Jun 2025) — http://ncs.io/TheRedeemer
+  - KPHK, Eluvo, Sayfalse - VEM LENTA! (Brazilian Phonk, 6 Jun 2025) — http://ncs.io/VEMLENTA
+  - X972, sk3tch01, MXZI - Montagem Toma (Brazilian Phonk, 9 May 2025) — http://ncs.io/MontagemToma
+  - LXNGVX - Royalty Funk (Brazilian Phonk, 2 May 2025) — http://ncs.io/royaltyfunk
+  - Warriyo, LXNGVX - Mortals Funk Remix (Brazilian Phonk, 17 Jan 2025) — http://ncs.io/MortalsFunk
+  - xxephyrr, TWISTED - BUSSIN' (xxephyrr remix) (Brazilian Phonk, 21 Feb 2025) — http://ncs.io/BUSSIN_R
+  - DYNAMIS, HXDES - Kapoeira Phonk (Brazilian Phonk, 26 Apr 2024) — http://ncs.io/KapoeiraPhonk
+  - Kamran747, Emin Nilsen - BANDIDO FUNK (Brazilian Phonk, 18 Jun 2024) — http://ncs.io/BANDIDOFUNK
+  - CryJaxx, MVRPHiN, Lucy Malfroy - LA VIDA! (Phonk, 21 Nov 2025) — http://ncs.io/LAVIDA
+  - GxL - MONTAGEM INDIA (Phonk, 26 Sep 2025) — http://ncs.io/montagemindia
+  - Scythermane, SH3RWIN, NXGHT! - DANÇA DO VERÃO (Phonk, 27 Mar 2025) — http://ncs.io/DDV
+  - THIRST - AIWA (Phonk, 24 Oct 2024) — http://ncs.io/AIWA
+  - QKReign, DMHP_SKN - Her Body (Jersey Club, 22 Jul 2025) — http://ncs.io/HerBody
+  - Lost Sky, Shiah Maisel - Lost pt. II (Future Trap, 12 Dec 2025) — http://ncs.io/lostptii
+  - Ailow - Godless (Future Trap, 13 Nov 2025) — http://ncs.io/godless

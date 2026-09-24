@@ -142,6 +142,9 @@ def build_post_text(clip_text: str, music_credit: Optional[str] = None,
     if music_credit:
         lines += ["MÚSICA (obrigatório colocar na descrição — licença de atribuição)",
                   music_credit, ""]
+    if getattr(config, "EXPORT_NO_MUSIC_VERSION", True):
+        lines += ["DICA: quer usar um som em alta? Poste o arquivo *_sem_musica.mp4 e",
+                  "escolha o som pela biblioteca do app (aí não precisa do crédito acima).", ""]
     if source_title or source_url:
         src = " — ".join(x for x in (source_title, source_url) if x)
         lines += ["FONTE (dê crédito ao vídeo original)", f"Corte de: {src}", ""]

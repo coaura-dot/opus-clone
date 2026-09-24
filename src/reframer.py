@@ -1139,7 +1139,8 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                           force_cpu: bool = False,
                           audio_energy: Optional[np.ndarray] = None,
                           audio_energy_hop: float = 0.1,
-                          reference_times: Optional[List[float]] = None) -> str:
+                          reference_times: Optional[List[float]] = None,
+                          keep_segments: Optional[List[tuple]] = None) -> str:
     """Gera o clipe vertical final (9:16) em um único passe: decodifica só o
     trecho necessário do vídeo original, recorta seguindo o rosto do
     orador (com fallback para plano aberto quando não há rosto em quadro),
@@ -1149,7 +1150,14 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     `audio_energy`/`audio_energy_hop`: curva de energia RMS do áudio deste
     clipe (ver `audio.audio_energy`), usada para confirmar qual rosto está
     REALMENTE falando (ver `_FaceActivityTracker._audio_gate`). Opcional —
-    sem ela, o rastreamento volta a depender só do movimento facial."""
+    sem ela, o rastreamento volta a depender só do movimento facial.
+
+    `keep_segments`: trechos (segundos relativos a `start`, alinhados na
+    grade de quadros) que ficam no vídeo final -- ver src/jumpcut.py. Os
+    quadros fora deles (pausas cortadas) são lidos e descartados. Nesse caso
+    `audio_energy`, `zoom_peak_times` e `reference_times` já vêm na linha do
+    tempo SEM as pausas (a do áudio final), e é nela que tudo que depende de
+    tempo é consultado aqui."""
     zoom_peak_times = zoom_peak_times or []
     reference_times = sorted(reference_times or [])
     duration = max(end - start, 0.1)
@@ -1276,6 +1284,8 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     alpha = 1.0 - (1.0 - alpha_per_check) ** (1.0 / detect_interval)
     write_error = None
     frame_idx = 0
+    out_idx = 0      # quadros efetivamente escritos (linha do tempo final)
+    seg_i = 0        # trecho de keep_segments em que estamos
     smooth_breath = 0.0
     _breath_alpha = getattr(config, "ENERGY_BREATHING_SMOOTHING", 0.97)
     # mínimo de frames que um modo deve ser mantido antes de poder trocar —
@@ -1312,8 +1322,15 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             raw = frame_q.get()
             if raw is None:
                 break
+            if keep_segments is not None:
+                t_src = frame_idx / fps
+                while seg_i < len(keep_segments) and t_src >= keep_segments[seg_i][1] - 1e-6:
+                    seg_i += 1
+                if seg_i >= len(keep_segments) or t_src < keep_segments[seg_i][0] - 1e-6:
+                    frame_idx += 1  # quadro dentro de uma pausa cortada
+                    continue
             frame = np.frombuffer(raw, dtype=np.uint8).reshape(src_h, src_w, 3)
-            t = frame_idx / fps
+            t = out_idx / fps  # tempo no vídeo FINAL (= tempo do áudio final)
             frames_since_cut += 1
             tracker.sample_motion(frame, t)
             if screen_tracker is not None:
@@ -1632,6 +1649,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 break
 
             frame_idx += 1
+            out_idx += 1
     finally:
         # drena a fila pra thread leitora não ficar bloqueada num put() se
         # saímos do loop antes do fim do stream (erro de escrita etc.)
@@ -1676,6 +1694,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             ass_path=ass_path, audio_path=audio_path, fonts_dir=fonts_dir,
             zoom_peak_times=zoom_peak_times, force_cpu=True,
             audio_energy=audio_energy, audio_energy_hop=audio_energy_hop,
+            reference_times=reference_times, keep_segments=keep_segments,
         )
 
     if hw_failed_mid_stream:

@@ -355,21 +355,26 @@ VIDEO_IN_VIDEO_TIMEOUT_SECONDS = 1.0  # tempo sem detectar antes de esquecer a r
 VIDEO_IN_VIDEO_ACTIVITY_MIN = 3.0     # piso de atividade de pixel pra considerar "tocando"
 
 # --- Legendas estilo "karaokê" (efeito Opus Clip / CapCut) ---
-CAPTION_WORDS_PER_GROUP = 4
+CAPTION_WORDS_PER_GROUP = 3           # grupos curtos = leitura rápida (padrão de corte viral)
+CAPTION_UPPERCASE = True
 # "Anton" (Google Fonts, licença OFL livre) vem embutida em assets/fonts/ e é
 # carregada via "fontsdir" no filtro `ass` do ffmpeg — funciona em qualquer
 # sistema, sem precisar instalar a fonte no SO. O original usava
 # "Arial Black", que normalmente não existe no Linux (a legenda cairia numa
 # fonte genérica do sistema).
 CAPTION_FONT = "Anton"
-CAPTION_FONT_SIZE = 110              # pt de referência para vídeo de 1080px de largura
+CAPTION_FONT_SIZE = 135              # pt de referência para vídeo de 1080px de largura
                                       # (era 22 — praticamente ilegível; depois 84, que
                                       # medido no vídeo final dava letras de ~44px e ocupava
                                       # só ~1/3 da largura — Opus Clip/CapCut usam legendas
                                       # bem maiores, ocupando boa parte da largura)
-CAPTION_OUTLINE_WIDTH = 6            # pt de referência p/ 1080px; escala junto com a fonte
+CAPTION_OUTLINE_WIDTH = 8            # pt de referência p/ 1080px; escala junto com a fonte
+CAPTION_SHADOW = 4                   # sombra preta semitransparente atrás do contorno
+CAPTION_LETTER_SPACING = 1
+CAPTION_POP_START_SCALE = 70         # cada grupo entra crescendo de 70% -> 100% ("pop")
 CAPTION_PRIMARY_BGR = "FFFFFF"      # branco (formato BGR usado pelo ASS)
-CAPTION_HIGHLIGHT_BGR = "00D7FF"    # dourado/amarelo (BGR)
+CAPTION_HIGHLIGHT_BGR = "00D7FF"    # dourado/amarelo (BGR) — palavra sendo falada
+CAPTION_EMPHASIS_BGR = "5BFF3C"     # verde (BGR) — números, dinheiro, palavras de impacto
 CAPTION_OUTLINE_BGR = "000000"      # preto
 # Zona segura do TikTok / Reels / Shorts: a interface do app cobre os ~25%
 # de baixo do vídeo (descrição, nome da música, botões) e uma faixa de
@@ -379,7 +384,46 @@ CAPTION_OUTLINE_BGR = "000000"      # preto
 # posicionam.
 CAPTION_MARGIN_V = 560               # distância da legenda até a base do quadro
 CAPTION_MARGIN_H = 120               # margem lateral (quebra de linha antes dos botões da direita)
-CAPTION_HIGHLIGHT_SCALE = 108        # escala (%) da palavra destacada — leve "pop" visual
+CAPTION_HIGHLIGHT_SCALE = 115        # escala (%) da palavra destacada — "pop" ao ser falada
+
+# Exporta também clip_XX_..._sem_musica.mp4 (mesma imagem, só a voz) pra
+# postar com um som em alta escolhido na biblioteca do próprio TikTok /
+# Instagram / YouTube -- o único jeito de usar música comercial viral sem
+# reivindicação de direitos, e o algoritmo favorece vídeo com som em alta.
+EXPORT_NO_MUSIC_VERSION = True
+
+# --- Efeitos sonoros (src/sfx.py, sintetizados localmente) ---
+SFX_ENABLED = True
+SFX_WHOOSH_DB = -18.0                # volume do whoosh na entrada do título-gancho
+
+# --- Título-gancho no topo (primeiros segundos de cada clipe) ---
+# Balão branco com texto preto (visual clássico de TikTok/Reels) com o
+# título do .post.txt, pra quem está rolando o feed entender em 1 segundo
+# do que é o corte. Fica abaixo da faixa de abas do app no topo.
+HOOK_ENABLED = True
+HOOK_SECONDS = 3.2
+HOOK_FONT = "Anton"
+HOOK_FONT_SIZE = 86
+HOOK_TEXT_BGR = "000000"
+HOOK_BOX_BGR = "FFFFFF"
+HOOK_BOX_PADDING = 20
+HOOK_MARGIN_V = 250                  # distância do topo (a faixa de abas do app ocupa ~8%)
+HOOK_MARGIN_H = 110
+HOOK_MAX_LINE_CHARS = 22
+
+# --- Jump cuts: corte das pausas de dentro do clipe (src/jumpcut.py) ---
+# Pausa entre duas palavras maior que JUMPCUT_MIN_GAP_SECONDS vira corte,
+# deixando JUMPCUT_PAD_AFTER depois da palavra anterior e JUMPCUT_PAD_BEFORE
+# antes da próxima (respiro natural, não come sílaba). Só corta se o áudio
+# da pausa estiver em silêncio de verdade (abaixo de JUMPCUT_SILENCE_RATIO x
+# o volume típico da fala) -- risada/reação ficam. False = clipe corrido.
+JUMPCUT_ENABLED = True
+JUMPCUT_MIN_GAP_SECONDS = 0.40
+JUMPCUT_PAD_AFTER_SECONDS = 0.10
+JUMPCUT_PAD_BEFORE_SECONDS = 0.06
+JUMPCUT_MIN_CUT_SECONDS = 0.15
+JUMPCUT_TAIL_KEEP_SECONDS = 0.35
+JUMPCUT_SILENCE_RATIO = 0.35
 
 # --- Kit de postagem (arquivo .post.txt ao lado de cada clipe) ---
 # Hashtags fixas do seu canal, somadas às de assunto (tiradas da fala do

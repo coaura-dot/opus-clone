@@ -11,7 +11,9 @@ from .effects import find_energy_peaks
 from .reframer import render_vertical_clip
 from .captioner import generate_ass
 from .music import mix_with_music, pick_music_track, load_track_credit
-from .post_kit import write_post_kit
+from .post_kit import write_post_kit, make_title
+from .sfx import add_whoosh
+from . import jumpcut
 from .react_detector import find_reference_times
 from .utils import run, ensure_dir, sanitize_filename
 from . import config
@@ -112,10 +114,24 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
 
     print(f"[4/6] Clip {clip_index}: extraindo áudio do trecho "
           f"({candidate.start:.1f}s - {candidate.end:.1f}s)...")
-    voice_audio = work / "voice.wav"
-    extract_audio_segment(source_path, candidate.start, candidate.end, str(voice_audio))
+    raw_voice = work / "voice_raw.wav"
+    extract_audio_segment(source_path, candidate.start, candidate.end, str(raw_voice))
 
-    energies = audio_energy(str(voice_audio), candidate.duration)
+    # jump cuts: tira as pausas de dentro do clipe (ver src/jumpcut.py). Daqui
+    # pra baixo tudo (áudio, legenda, zooms, energia) usa a linha do tempo
+    # JÁ SEM as pausas; o reenquadramento descarta os quadros delas.
+    keep_segments = jumpcut.compute_keep_segments(
+        transcript_words, candidate.start, candidate.end, str(raw_voice), src_fps)
+    voice_audio = work / "voice.wav"
+    jumpcut.tighten_audio(str(raw_voice), str(voice_audio), keep_segments)
+    out_duration = jumpcut.kept_duration(keep_segments)
+    removed = candidate.duration - out_duration
+    if removed > 0.05:
+        print(f"    -> Clip {clip_index}: {len(keep_segments) - 1} pausa(s) cortada(s), "
+              f"-{removed:.1f}s ({candidate.duration:.1f}s -> {out_duration:.1f}s)")
+    clip_words = jumpcut.remap_words(transcript_words, candidate.start, keep_segments)
+
+    energies = audio_energy(str(voice_audio), out_duration)
     peaks_local = find_energy_peaks(energies, hop=0.5)  # já relativo ao início do clipe
 
     # curva de energia em resolução mais fina, só para o reenquadramento
@@ -123,23 +139,27 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     # hop de 0.5s usado acima para os zoom punches é grosso demais pra essa
     # finalidade.
     face_gate_hop = getattr(config, "FACE_AUDIO_GATE_HOP", 0.1)
-    face_gate_energies = audio_energy(str(voice_audio), candidate.duration,
+    face_gate_energies = audio_energy(str(voice_audio), out_duration,
                                        hop=face_gate_hop)
 
     print(f"[5/6] Clip {clip_index}: gerando legendas e mixando música...")
     ass_path = work / "captions.ass"
-    generate_ass(transcript_words, clip_offset=candidate.start, output_path=str(ass_path),
-                 clip_duration=candidate.duration)
+    hook_text = make_title(candidate.text) if getattr(config, "HOOK_ENABLED", True) else None
+    generate_ass(clip_words, clip_offset=0.0, output_path=str(ass_path),
+                 clip_duration=out_duration, hook_text=hook_text)
+    if hook_text:
+        add_whoosh(str(voice_audio), at=0.0)  # marca a entrada do título
 
     mixed_audio = work / "mixed.wav"
     music_track = pick_music_track()
-    mix_with_music(str(voice_audio), candidate.duration, str(mixed_audio), track=music_track)
+    mix_with_music(str(voice_audio), out_duration, str(mixed_audio), track=music_track)
 
     # Modo REACT (RELATORIO item 14): frases tipo "olha a camisa dele" no
     # trecho deste clipe forçam um zoom breve na tela reagida quando
     # renderizado — sem efeito nenhum se este vídeo não tiver nenhuma tela
     # detectável (screen_tracker fica None em render_vertical_clip).
-    reference_times = find_reference_times(transcript_words, candidate.start, candidate.end)
+    reference_times = [jumpcut.remap_time(rt, keep_segments) for rt in
+                       find_reference_times(transcript_words, candidate.start, candidate.end)]
 
     filename = f"clip_{clip_index:02d}_{sanitize_filename(candidate.title)}.mp4"
     final_path = Path(output_dir) / filename
@@ -159,6 +179,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         fonts_dir=FONTS_DIR, zoom_peak_times=peaks_local,
         audio_energy=face_gate_energies, audio_energy_hop=face_gate_hop,
         reference_times=reference_times,
+        keep_segments=keep_segments,
     )
 
     # render_vertical_clip só levanta exceção se o ffmpeg terminar com
@@ -182,6 +203,18 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
             f"({size} bytes) -- o encode provavelmente falhou/foi "
             f"interrompido no meio, mesmo o ffmpeg tendo retornado sem erro."
         )
+
+    if getattr(config, "EXPORT_NO_MUSIC_VERSION", True):
+        # mesma imagem (sem recodificar), áudio só com a voz -- pra postar
+        # com um som em alta escolhido pela biblioteca do próprio app
+        # (música comercial licenciada pelo app + empurrão do algoritmo)
+        no_music_path = final_path.with_name(final_path.stem + "_sem_musica.mp4")
+        loudnorm = f"loudnorm=I={config.LOUDNESS_TARGET_LUFS}:TP=-1.5:LRA=11"
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(final_path), "-i", str(voice_audio),
+             "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", loudnorm,
+             "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-shortest",
+             "-movflags", "+faststart", str(no_music_path)])
+        print(f"    -> Versão sem música (pra usar som em alta do app): {no_music_path}")
 
     print(f"    -> Concluído: {final_path}")
     print(f"    -> Contexto da transcrição salvo em: {context_txt_path}")
