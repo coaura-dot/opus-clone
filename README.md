@@ -11,27 +11,29 @@ programa faz **tudo sozinho**:
 3. **Encontra os melhores trechos** automaticamente, com um sistema de
    pontuação "viral" (ganchos, perguntas, picos de energia na voz, etc.)
 4. **Reenquadra** cada corte para vertical 9:16, seguindo o rosto de quem
-   fala (câmera virtual suavizada)
-5. **Gera legendas** estilo karaokê, destacando a palavra falada no momento
-6. Adiciona **música de fundo** com *ducking* automático (abaixa sozinha
-   quando há fala)
-7. Aplica pequenos **zooms de ênfase** nos picos de energia da fala
-8. Exporta os `.mp4` finais prontos para publicar, cada um com um
-   **kit de postagem** (`.post.txt`): título, descrição, hashtags para
-   YouTube Shorts / Instagram Reels / TikTok e o crédito da música
+   fala e dando zoom pelo tamanho do rosto; plano aberto com várias pessoas
+   vira layout "fit" (quadro inteiro sobre fundo desfocado), e troca de
+   câmera da fonte vira corte seco
+5. **Corta as pausas** (jump cuts) de dentro do clipe — só onde o áudio está
+   em silêncio de verdade — alternando o zoom a cada corte, como um editor faz
+6. **Gera legendas** animadas estilo corte viral: 3 palavras em caixa alta,
+   entrada com "pop", palavra falada acesa em amarelo, números/palavras de
+   impacto em verde
+7. Põe um **título-gancho** no topo nos primeiros segundos, com um *whoosh*
+8. Adiciona **música de fundo** (phonk/funk/trap do NCS, liberada pra vídeo
+   monetizado) com *ducking* automático (abaixa sozinha quando há fala)
+9. Exporta os `.mp4` finais prontos para publicar, uma versão **sem música**
+   (pra usar som em alta do app) e um **kit de postagem** (`.post.txt`):
+   título, descrição, hashtags para YouTube Shorts / Instagram Reels /
+   TikTok e o crédito da música
 
-## ⚠️ Importante sobre este ambiente
+## ⚠️ Sobre os testes
 
-Este projeto foi desenvolvido e testado dentro de um sandbox que **não tem
-acesso à internet pública** (só a pypi/npm/github), então não foi possível
-baixar um vídeo real do YouTube aqui para testar ponta a ponta com a internet
-real. Por isso, **todo o pipeline de edição** (recorte, reenquadramento,
-legendas, música, efeitos) foi testado e validado com um vídeo sintético
-gerado automaticamente por `test_pipeline.py` (veja "Testando sem baixar
-nada do YouTube" abaixo) — inclusive com validação pixel a pixel do ponto
-exato de corte. As partes que dependem de internet (`yt-dlp` baixando do
-YouTube e o Whisper baixando o modelo na primeira execução) precisam ser
-executadas na **sua máquina**, com internet normal.
+O pipeline inteiro foi testado de ponta a ponta com vídeo real (entrevista
+e trechos de podcast em estúdio, com close, plano médio e plano aberto de
+4 pessoas) numa máquina Linux sem GPU. O download do YouTube e a aceleração
+pela GPU (AMF / whisper.cpp com Vulkan) só dá pra testar na **sua máquina**:
+servidores em nuvem são bloqueados pelo YouTube e não têm a RX 580.
 
 ## Pipeline de edição: 1 único passe de encode
 
@@ -127,7 +129,12 @@ Quantos clipes você quer gerar? [3]: 5
 ```
 
 E depois roda tudo sozinho. Os clipes finais aparecem em `output/`, cada
-um com dois arquivos de texto ao lado:
+um com estes arquivos ao lado:
+
+- `clip_XX_....mp4` — o clipe pronto, com música de fundo.
+- `clip_XX_..._sem_musica.mp4` — a mesma edição só com a voz: poste este e
+  escolha um **som em alta pela biblioteca do app** (é o único jeito de usar
+  música comercial viral sem levar reivindicação de direitos autorais).
 
 - `clip_XX_....post.txt` — **pronto pra colar na hora de postar**: título,
   descrição, hashtags de cada rede (assunto do clipe + `POST_EXTRA_HASHTAGS`
@@ -270,10 +277,13 @@ Tudo é configurável em um único arquivo:
 
 ## Música de fundo
 
-`assets/music/` já vem com 10 faixas placeholder do Kevin MacLeod
-(incompetech.com, licença **CC BY 4.0** — uso livre, inclusive monetizado,
-desde que o crédito vá na descrição; o `.post.txt` de cada clipe já traz a
-linha de crédito da faixa sorteada).
+`assets/music/` vem com 23 faixas de edit do **NoCopyrightSounds (NCS)** —
+Brazilian Phonk, Phonk, Jersey Club, Future Trap, lançamentos de 2024-2026
+(lista completa em `assets/music/CREDITS.txt`). A política do NCS libera o
+uso por criadores independentes, **inclusive em vídeo monetizado**, desde
+que o crédito vá na descrição — o `.post.txt` de cada clipe já traz a linha
+de crédito da faixa sorteada. Cada arquivo é um trecho de ~95s a partir do
+drop, normalizado pra -16 LUFS.
 
 Para usar as suas músicas, coloque os `.mp3`/`.wav`/`.m4a` na pasta e
 adicione cada uma em:
@@ -286,8 +296,8 @@ adicione cada uma em:
 > ⚠️ Música "viral" comercial (hits do momento) quase sempre tem direitos
 > autorais: no YouTube o clipe leva reivindicação do Content ID (receita vai
 > pro dono da música ou o vídeo é bloqueado), e Instagram/TikTok podem
-> silenciar o áudio. Para trends com música famosa, o caminho seguro é
-> postar o clipe sem música e escolher o som pela biblioteca do próprio app.
+> silenciar o áudio. Para trends com música famosa, poste o
+> `*_sem_musica.mp4` e escolha o som pela biblioteca do próprio app.
 
 Se a pasta estiver vazia, o programa gera uma trilha ambiente simples para
 não travar o fluxo automático.
@@ -351,6 +361,18 @@ arquitetura já foi pensada para isso.
 
 ## Reenquadramento (auto-frame)
 
+**Tamanho do rosto decide o enquadramento** (vídeo comum/podcast):
+
+- **close** da fonte: recorte seguindo o rosto;
+- **plano médio** de uma pessoa: zoom até o rosto ocupar ~22% da altura
+  (`SUBJECT_TARGET_FACE_FRAC`), sem ampliar a imagem mais que 3x
+  (`SUBJECT_MAX_UPSCALE`) pra não borrar;
+- **plano aberto de grupo** (2+ pessoas, rostos pequenos): layout "fit" —
+  quadro inteiro no meio com fundo desfocado, ninguém cortado; vale até o
+  próximo corte de câmera;
+- **troca de câmera** da fonte: o enquadramento muda junto, em corte seco
+  (sem fade).
+
 Usa detecção de rosto via OpenCV (Haar Cascade, incluso na própria lib —
 não precisa baixar nada), combinando **dois classificadores**: rosto de
 frente e rosto de perfil (testado nos dois lados, via espelhamento). Isso
@@ -375,7 +397,13 @@ baseado em rede neural como **YuNet** ou **MediaPipe Face Detection** em
 igual; só é preciso baixar o modelo `.onnx`/`.tflite` correspondente numa
 máquina com acesso à internet.
 
-## Legendas
+## Legendas e título-gancho
+
+Estilo corte viral: grupos de 3 palavras em CAIXA ALTA, cada grupo entra com
+um "pop", a palavra falada acende em amarelo e cresce, e números / dinheiro /
+palavras de impacto ficam em verde (`CAPTION_*` em `config.py`). Nos
+primeiros ~3s aparece o título do clipe num balão branco no topo, com um
+*whoosh* sintetizado (`HOOK_*`, `SFX_*`).
 
 A fonte usada nas legendas (**Anton**, Google Fonts, licença OFL livre) vem
 embutida em `assets/fonts/` e é carregada diretamente pelo filtro `ass` do
@@ -387,6 +415,14 @@ A legenda fica em ~70% da altura do vídeo (`CAPTION_MARGIN_V = 560`), acima
 da faixa de baixo que o TikTok/Reels/Shorts cobrem com a descrição do post,
 o nome da música e os botões — e com margem lateral pra não passar por baixo
 dos botões de curtir/comentar da direita.
+
+## Jump cuts (corte das pausas)
+
+`src/jumpcut.py` tira as pausas de dentro do clipe (vão entre palavras maior
+que `JUMPCUT_MIN_GAP_SECONDS`), **só se o áudio ali estiver em silêncio** —
+risada e reação ficam. Os cortes caem na grade de quadros do vídeo (áudio e
+imagem não dessincronizam) e o enquadramento alterna entre normal e 8% mais
+fechado a cada corte (`JUMPCUT_PUNCH_ZOOM`). `JUMPCUT_ENABLED = False` desliga.
 
 ## Áudio
 
@@ -415,6 +451,8 @@ opus-clip-clone/
 │   ├── music.py               # mixagem de música com ducking + normalização
 │   ├── video_editor.py       # orquestra a montagem final de cada clipe
 │   ├── post_kit.py            # título/descrição/hashtags/crédito (.post.txt)
+│   ├── jumpcut.py             # corte das pausas (jump cuts)
+│   ├── sfx.py                 # efeitos sonoros sintetizados (whoosh)
 │   └── utils.py
 ├── assets/
 │   ├── fonts/                 # fonte Anton (OFL) embutida p/ legendas

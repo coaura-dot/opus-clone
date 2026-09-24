@@ -41,16 +41,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 # palavras que ganham a cor de ênfase além de números/valores (curadoria
 # PT-BR/EN de termos que "seguram o olho" em corte de podcast)
+# (palavras comuns demais -- "tudo", "todo", "melhor", "problema" --
+# ficam de fora: se meia legenda fica verde, o destaque perde o efeito)
 _EMPHASIS_WORDS = {
-    "dinheiro", "milhão", "milhões", "bilhão", "bilhões", "mil", "reais", "real",
+    "dinheiro", "milhão", "milhões", "bilhão", "bilhões", "reais",
     "dólar", "dólares", "grana", "rico", "ricos", "pobre", "pobres", "salário",
-    "nunca", "ninguém", "sempre", "todo", "todos", "tudo", "nada", "jamais",
-    "segredo", "verdade", "mentira", "mentiu", "errado", "certo", "proibido",
-    "obrigatório", "grátis", "morte", "morreu", "matar", "guerra", "crime",
-    "preso", "prisão", "polícia", "golpe", "roubo", "problema", "maior", "pior",
-    "melhor", "primeiro", "último", "deus", "diabo", "amor", "ódio", "medo",
-    "money", "never", "always", "nobody", "everything", "nothing", "secret",
-    "truth", "lie", "wrong", "free", "death", "war", "best", "worst",
+    "nunca", "ninguém", "jamais", "segredo", "mentira", "mentiu", "proibido",
+    "obrigatório", "grátis", "morte", "morreu", "matar", "matou", "guerra",
+    "crime", "preso", "prisão", "polícia", "golpe", "roubo", "roubou",
+    "deus", "diabo", "ódio", "medo", "absurdo", "mentiroso", "bandido",
+    "money", "never", "nobody", "secret", "lie", "free", "death", "war",
 }
 
 

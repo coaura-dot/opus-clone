@@ -11,9 +11,13 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 
 # --- Duração dos clipes (segundos) ---
+# Shorts/Reels/TikTok: 30-60s é a faixa que mais retém. Clipes reais de
+# 80s+ (teto antigo 75s + folga 20s) passavam por 4-5 assuntos e perdiam a
+# força; agora o alvo é 40s e o teto real 60s + TOPIC_BOUNDARY_GRACE (15s)
+# só pra fechar a frase/assunto. Os jump cuts ainda tiram mais uns 3-8%.
 MIN_CLIP_DURATION = 15
-MAX_CLIP_DURATION = 75
-IDEAL_CLIP_DURATION = 45
+MAX_CLIP_DURATION = 60
+IDEAL_CLIP_DURATION = 40
 
 # --- Whisper (transcrição) ---
 WHISPER_MODEL_SIZE = "small"       # tiny, base, small, medium, large-v3
@@ -102,6 +106,13 @@ FACE_DETECT_EVERY_N_FRAMES = 4
 # câmera". Confirmado com um frame real: 0 rostos em qualquer minSize a
 # 480px, 2 rostos encontrados de cara a 960px.
 FACE_DETECT_WIDTH_FALLBACK = 960
+# Detector de rosto: "yunet" (rede neural do OpenCV, modelo em
+# assets/models/ -- bem mais preciso em perfil, óculos escuros e luz de
+# estúdio, quase sem falso positivo) ou "haar" (o antigo, embutido no
+# OpenCV). Sem o arquivo do modelo, cai sozinho pro Haar.
+FACE_DETECTOR = "yunet"
+YUNET_DETECT_WIDTH = 640
+YUNET_SCORE_THRESHOLD = 0.6
 # Fração máxima de altura do frame onde o centro de um rosto detectado pode
 # estar. Detecções abaixo desse limite (ex.: logos, brinquedos, placas de mesa
 # num plano aberto de podcast) são descartadas como falsos positivos — rostos
@@ -318,6 +329,11 @@ MODE_BLEND_SECONDS = 1.5
 FALLBACK_BG_BLUR_SIGMA = 25.0       # intensidade do desfoque do fundo no modo "plano aberto"
 FALLBACK_BG_DARKEN = 0.55           # 0-1: quanto o fundo desfocado é escurecido
 WIDE_FIT_ZOOM = 1.12                # layout fit: amplia o quadro central 12% (corta só as bordas laterais)
+# Ken Burns no layout fit: plano aberto longo fica parado demais no celular;
+# a imagem central vai aproximando devagar (2.5%/s, até +20%) em direção a
+# quem está falando, e zera no próximo corte de câmera. 0 = desliga.
+WIDE_PUSH_IN_PER_SECOND = 0.025
+WIDE_PUSH_IN_MAX = 1.20
 
 # Detecção de CORTE DE CÂMERA real (o vídeo de origem alterna para outra
 # pessoa/ângulo — comum em podcast de duas câmeras). Um salto de posição
@@ -424,6 +440,9 @@ JUMPCUT_PAD_BEFORE_SECONDS = 0.06
 JUMPCUT_MIN_CUT_SECONDS = 0.15
 JUMPCUT_TAIL_KEEP_SECONDS = 0.35
 JUMPCUT_SILENCE_RATIO = 0.35
+# a cada jump cut o enquadramento alterna entre normal e este zoom (técnica
+# clássica de editor: esconde o "pulo" do corte e dá ritmo). 1.0 = desliga.
+JUMPCUT_PUNCH_ZOOM = 1.08
 
 # --- Kit de postagem (arquivo .post.txt ao lado de cada clipe) ---
 # Hashtags fixas do seu canal, somadas às de assunto (tiradas da fala do
@@ -623,11 +642,11 @@ TOPIC_START_PENALTY = 6.0               # penalidade (não exclusão -- ver
                                          # completo um início "no meio" quando
                                          # não existe alternativa melhor no
                                          # vídeo inteiro.
-TOPIC_BOUNDARY_GRACE_SECONDS = 20.0     # quanto além de MAX_CLIP_DURATION um
+TOPIC_BOUNDARY_GRACE_SECONDS = 15.0     # quanto além de MAX_CLIP_DURATION um
                                          # fim de assunto ainda pode ser
                                          # considerado -- MAX_CLIP_DURATION
-                                         # (75s) + esta folga (20s) = teto
-                                         # real de 95s. Era 105s → teto de
+                                         # (60s) + esta folga (15s) = teto
+                                         # real de 75s (antes 75+20 = 95s). Era 105s → teto de
                                          # 180s, clips de 3min ganhavam por
                                          # acumular mais hooks que clipes
                                          # curtos; reduzido pra Shorts.
@@ -818,7 +837,7 @@ FACECAM_SMALL_HEIGHT_FRAC = 0.16
 # facecam).
 SUBJECT_TARGET_FACE_FRAC = 0.22
 SUBJECT_MAX_UPSCALE = 3.0
-SUBJECT_FIT_GROUP_FACE_FRAC = 0.16
+SUBJECT_FIT_GROUP_FACE_FRAC = 0.20
 SUBJECT_FIT_SINGLE_FACE_FRAC = 0.07
 
 # quanto tempo (segundos) o enquadramento fica forçado na tela reagida

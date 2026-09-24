@@ -38,6 +38,7 @@ import queue
 import subprocess
 import threading
 from collections import deque
+from pathlib import Path
 from typing import List, Optional
 
 import cv2
@@ -76,7 +77,43 @@ def _new_cascades() -> dict:
     return {
         "frontal": cv2.CascadeClassifier(frontal_path),
         "profile": cv2.CascadeClassifier(profile_path),
+        "yunet": _new_yunet(),
     }
+
+
+def _new_yunet():
+    """Detector de rosto neural YuNet (OpenCV Zoo, licença MIT; modelo de
+    ~230KB em assets/models/, roda em CPU em ~10ms por detecção a 640px).
+    Achado real em podcast de estúdio: o Haar via "rostos" na parede de
+    espuma, na camisa e no microfone num close de perfil com óculos escuros
+    -- 4 detecções pra 1 pessoa, o que fazia o programa achar que era plano
+    de grupo. O YuNet dá 1 rosto com ~90% de confiança no mesmo quadro.
+    Sem o modelo (ou OpenCV antigo), volta pro Haar."""
+    if getattr(config, "FACE_DETECTOR", "yunet") != "yunet" or not hasattr(cv2, "FaceDetectorYN"):
+        return None
+    model = Path(__file__).resolve().parent.parent / "assets" / "models" / "face_detection_yunet_2023mar.onnx"
+    if not model.exists():
+        return None
+    try:
+        return cv2.FaceDetectorYN_create(str(model), "", (320, 320),
+                                         getattr(config, "YUNET_SCORE_THRESHOLD", 0.6), 0.3, 5000)
+    except cv2.error:
+        return None
+
+
+def _detect_yunet(detector, frame_bgr, det_width: int, min_score: float) -> list:
+    h, w = frame_bgr.shape[:2]
+    scale = det_width / w if w > det_width else 1.0
+    small = cv2.resize(frame_bgr, (int(w * scale), int(h * scale)),
+                       interpolation=cv2.INTER_AREA) if scale < 1.0 else frame_bgr
+    detector.setInputSize((small.shape[1], small.shape[0]))
+    _, faces = detector.detect(small)
+    if faces is None:
+        return []
+    return [
+        ((f[0] + f[2] / 2.0) / scale, (f[1] + f[3] / 2.0) / scale, f[2] / scale, f[3] / scale)
+        for f in faces if float(f[-1]) >= min_score
+    ]
 
 
 def _detect_profile_faces(cascade, gray) -> list:
@@ -163,6 +200,18 @@ def _detect_all_faces(cascades: dict, frame_bgr, sensitive: bool = False,
     já falhou (não em todo frame), então o caso comum (rosto grande,
     plano fechado) continua com o custo baixo de sempre."""
     h, w = frame_bgr.shape[:2]
+
+    if cascades.get("yunet") is not None:
+        det = cascades["yunet"]
+        min_score = getattr(config, "YUNET_SCORE_THRESHOLD", 0.6) - (0.1 if sensitive else 0.0)
+        faces = _detect_yunet(det, frame_bgr, getattr(config, "YUNET_DETECT_WIDTH", 640), min_score)
+        if not faces:
+            # rostos pequenos de plano aberto: segunda passada com mais resolução
+            faces = _detect_yunet(det, frame_bgr, getattr(config, "FACE_DETECT_WIDTH_FALLBACK", 960),
+                                  min_score)
+        eff_y_frac = _max_y_frac if _max_y_frac is not None else float(
+            getattr(config, "FACE_MAX_Y_FRAC", 0.80))
+        return [f for f in faces if f[1] < h * eff_y_frac]
 
     # modo sensitivo (burst pós-corte): scaleFactor menor + minNeighbors menor
     # + minSize menor → encontra rostos parciais, em ângulo, ou na borda do frame
@@ -1074,7 +1123,8 @@ def _compose_screen_frame(frame, region, src_w: int, src_h: int,
     return cv2.resize(cropped, (out_w, out_h), interpolation=interp)
 
 
-def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int) -> np.ndarray:
+def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int,
+                        push: float = 1.0, focus_x: Optional[float] = None) -> np.ndarray:
     """Modo "plano aberto" (fallback quando nenhum rosto é encontrado por
     tempo suficiente): em vez de cravar um crop apertado num ponto
     qualquer da imagem — o que, num plano largo, quase sempre mostra só
@@ -1111,13 +1161,16 @@ def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int) -
     # ampliada por WIDE_FIT_ZOOM (corta só uma lasquinha das laterais, onde
     # num plano de mesa quase nunca tem ninguém) pra faixa central não
     # ficar pequena demais no celular; centralizado verticalmente.
-    fit_zoom = max(float(getattr(config, "WIDE_FIT_ZOOM", 1.0)), 1.0)
+    # `push` > 1: aproximação lenta (Ken Burns) durante um plano aberto
+    # longo, puxando pro lado de `focus_x` (quem está falando).
+    fit_zoom = max(float(getattr(config, "WIDE_FIT_ZOOM", 1.0)), 1.0) * max(push, 1.0)
     fg_scale = out_w / src_w * fit_zoom
     fg_w = max(int(round(src_w * fg_scale)), out_w)
     fg_h = max(int(round(src_h * fg_scale)), 1)
     interp = cv2.INTER_AREA if fg_scale < 1 else cv2.INTER_LINEAR
     fg = cv2.resize(frame, (fg_w, fg_h), interpolation=interp)
-    fx0 = (fg_w - out_w) // 2
+    cx = fg_w / 2.0 if focus_x is None else focus_x * fg_scale
+    fx0 = int(np.clip(cx - out_w / 2.0, 0, fg_w - out_w))
     fg = fg[:, fx0:fx0 + out_w]
 
     canvas = bg
@@ -1313,6 +1366,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     )
     reader_thread.start()
 
+    wide_frames = 0   # há quantos quadros estamos no plano aberto atual (Ken Burns)
+    push_rate = max(getattr(config, "WIDE_PUSH_IN_PER_SECOND", 0.0), 0.0) / max(fps, 1.0)
+    push_max = max(getattr(config, "WIDE_PUSH_IN_MAX", 1.0), 1.0)
     mode = "face"  # "face" | "wide" | "screen" — equivalente a in_fallback=False no início
     blend_remaining = 0  # frames restantes de transição suave entre modos
     streamer_speaking_state = False  # histerese do sinal "streamer falando agora" (item 17)
@@ -1586,6 +1642,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 mode_hold_remaining = mode_min_hold_frames
 
             zoom_factor = 1.0
+            if keep_segments is not None and mode == "face" and seg_i % 2 == 1:
+                # jump cut: trechos alternados ficam um pouco mais fechados
+                zoom_factor = max(getattr(config, "JUMPCUT_PUNCH_ZOOM", 1.0), 1.0)
             if config.ZOOM_PUNCH_ENABLED and mode == "face":
                 ease_s = getattr(config, "ZOOM_PUNCH_EASE_SECONDS", 0.25)
                 half_hold = getattr(config, "ZOOM_PUNCH_HOLD", 0.30) / 2.0
@@ -1601,7 +1660,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         w = 0.0
                     if w > best_weight:
                         best_weight = w
-                zoom_factor = 1.0 + config.ZOOM_PUNCH_INTENSITY * best_weight
+                zoom_factor *= 1.0 + config.ZOOM_PUNCH_INTENSITY * best_weight
             if getattr(config, "ENERGY_BREATHING_ENABLED", False) and mode == "face" and audio_energy is not None:
                 e_idx = min(int(t / audio_energy_hop), len(audio_energy) - 1)
                 smooth_breath = _breath_alpha * smooth_breath + (1.0 - _breath_alpha) * float(audio_energy[e_idx])
@@ -1626,7 +1685,17 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         frame, smoothed_x, smoothed_y, dyn_crop_w, dyn_crop_h, src_w, src_h,
                         out_w, out_h, 1.0,
                     )
-                return _compose_wide_frame(frame, src_w, src_h, out_w, out_h)
+                push = min(1.0 + push_rate * wide_frames, push_max)
+                focus = smoothed_x if last_detected_xy is not None else None
+                return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
+                                           push=push, focus_x=focus)
+
+            # Ken Burns: conta o tempo no plano aberto atual; zera ao sair
+            # dele ou num corte de câmera (plano novo começa sem zoom)
+            if mode == "wide" and frames_since_cut > 0:
+                wide_frames += 1
+            else:
+                wide_frames = 0
 
             if blend_remaining > 0:
                 # transição suave (crossfade) entre os dois modos envolvidos
