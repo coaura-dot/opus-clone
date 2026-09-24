@@ -1010,3 +1010,69 @@ antes, uma frase por linha) e confira se os cortes marcados batem com
 onde VOCÊ diria que o assunto mudou. Ajuste TOPIC_LEXICAL_BOUNDARY_MIN
 (config.py) se estiver disparando cedo demais ou tarde demais antes de
 rodar num vídeo real de produção.
+
+
+17) SESSÃO NA NUVEM — primeiro teste com vídeo REAL ponta a ponta +
+    preparação pra postar (YouTube Shorts / Instagram Reels / TikTok)
+--------------------------------------------------------------------------
+Pela primeira vez o pipeline inteiro rodou com um vídeo real (entrevista
+de 21.8 min em português, 720p, licença CC, do archive.org — o YouTube
+bloqueia download a partir de IP de servidor em nuvem com "Sign in to
+confirm you're not a bot", então o vídeo do YouTube pedido não pôde ser
+usado AQUI; na sua máquina, com IP residencial, isso não acontece).
+Resultado: 3 clipes em 6.8 min numa CPU de 4 núcleos sem GPU (0.4x tempo
+real); na RX 580 + Xeon deve ser bem mais rápido.
+
+O que foi corrigido/adicionado:
+
+a) BUG: clipes saíam em H.264 4:4:4 ("High 4:4:4 Predictive", yuv444p) —
+   os frames vão do Python pro ffmpeg em bgr24 e sem -pix_fmt o libx264
+   (e o NVENC) mantêm a cor cheia. Celular, navegador, QuickTime e
+   decodificador de hardware em geral não tocam isso direito, e as redes
+   podem recusar/converter mal. Agora -pix_fmt yuv420p em libx264, NVENC e
+   AMF (hwaccel.py). O h264_amf aceita yuv420p nativamente; se a GPU
+   falhar, o fallback pra CPU que já existia continua valendo.
+
+b) BUG: TRANSCRIBE_ENGINE="whispercpp" com caminho que não existe (ex.:
+   config.py levado pra outro PC) travava com FileNotFoundError. Agora
+   avisa e usa faster-whisper. NA SUA MÁQUINA NADA MUDA: com o
+   whisper-cli.exe (Vulkan) no caminho configurado, ele continua sendo
+   usado.
+
+c) Legenda fora da zona coberta pelo app: estava em 80-83% da altura
+   (embaixo da descrição/nome da música do TikTok/Reels). Agora
+   CAPTION_MARGIN_V=560 (~68-70% da altura, medido no vídeo final),
+   CAPTION_MARGIN_H=120 (não passa por baixo dos botões da direita) e
+   CAPTION_FONT_SIZE 84 -> 110 (as letras mediam ~44px, ~1/3 da largura).
+
+d) Kit de postagem (src/post_kit.py): ao lado de cada .mp4 sai um
+   clip_XX_....post.txt com título (frase do próprio clipe com mais cara de
+   gancho, curta e completa), descrição, hashtags por rede (assunto do
+   clipe + POST_EXTRA_HASHTAGS + #shorts/#reels/#fyp), crédito da música
+   e link/título do vídeo original. Heurística local, sem LLM — confira o
+   título antes de postar.
+
+e) Música placeholder: 10 faixas do Kevin MacLeod (CC BY 4.0, 128 kbps)
+   em assets/music/, com track_drops.txt (drop detectado automaticamente)
+   e track_credits.txt (crédito obrigatório pela licença — vai pro
+   .post.txt da faixa sorteada). NÃO foram baixados hits virais: música
+   comercial leva Content ID no YouTube e pode ser silenciada no
+   Instagram/TikTok.
+
+f) yt-dlp: o YouTube agora exige resolver um desafio JavaScript; o
+   downloader passa --js-runtimes node quando não há Deno, requirements
+   pede yt-dlp[default] (inclui yt-dlp-ejs). Instale o Deno
+   (winget install DenoLand.Deno) ou tenha o Node no PATH.
+
+g) .mp4 com +faststart (upload começa a processar mais rápido) e
+   .gitignore cobrindo vídeos baixados/gerados.
+
+Observado no teste real e NÃO mexido (vale olhar com os seus vídeos):
+  - Um clipe começou em "Mais de 100 anos no Brasil, só com..." — a frase
+    anterior terminava em "tá?", um limite legítimo; detectar esse tipo de
+    início elíptico por heurística daria mais falso positivo que acerto.
+  - Um clipe terminou logo antes do desfecho ("o único efeito que ele teve
+    ... é um efeito importante" e a explicação veio na frase seguinte).
+  - Um clipe saiu com 83.6s, acima de MAX_CLIP_DURATION=75 (extensão pra
+    fechar o assunto). Serve pro Reels/TikTok/Shorts, mas fica acima do
+    ideal de 30-60s.
