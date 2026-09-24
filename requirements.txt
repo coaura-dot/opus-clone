@@ -1,0 +1,12 @@
+yt-dlp>=2024.1.0
+faster-whisper>=1.0.0
+# headless: sem dependências de GUI (Qt/GTK) desnecessárias num servidor sem
+# monitor. Se você usa OpenCV para outra coisa com janelas/GUI, troque por
+# opencv-python.
+# IMPORTANTE: preso em <5.0.0 de propósito. A partir do OpenCV 5.0 (jul/2026)
+# o cv2.CascadeClassifier (detecção de rosto Haar, usado em src/reframer.py)
+# foi movido para o módulo opencv_contrib e deixou de existir no pacote
+# padrão — sem esse teto de versão, o pip instala o 5.x e o programa quebra
+# com "AttributeError: module 'cv2' has no attribute 'CascadeClassifier'".
+opencv-python-headless>=4.9.0,<5.0.0
+numpy>=1.24.0
