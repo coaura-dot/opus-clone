@@ -1,0 +1,28 @@
+Músicas placeholder (substitua pelas suas quando quiser — basta colocar os
+arquivos nesta pasta e listar cada um em track_drops.txt no formato
+"Título - M:SS", onde M:SS é o início do drop/refrão).
+
+Todas as faixas abaixo são de Kevin MacLeod (incompetech.com), licenciadas
+sob Creative Commons: By Attribution 4.0
+https://creativecommons.org/licenses/by/4.0/
+
+Ao publicar um clipe com uma delas, coloque na descrição, por exemplo:
+  "<Título>" Kevin MacLeod (incompetech.com)
+  Licensed under Creative Commons: By Attribution 4.0 License
+  http://creativecommons.org/licenses/by/4.0/
+
+Faixas:
+  - Carefree
+  - Fluffing a Duck
+  - Funkorama
+  - Hustle
+  - Investigations
+  - Local Forecast - Elevator
+  - Monkeys Spinning Monkeys
+  - Pixel Peeker Polka - faster
+  - Scheming Weasel faster
+  - Sneaky Snitch
+
+Os tempos em track_drops.txt foram calculados automaticamente (janela de 4s
+com mais energia, deixando ao menos ~35s de música depois) — ajuste à mão
+se algum não cair no melhor trecho.
