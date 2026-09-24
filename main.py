@@ -28,7 +28,7 @@ from src import hwaccel
 from src import long_video
 from src import react_detector
 from src.utils import ensure_ffmpeg, ensure_dir, check_dependency, video_info
-from src.downloader import download_youtube_video
+from src.downloader import download_youtube_video, get_video_title
 from src.transcriber import transcribe
 from src.clip_selector import select_clips
 from src.video_editor import extract_audio, build_clip
@@ -158,6 +158,12 @@ def main():
     t0 = time.time()
     try:
         source_path = download_youtube_video(url, str(work_dir))
+        # título do vídeo original, só pro crédito no .post.txt de cada
+        # clipe -- se falhar (rede, vídeo privado...), segue sem ele
+        try:
+            source_title = get_video_title(url)
+        except Exception:
+            source_title = None
         info = video_info(source_path)
         print(f"    Duração: {info['duration']/60:.1f} min | "
               f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")
@@ -208,6 +214,7 @@ def main():
                         str(source_path), cand, clip_index, cand.words,
                         str(work_dir), str(output_dir),
                         info["width"], info["height"], info["fps"],
+                        source_title=source_title, source_url=url,
                     )
                     results.append((final_path, cand))
         else:
@@ -236,6 +243,7 @@ def main():
                             build_clip, str(source_path), cand, i + 1,
                             transcript.words, str(work_dir), str(output_dir),
                             info["width"], info["height"], info["fps"],
+                            source_title=source_title, source_url=url,
                         ): i
                         for i, cand in enumerate(candidates)
                     }
@@ -247,6 +255,7 @@ def main():
                     final_path = build_clip(
                         str(source_path), cand, i, transcript.words, str(work_dir), str(output_dir),
                         info["width"], info["height"], info["fps"],
+                        source_title=source_title, source_url=url,
                     )
                     results[i - 1] = (final_path, cand)
 

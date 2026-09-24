@@ -361,15 +361,30 @@ CAPTION_WORDS_PER_GROUP = 4
 # "Arial Black", que normalmente não existe no Linux (a legenda cairia numa
 # fonte genérica do sistema).
 CAPTION_FONT = "Anton"
-CAPTION_FONT_SIZE = 84               # pt de referência para vídeo de 1080px de largura
-                                      # (era 22 — praticamente ilegível; Opus Clip/CapCut
-                                      # usam legendas grandes e ocupando boa parte da largura)
+CAPTION_FONT_SIZE = 110              # pt de referência para vídeo de 1080px de largura
+                                      # (era 22 — praticamente ilegível; depois 84, que
+                                      # medido no vídeo final dava letras de ~44px e ocupava
+                                      # só ~1/3 da largura — Opus Clip/CapCut usam legendas
+                                      # bem maiores, ocupando boa parte da largura)
 CAPTION_OUTLINE_WIDTH = 6            # pt de referência p/ 1080px; escala junto com a fonte
 CAPTION_PRIMARY_BGR = "FFFFFF"      # branco (formato BGR usado pelo ASS)
 CAPTION_HIGHLIGHT_BGR = "00D7FF"    # dourado/amarelo (BGR)
 CAPTION_OUTLINE_BGR = "000000"      # preto
-CAPTION_MARGIN_V = 320               # distância da legenda até a base do quadro
+# Zona segura do TikTok / Reels / Shorts: a interface do app cobre os ~25%
+# de baixo do vídeo (descrição, nome da música, botões) e uma faixa de
+# ~120px na direita (curtir/comentar/compartilhar). Com 320 a legenda ficava
+# em 80-83% da altura — bem embaixo da descrição do post. 560 põe a legenda
+# em ~68-71% da altura, acima dessa faixa, onde Opus Clip/CapCut também
+# posicionam.
+CAPTION_MARGIN_V = 560               # distância da legenda até a base do quadro
+CAPTION_MARGIN_H = 120               # margem lateral (quebra de linha antes dos botões da direita)
 CAPTION_HIGHLIGHT_SCALE = 108        # escala (%) da palavra destacada — leve "pop" visual
+
+# --- Kit de postagem (arquivo .post.txt ao lado de cada clipe) ---
+# Hashtags fixas do seu canal, somadas às de assunto (tiradas da fala do
+# clipe) e às de cada rede (#shorts / #reels / #fyp #viral). Ex.:
+# ["#cortes", "#podcast", "#nomedocanal"].
+POST_EXTRA_HASHTAGS = ["#cortes"]
 
 # --- Música de fundo ---
 # Caminho ABSOLUTO (resolvido a partir da localização deste arquivo, igual

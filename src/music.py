@@ -92,9 +92,10 @@ def _load_drop_manifest() -> dict:
     return manifest
 
 
-def _match_drop_seconds(filename_stem: str, manifest: dict) -> Optional[float]:
+def _match_title(filename_stem: str, manifest: dict):
     """Tenta casar o nome do arquivo (sem extensão) com um título do
-    manifesto. Nomes de arquivo baixados de conversores costumam ter lixo
+    manifesto (track_drops.txt ou track_credits.txt) e devolve o valor
+    associado a ele (segundos do drop, ou a linha de crédito). Nomes de arquivo baixados de conversores costumam ter lixo
     extra — artista, '(Official Video)', qualidade, e principalmente
     features tipo 'ft. Fulano' ENCAIXADOS NO MEIO do título (ex: título
     'Rockabye (SHAKED Remix)' vira arquivo 'Rockabye ft. Sean Paul &
@@ -160,7 +161,7 @@ def list_usable_tracks() -> list:
     manifest = _load_drop_manifest()
     tracks = []
     for path in candidates:
-        drop = _match_drop_seconds(path.stem, manifest)
+        drop = _match_title(path.stem, manifest)
         if drop is None:
             continue  # sem tempo de drop listado -> não entra
         if not _is_real_audio(path):
@@ -208,11 +209,37 @@ def _db_to_factor(db: float) -> float:
     return 10 ** (db / 20)
 
 
-def mix_with_music(voice_audio: str, duration: float, output_path: str) -> str:
+def load_track_credit(track: Optional[MusicTrack]) -> Optional[str]:
+    """Linha de crédito da trilha, lida de assets/music/track_credits.txt
+    (formato "Título | crédito" por linha, casado com o nome do arquivo do
+    mesmo jeito que track_drops.txt). Trilhas com licença de atribuição (ex.:
+    CC BY) PRECISAM desse crédito na descrição do post; None = trilha sem
+    crédito cadastrado (ou nenhuma trilha, só o fundo sintetizado)."""
+    if track is None:
+        return None
+    credits_path = Path(config.MUSIC_DIR) / "track_credits.txt"
+    if not credits_path.exists():
+        return None
+    credits = {}
+    for raw_line in credits_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        title, sep, credit = raw_line.partition("|")
+        if sep and title.strip() and credit.strip():
+            credits[_normalize_title(title)] = credit.strip()
+    return _match_title(track.path.stem, credits)
+
+
+_AUTO = object()
+
+
+def mix_with_music(voice_audio: str, duration: float, output_path: str,
+                   track=_AUTO) -> str:
     """Mixa o áudio de voz original com uma trilha de fundo (do usuário ou
     gerada automaticamente), aplicando ducking para a música abaixar
-    automaticamente sempre que há fala."""
-    track = pick_music_track()
+    automaticamente sempre que há fala. `track` permite a quem chama
+    escolher a trilha antes (pra saber qual foi usada e creditar no post);
+    sem ele, sorteia aqui mesmo. None = fundo sintetizado."""
+    if track is _AUTO:
+        track = pick_music_track()
     work_dir = Path(output_path).parent
     music_path = work_dir / "_music_bed.wav"
 

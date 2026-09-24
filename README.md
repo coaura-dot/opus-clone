@@ -16,7 +16,9 @@ programa faz **tudo sozinho**:
 6. Adiciona **música de fundo** com *ducking* automático (abaixa sozinha
    quando há fala)
 7. Aplica pequenos **zooms de ênfase** nos picos de energia da fala
-8. Exporta os `.mp4` finais prontos para publicar
+8. Exporta os `.mp4` finais prontos para publicar, cada um com um
+   **kit de postagem** (`.post.txt`): título, descrição, hashtags para
+   YouTube Shorts / Instagram Reels / TikTok e o crédito da música
 
 ## ⚠️ Importante sobre este ambiente
 
@@ -115,7 +117,15 @@ Cole o link do vídeo do YouTube: https://youtube.com/watch?v=...
 Quantos clipes você quer gerar? [3]: 5
 ```
 
-E depois roda tudo sozinho. Os clipes finais aparecem em `output/`.
+E depois roda tudo sozinho. Os clipes finais aparecem em `output/`, cada
+um com dois arquivos de texto ao lado:
+
+- `clip_XX_....post.txt` — **pronto pra colar na hora de postar**: título,
+  descrição, hashtags de cada rede (assunto do clipe + `POST_EXTRA_HASHTAGS`
+  do seu canal + `#shorts` / `#reels` / `#fyp`), o crédito da música (se a
+  licença exigir) e o link do vídeo original.
+- `clip_XX_....contexto.txt` — a transcrição do clipe com 60s de contexto
+  antes e depois, pra conferir se o corte começou/terminou no lugar certo.
 
 ## Aceleração de hardware (GPU) e processamento paralelo
 
@@ -242,6 +252,8 @@ Tudo é configurável em um único arquivo:
 | Volume da música de fundo | `MUSIC_VOLUME_DB` |
 | Volume alvo do áudio final (padrão streaming) | `LOUDNESS_TARGET_LUFS` (padrão: -14 LUFS) |
 | Fonte da legenda | `CAPTION_FONT` (Anton, incluída em `assets/fonts/`) |
+| Altura da legenda / margem lateral (zona segura do app) | `CAPTION_MARGIN_V` (padrão 560), `CAPTION_MARGIN_H` |
+| Hashtags fixas do seu canal no `.post.txt` | `POST_EXTRA_HASHTAGS` |
 | A partir de quanto tempo um vídeo é "longo" (transcrição por blocos) | `LONG_VIDEO_THRESHOLD_SECONDS` (padrão: 39 min) |
 | Duração de cada bloco de um vídeo longo | `CHUNK_DURATION_SECONDS` (padrão: 20 min) |
 | Viral score mínimo pra aceitar um bloco (senão tenta o próximo) | `CHUNK_VIRAL_SCORE_MIN` (**não calibrado contra vídeo real, ver comentário em `config.py`**) |
@@ -249,10 +261,27 @@ Tudo é configurável em um único arquivo:
 
 ## Música de fundo
 
-Coloque arquivos `.mp3`/`.wav`/`.m4a` royalty-free em `assets/music/`. Se a
-pasta estiver vazia, o programa gera automaticamente uma trilha ambiente
-simples para não travar o fluxo automático — mas o resultado fica bem
-melhor com músicas reais (veja `assets/music/README.txt`).
+`assets/music/` já vem com 10 faixas placeholder do Kevin MacLeod
+(incompetech.com, licença **CC BY 4.0** — uso livre, inclusive monetizado,
+desde que o crédito vá na descrição; o `.post.txt` de cada clipe já traz a
+linha de crédito da faixa sorteada).
+
+Para usar as suas músicas, coloque os `.mp3`/`.wav`/`.m4a` na pasta e
+adicione cada uma em:
+
+- `assets/music/track_drops.txt` — `Título - M:SS` (onde começa o
+  drop/refrão). **Faixa sem linha aqui é ignorada.**
+- `assets/music/track_credits.txt` (opcional) — `Título | linha de crédito`,
+  para faixas cuja licença exige atribuição.
+
+> ⚠️ Música "viral" comercial (hits do momento) quase sempre tem direitos
+> autorais: no YouTube o clipe leva reivindicação do Content ID (receita vai
+> pro dono da música ou o vídeo é bloqueado), e Instagram/TikTok podem
+> silenciar o áudio. Para trends com música famosa, o caminho seguro é
+> postar o clipe sem música e escolher o som pela biblioteca do próprio app.
+
+Se a pasta estiver vazia, o programa gera uma trilha ambiente simples para
+não travar o fluxo automático.
 
 ## Vídeos longos (podcasts, entrevistas de horas)
 
@@ -345,6 +374,11 @@ ffmpeg — funciona em qualquer sistema operacional, sem precisar instalar
 nada globalmente. Para trocar a fonte, troque `CAPTION_FONT` em
 `config.py` e coloque o `.ttf`/`.otf` correspondente em `assets/fonts/`.
 
+A legenda fica em ~70% da altura do vídeo (`CAPTION_MARGIN_V = 560`), acima
+da faixa de baixo que o TikTok/Reels/Shorts cobrem com a descrição do post,
+o nome da música e os botões — e com margem lateral pra não passar por baixo
+dos botões de curtir/comentar da direita.
+
 ## Áudio
 
 O volume final de cada clipe é normalizado para **-14 LUFS** (padrão usado
@@ -371,10 +405,11 @@ opus-clip-clone/
 │   ├── effects.py            # detecção de picos p/ zoom punches
 │   ├── music.py               # mixagem de música com ducking + normalização
 │   ├── video_editor.py       # orquestra a montagem final de cada clipe
+│   ├── post_kit.py            # título/descrição/hashtags/crédito (.post.txt)
 │   └── utils.py
 ├── assets/
 │   ├── fonts/                 # fonte Anton (OFL) embutida p/ legendas
-│   └── music/                 # coloque suas músicas royalty-free aqui
+│   └── music/                 # trilhas (+ track_drops.txt / track_credits.txt)
 ```
 
 ## Testando sem baixar nada do YouTube

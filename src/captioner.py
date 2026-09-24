@@ -21,7 +21,7 @@ YCbCr Matrix: TV.601
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Caption,{font},{fontsize},&H00{primary},&H00{primary},&H00{outline},&H00000000,1,0,0,0,100,100,0,0,1,{outline_w},{shadow},2,50,50,{marginv},1
+Style: Caption,{font},{fontsize},&H00{primary},&H00{primary},&H00{outline},&H00000000,1,0,0,0,100,100,0,0,1,{outline_w},{shadow},2,{marginh},{marginh},{marginv},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -94,12 +94,13 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
     outline_w = max(int(round(getattr(config, "CAPTION_OUTLINE_WIDTH", 6) * scale)), 1)
     shadow = max(int(round(outline_w / 3)), 0)
     marginv = max(int(round(config.CAPTION_MARGIN_V * scale)), 0)
+    marginh = max(int(round(getattr(config, "CAPTION_MARGIN_H", 50) * scale)), 0)
 
     header = ASS_HEADER.format(
         width=video_width, height=video_height,
         font=config.CAPTION_FONT, fontsize=fontsize,
         primary=config.CAPTION_PRIMARY_BGR, outline=config.CAPTION_OUTLINE_BGR,
-        outline_w=outline_w, shadow=shadow, marginv=marginv,
+        outline_w=outline_w, shadow=shadow, marginv=marginv, marginh=marginh,
     )
 
     lines = []

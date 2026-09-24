@@ -10,7 +10,8 @@ from .audio import audio_energy
 from .effects import find_energy_peaks
 from .reframer import render_vertical_clip
 from .captioner import generate_ass
-from .music import mix_with_music
+from .music import mix_with_music, pick_music_track, load_track_credit
+from .post_kit import write_post_kit
 from .react_detector import find_reference_times
 from .utils import run, ensure_dir, sanitize_filename
 from . import config
@@ -99,7 +100,8 @@ def _write_context_dump(transcript_words, candidate, txt_path: str,
 
 def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                 work_dir: str, output_dir: str,
-                src_w: int = None, src_h: int = None, src_fps: float = None) -> str:
+                src_w: int = None, src_h: int = None, src_fps: float = None,
+                source_title: str = None, source_url: str = None) -> str:
     work = ensure_dir(Path(work_dir) / f"clip_{clip_index}")
     ensure_dir(output_dir)
 
@@ -130,7 +132,8 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                  clip_duration=candidate.duration)
 
     mixed_audio = work / "mixed.wav"
-    mix_with_music(str(voice_audio), candidate.duration, str(mixed_audio))
+    music_track = pick_music_track()
+    mix_with_music(str(voice_audio), candidate.duration, str(mixed_audio), track=music_track)
 
     # Modo REACT (RELATORIO item 14): frases tipo "olha a camisa dele" no
     # trecho deste clipe forçam um zoom breve na tela reagida quando
@@ -142,6 +145,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     final_path = Path(output_dir) / filename
     context_txt_path = final_path.with_suffix(".contexto.txt")
     _write_context_dump(transcript_words, candidate, str(context_txt_path))
+    post_txt_path = final_path.with_suffix(".post.txt")
+    write_post_kit(str(post_txt_path), candidate.text, load_track_credit(music_track),
+                   source_title, source_url)
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")
@@ -179,4 +185,5 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
 
     print(f"    -> Concluído: {final_path}")
     print(f"    -> Contexto da transcrição salvo em: {context_txt_path}")
+    print(f"    -> Título/descrição/hashtags pra postar: {post_txt_path}")
     return str(final_path)

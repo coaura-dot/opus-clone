@@ -995,7 +995,10 @@ def _open_ffmpeg_writer(output_path: str, width: int, height: int, fps: float,
     cmd += codec
     if audio_path:
         cmd += ["-c:a", "aac", "-b:a", "192k", "-shortest"]
-    cmd += [str(output_path)]
+    # +faststart move o índice (moov) pro começo do .mp4: o upload no
+    # YouTube/Instagram/TikTok começa a processar sem esperar o arquivo
+    # inteiro, e o vídeo abre na hora no celular/navegador.
+    cmd += ["-movflags", "+faststart", str(output_path)]
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
