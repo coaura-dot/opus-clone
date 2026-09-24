@@ -189,6 +189,12 @@ def encoder_args(extra_vf: str = None, crf: int = None, preset: str = None,
     enc = {"mode": "cpu"} if use_cpu else detect_encoder()
 
     vf_parts = [extra_vf] if extra_vf else []
+    # "-pix_fmt yuv420p" nos encoders abaixo: os frames chegam do Python em
+    # bgr24 e, sem isso, libx264/NVENC mantêm a cor cheia e gravam H.264
+    # 4:4:4 (perfil "High 4:4:4 Predictive") — que celular, navegador,
+    # QuickTime e decodificador de hardware em geral não tocam (ou tocam
+    # com defeito). yuv420p é o formato que todo player e toda rede social
+    # esperam.
     maxrate = getattr(config, "ENCODE_MAXRATE_MBPS", None)
     rate_cap = []
     if maxrate:
@@ -204,7 +210,8 @@ def encoder_args(extra_vf: str = None, crf: int = None, preset: str = None,
 
     if enc["mode"] == "nvenc":
         vf = ",".join(vf_parts) if vf_parts else None
-        codec = ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(crf), *rate_cap]
+        codec = ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", str(crf),
+                 "-pix_fmt", "yuv420p", *rate_cap]
         return [], vf, codec
 
     if enc["mode"] == "amf":
@@ -213,12 +220,14 @@ def encoder_args(extra_vf: str = None, crf: int = None, preset: str = None,
         # rc=cqp (QP constante) é o equivalente do crf do libx264 no AMF:
         # qp_i/qp_p usam a mesma escala 0-51 (menor = melhor qualidade).
         codec = ["-c:v", "h264_amf", "-usage", "transcoding", "-quality", quality,
-                 "-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf), *rate_cap]
+                 "-rc", "cqp", "-qp_i", str(crf), "-qp_p", str(crf),
+                 "-pix_fmt", "yuv420p", *rate_cap]
         return [], vf, codec
 
     vf = ",".join(vf_parts) if vf_parts else None
     n_threads = str(_default_cpu_threads())
-    codec = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-threads", n_threads]
+    codec = ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-threads", n_threads,
+             "-pix_fmt", "yuv420p"]
     return [], vf, codec
 
 
