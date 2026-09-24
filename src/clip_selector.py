@@ -15,6 +15,7 @@ import numpy as np
 
 from .transcriber import Transcript, Word
 from .audio import audio_energy
+from .opener import depends_on_context
 from . import config
 
 
@@ -348,10 +349,6 @@ STARTS_MID_THOUGHT_PATTERNS_PT = [
     r"^mas\b", r"^só que\b", r"^porém\b", r"^contudo\b", r"^entretanto\b",
     r"^no entanto\b", r"^apesar disso\b", r"^mesmo assim\b",
 ]
-# frase que abre com pronome/muleta depende do contexto anterior
-_WEAK_OPENER_RE = re.compile(
-    r"^\s*(ele|ela|eles|elas|isso|isto|esse|essa|esses|essas|aquilo|aquele|aquela|"
-    r"aí|daí|também|tipo|he|she|they|it|that|this)\b", re.IGNORECASE)
 # pergunta-muleta no fim da frase ("..., né?", "tá ligado?"): não conta
 # como pergunta-gancho
 _TAG_QUESTION_RE = re.compile(
@@ -862,14 +859,6 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
             j -= 1
             if clean_start_at(j):
                 start_idx, clean_start = j, True
-        opener = sentences[start_idx]["text"].lstrip()
-        if clean_start and start_idx != h and (_WEAK_OPENER_RE.match(opener)
-                                               or opener[:1].islower()):
-            # o "começo de assunto" achado abre com pronome/muleta ("Eles
-            # viraram...", "Isso aí...") ou em minúscula (o Whisper marca
-            # assim frase que continua a anterior) — depende do que veio
-            # antes; o próprio gancho é uma abertura melhor
-            start_idx, clean_start = h, clean_start_at(h)
         if not clean_start:
             # nenhum começo de assunto ao alcance: começa no próprio gancho,
             # recuando só enquanto a frase abre com conectivo ("Mas...")
@@ -877,6 +866,20 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
             while (start_idx > 0 and _starts_mid_thought(sentences[start_idx]["text"])
                    and hook_t - sentences[start_idx - 1]["start"] <= context_max):
                 start_idx -= 1
+        # a ABERTURA tem que se sustentar sozinha (ver src/opener.py) —
+        # achado real: "Fez uma lavagem cerebral, eles viraram louco..." (quem
+        # fez? quem são eles?) passava como começo de assunto. Se depende do
+        # que veio antes, avança até a primeira frase que se sustenta antes
+        # do gancho; sem nenhuma, começa no próprio gancho.
+        if depends_on_context(sentences[start_idx]["text"]):
+            for j in range(start_idx + 1, h + 1):
+                if not depends_on_context(sentences[j]["text"]):
+                    start_idx = j
+                    break
+            else:
+                start_idx = h
+            clean_start = clean_start_at(start_idx)
+        self_contained = not depends_on_context(sentences[start_idx]["text"])
         start_t = sentences[start_idx]["start"]
 
         # ETAPA 2: fim — primeira troca de assunto FORTE depois da
@@ -934,8 +937,12 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         # gancho enterrado no meio do clipe perde força (quem rola o feed
         # decide nos primeiros segundos)
         score -= max(hook_t - start_t - 10.0, 0.0) * 0.08
-        score += config.TOPIC_BOUNDARY_BONUS * 0.5 if clean_start else -getattr(
-            config, "TOPIC_START_PENALTY", 6.0)
+        # começo: prêmio se abre um assunto E se sustenta sozinho; penalidade
+        # se nem isso deu pra garantir (o gancho em si depende do contexto)
+        if not self_contained:
+            score -= getattr(config, "TOPIC_START_PENALTY", 6.0)
+        elif clean_start:
+            score += config.TOPIC_BOUNDARY_BONUS * 0.5
         if end_is_boundary:
             score += config.TOPIC_BOUNDARY_BONUS * 0.5
 

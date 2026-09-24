@@ -13,3 +13,8 @@ faster-whisper>=1.0.0
 # com "AttributeError: module 'cv2' has no attribute 'CascadeClassifier'".
 opencv-python-headless>=4.9.0,<5.0.0
 numpy>=1.24.0
+# Análise gramatical (src/opener.py): descobre se a frase que abre um clipe
+# depende do que veio antes ("Fez uma lavagem cerebral, eles..." — quem?).
+# Sem ele o programa funciona, com uma regra mais simples.
+spacy>=3.7,<4
+pt_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_sm-3.8.0/pt_core_news_sm-3.8.0-py3-none-any.whl

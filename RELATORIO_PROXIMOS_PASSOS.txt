@@ -1131,3 +1131,18 @@ g) Duração: ideal 40s, máx 60s + 15s de folga (antes 45 / 75+20 — o clipe
 NÃO testado aqui (precisa da sua máquina): AMF/RX 580 e whisper.cpp
 Vulkan com o código novo, vídeo 1080p60 da fonte original, download do
 YouTube.
+
+
+19) Abertura de clipe que depende do contexto anterior
+------------------------------------------------------
+Achado no teste real: um clipe começava em "Fez uma lavagem cerebral, eles
+viraram louco..." (quem fez? quem são eles?). src/opener.py decide se a
+frase de abertura se sustenta sozinha, com análise gramatical do spaCy
+(pt_core_news_sm, local/CPU): verbo de 3ª pessoa sem sujeito explícito,
+sujeito "ele/isso/aquilo", oração de finalidade solta ("Pra falar que..."),
+conectivo/minúscula no começo ou hesitação curta ("O 1...") = depende;
+pergunta/imperativo pra quem assiste ("Lembra do...?", "Imagina...") e
+existencial ("Tem um cara que...") = se sustenta. Se a abertura depende, o
+clipe avança até a primeira frase que se sustenta antes do gancho (ou
+começa no gancho). Validado em 20 frases reais do podcast (20/20). Sem o
+spaCy instalado, cai pra uma lista de verbos comuns.
