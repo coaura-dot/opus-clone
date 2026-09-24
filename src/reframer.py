@@ -883,6 +883,19 @@ class _FaceActivityTracker:
             return (s["fw"], s["fh"])
         return None
 
+    def group_face_count(self) -> int:
+        """Quantos rostos "de verdade" estão em quadro agora: vistos em pelo
+        menos duas checagens (descarta detecção isolada/ruído) e com pelo
+        menos metade do tamanho do maior (descarta falso positivo pequeno no
+        fundo). Usado pra distinguir plano aberto de grupo (várias pessoas
+        na mesa -> layout fit) de plano médio de uma pessoa só (-> recorte
+        com zoom)."""
+        live = [s for s in self._live_slots().values() if s.get("checks_alive", 0) >= 1]
+        if not live:
+            return 0
+        biggest = max(s["fh"] for s in live)
+        return sum(1 for s in live if s["fh"] >= 0.5 * biggest)
+
     def active_speaking_activity(self) -> float:
         """Placar (EMA) de atividade de boca do rosto ATUALMENTE ativo — o
         mesmo número usado internamente pra decidir troca de falante entre
@@ -1094,12 +1107,18 @@ def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int) -
     darken = float(np.clip(getattr(config, "FALLBACK_BG_DARKEN", 0.55), 0.0, 1.0))
     bg = (bg.astype(np.float32) * darken).astype(np.uint8)
 
-    # primeiro plano: escala "contain" (cabe a largura inteira, ninguém é
-    # cortado), centralizado verticalmente sobre o fundo.
-    fg_scale = out_w / src_w
+    # primeiro plano: escala "contain" (cabe a largura inteira), um pouco
+    # ampliada por WIDE_FIT_ZOOM (corta só uma lasquinha das laterais, onde
+    # num plano de mesa quase nunca tem ninguém) pra faixa central não
+    # ficar pequena demais no celular; centralizado verticalmente.
+    fit_zoom = max(float(getattr(config, "WIDE_FIT_ZOOM", 1.0)), 1.0)
+    fg_scale = out_w / src_w * fit_zoom
+    fg_w = max(int(round(src_w * fg_scale)), out_w)
     fg_h = max(int(round(src_h * fg_scale)), 1)
     interp = cv2.INTER_AREA if fg_scale < 1 else cv2.INTER_LINEAR
-    fg = cv2.resize(frame, (out_w, fg_h), interpolation=interp)
+    fg = cv2.resize(frame, (fg_w, fg_h), interpolation=interp)
+    fx0 = (fg_w - out_w) // 2
+    fg = fg[:, fx0:fx0 + out_w]
 
     canvas = bg
     fy0 = max((out_h - fg_h) // 2, 0)
@@ -1171,6 +1190,21 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     target_crop_h = float(crop_h)
     smoothed_crop_h = float(crop_h)
     facecam_small_frac = getattr(config, "FACECAM_SMALL_HEIGHT_FRAC", 0.16)
+
+    # --- Enquadramento pelo tamanho do rosto (vídeo comum/podcast) ---
+    # ver SUBJECT_* em config.py: fora do modo REACT, o crop é dimensionado
+    # pelo tamanho do rosto ativo (zoom em plano médio) e, quando nem o zoom
+    # máximo deixa o rosto num tamanho decente (plano aberto de verdade),
+    # vai pro layout "fit" (quadro inteiro + fundo desfocado).
+    subject_framing = screen_tracker is None
+    subject_target_frac = getattr(config, "SUBJECT_TARGET_FACE_FRAC", 0.22)
+    subject_min_crop_h = min(out_h / max(getattr(config, "SUBJECT_MAX_UPSCALE", 3.0), 1.0),
+                             float(crop_h))
+    fit_group_frac = getattr(config, "SUBJECT_FIT_GROUP_FACE_FRAC", 0.16)
+    fit_single_frac = getattr(config, "SUBJECT_FIT_SINGLE_FACE_FRAC", 0.07)
+    subject_face_frac: Optional[float] = None  # EMA do tamanho do rosto no quadro final
+    group_shot = False        # plano de grupo confirmado -- vale até o próximo corte
+    subject_too_small = False
 
     center_x = src_w / 2.0
     center_y = src_h * config.HEADROOM_RATIO
@@ -1257,6 +1291,11 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     _cut_burst_total = int(getattr(config, "SCENE_CUT_BURST_FRAMES", 20))
     _prev_cut_gray: Optional[np.ndarray] = None
     _burst_remaining = 0  # frames restantes em modo "detecta todo frame"
+    frames_since_cut = 10 ** 9  # troca de modo logo depois de um corte = corte seco
+    # janela depois de um corte em que a troca de modo ainda conta como parte
+    # do corte (seca, sem hold): ~1s, tempo pro detector achar todos os
+    # rostos do plano novo
+    cut_window_frames = max(_cut_burst_total, int(round(fps)))
 
     frame_q: "queue.Queue" = queue.Queue(maxsize=_READ_AHEAD_FRAMES)
     reader_thread = threading.Thread(
@@ -1275,6 +1314,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 break
             frame = np.frombuffer(raw, dtype=np.uint8).reshape(src_h, src_w, 3)
             t = frame_idx / fps
+            frames_since_cut += 1
             tracker.sample_motion(frame, t)
             if screen_tracker is not None:
                 screen_tracker.sample_activity(frame)
@@ -1298,6 +1338,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         # no novo enquadramento.
                         tracker.on_scene_cut()
                         face_confidence = 0.0
+                        frames_since_cut = 0
+                        subject_face_frac = None
+                        group_shot = False
                         target_x = float(src_w / 2)
                         target_y = float(src_h / 2)
                 _prev_cut_gray = _gray
@@ -1365,13 +1408,37 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     # alvo de altura do crop a partir do tamanho REAL do
                     # rosto detectado nesta checagem.
                     face_size = tracker.active_face_size()
-                    if face_size is not None and face_size[1] > 0:
+                    if face_size is not None and face_size[1] > 0 and subject_framing:
+                        target_crop_h = float(np.clip(face_size[1] / subject_target_frac,
+                                                      subject_min_crop_h, crop_h))
+                        out_frac = face_size[1] / target_crop_h
+                        if subject_face_frac is None or _in_burst:
+                            subject_face_frac = out_frac
+                        else:
+                            subject_face_frac = 0.7 * subject_face_frac + 0.3 * out_frac
+                        # plano de GRUPO (várias pessoas, rostos pequenos):
+                        # qualquer recorte corta alguém no meio -> fit.
+                        # Fica marcado até o próximo corte de câmera, pra
+                        # alguém se inclinar pra frente não trocar o layout
+                        # no meio do plano.
+                        if (tracker.group_face_count() >= 2
+                                and subject_face_frac < fit_group_frac):
+                            group_shot = True
+                        # uma pessoa só: recorte com zoom, a não ser que ela
+                        # esteja tão longe que nem o zoom máximo resolva
+                        subject_too_small = group_shot or subject_face_frac < fit_single_frac
+                    elif face_size is not None and face_size[1] > 0:
                         frac = face_size[1] / src_h
                         if frac < facecam_small_frac:
                             scale = facecam_small_frac / frac
                             target_crop_h = float(np.clip(crop_h * scale, crop_h, src_h))
                         else:
                             target_crop_h = float(crop_h)
+                    if _in_burst:
+                        # novo plano: o tamanho do crop também muda na hora,
+                        # junto com a posição (senão o zoom "respira" por ~1s
+                        # depois de cada corte de câmera)
+                        smoothed_crop_h = target_crop_h
                 else:
                     # sem rosto detectado nesta checagem: NÃO puxa o alvo de
                     # volta pro centro (era o bug original — ao perder o
@@ -1481,16 +1548,24 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 # MODE_MIN_HOLD: só permite trocar de modo quando o hold
                 # expirou — elimina o flicker face↔wide causado por detecção
                 # esporádica (rosto perdido por 1-2 frames).
-                if mode_hold_remaining > 0:
+                # Logo depois de um corte de câmera o hold não vale: o plano
+                # novo pode pedir outro modo e a troca tem que acontecer
+                # junto com o corte, não segundos depois.
+                in_cut_window = frames_since_cut <= cut_window_frames
+                if mode_hold_remaining > 0 and not in_cut_window:
                     mode_hold_remaining -= 1
                 else:
-                    if face_confidence < 0.35:
+                    if face_confidence < 0.35 or (subject_framing and subject_too_small):
                         mode = "wide"
                     elif face_confidence > 0.6:
                         mode = "face"
                     # banda 0.35-0.6: mantém o modo atual (histerese)
             if prev_mode != mode:
-                blend_remaining = blend_frames_total
+                # troca junto com um corte de câmera da fonte = corte seco
+                # (crossfade ali parece erro de edição: dois rostos
+                # sobrepostos); fora de corte, transição suave como antes
+                at_cut = frames_since_cut <= cut_window_frames
+                blend_remaining = 0 if at_cut else blend_frames_total
                 mode_hold_remaining = mode_min_hold_frames
 
             zoom_factor = 1.0

@@ -317,6 +317,7 @@ WIDE_MODE_MEDIUM_CROP_SCALE = 2.5   # multiplica o crop height por este fator (2
 MODE_BLEND_SECONDS = 1.5
 FALLBACK_BG_BLUR_SIGMA = 25.0       # intensidade do desfoque do fundo no modo "plano aberto"
 FALLBACK_BG_DARKEN = 0.55           # 0-1: quanto o fundo desfocado é escurecido
+WIDE_FIT_ZOOM = 1.12                # layout fit: amplia o quadro central 12% (corta só as bordas laterais)
 
 # Detecção de CORTE DE CÂMERA real (o vídeo de origem alterna para outra
 # pessoa/ângulo — comum em podcast de duas câmeras). Um salto de posição
@@ -754,6 +755,27 @@ REACT_MIN_SCREEN_FRACTION = 0.25
 # chat ou parte da tela reagida visível perto da facecam) sem precisar
 # detectar essas regiões especificamente.
 FACECAM_SMALL_HEIGHT_FRAC = 0.16
+
+# --- Enquadramento pelo TAMANHO do rosto (vídeo comum / podcast) ---
+# Achado real (clipes do Flow Podcast): em plano aberto/médio o crop usava a
+# altura INTEIRA da fonte, então a pessoa ficava minúscula no meio da tela
+# e a cortina escura do estúdio ocupava metade do quadro ("tela preta").
+# Agora o crop é dimensionado pra que o rosto ativo ocupe
+# SUBJECT_TARGET_FACE_FRAC da altura do quadro final (close da fonte já
+# passa disso -> sem zoom extra), limitado por SUBJECT_MAX_UPSCALE (quanto
+# a imagem pode ser ampliada antes de ficar borrada: 3.0 = crop de no
+# mínimo 640px de altura pra sair em 1920). Plano de GRUPO (2+ rostos em
+# quadro e, mesmo com o zoom máximo, rosto abaixo de
+# SUBJECT_FIT_GROUP_FACE_FRAC da altura -- ex.: 4 pessoas na mesa) usa o
+# layout "fit": quadro inteiro no meio com fundo desfocado, ninguém cortado
+# (vale até o próximo corte de câmera). Uma pessoa só fica sempre no
+# recorte, a não ser que o rosto não chegue nem a
+# SUBJECT_FIT_SINGLE_FACE_FRAC. Não vale no modo REACT (usa a lógica de
+# facecam).
+SUBJECT_TARGET_FACE_FRAC = 0.22
+SUBJECT_MAX_UPSCALE = 3.0
+SUBJECT_FIT_GROUP_FACE_FRAC = 0.16
+SUBJECT_FIT_SINGLE_FACE_FRAC = 0.07
 
 # quanto tempo (segundos) o enquadramento fica forçado na tela reagida
 # depois de detectar uma referência visual no texto ("olha a camisa
