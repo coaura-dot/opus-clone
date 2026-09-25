@@ -117,7 +117,7 @@ def _line_with_highlight(group: List[Word], active_idx: int, emphasis: set) -> s
         emph = _is_emphasis(w.text, emphasis)
         if i == active_idx:
             # acende e cresce passando do ponto (overshoot) antes de assentar
-            peak = hl_scale + 10
+            peak = hl_scale + 7
             color = emph_color if emph else highlight
             parts.append(
                 f"{{\\c&H{color}&\\fscx100\\fscy100"
@@ -248,7 +248,7 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
             tags = rf"\blur0.8\frz{tilt if g_idx % 2 else -tilt}"
             if i == 0:
                 tags += (rf"\move({base_x},{base_y + rise},{base_x},{base_y},0,110)"
-                         rf"\fscx{pop}\fscy{pop}\t(0,70,\fscx108\fscy108)\t(70,140,\fscx100\fscy100)")
+                         rf"\fscx{pop}\fscy{pop}\t(0,70,\fscx106\fscy106)\t(70,140,\fscx100\fscy100)")
                 tags += r"\fad(40,0)" if i != n - 1 else r"\fad(40,60)"
             else:
                 tags += rf"\pos({base_x},{base_y})"

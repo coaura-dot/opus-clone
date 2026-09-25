@@ -15,7 +15,7 @@ import numpy as np
 
 from .transcriber import Transcript, Word
 from .audio import audio_energy
-from .opener import depends_on_context
+from .opener import opening_depends_on_context
 from . import config
 
 
@@ -782,6 +782,15 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
     #   4. ranqueia pela força do gancho + densidade de conteúdo + energia,
     #      com prêmio pra começo/fim limpos.
     clean_cache: dict = {}
+    opener_cache: dict = {}
+
+    def opens_dependent(idx: int) -> bool:
+        """As duas primeiras frases a partir de `idx` dependem do que veio
+        antes (ver src/opener.py)?"""
+        if idx not in opener_cache:
+            nxt = sentences[idx + 1]["text"] if idx + 1 < len(sentences) else ""
+            opener_cache[idx] = opening_depends_on_context(sentences[idx]["text"], nxt)
+        return opener_cache[idx]
 
     def clean_start_at(idx: int) -> bool:
         if idx not in clean_cache:
@@ -871,15 +880,15 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         # fez? quem são eles?) passava como começo de assunto. Se depende do
         # que veio antes, avança até a primeira frase que se sustenta antes
         # do gancho; sem nenhuma, começa no próprio gancho.
-        if depends_on_context(sentences[start_idx]["text"]):
+        if opens_dependent(start_idx):
             for j in range(start_idx + 1, h + 1):
-                if not depends_on_context(sentences[j]["text"]):
+                if not opens_dependent(j):
                     start_idx = j
                     break
             else:
                 start_idx = h
             clean_start = clean_start_at(start_idx)
-        self_contained = not depends_on_context(sentences[start_idx]["text"])
+        self_contained = not opens_dependent(start_idx)
         start_t = sentences[start_idx]["start"]
 
         # ETAPA 2: fim — primeira troca de assunto FORTE depois da

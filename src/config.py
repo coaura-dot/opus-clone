@@ -386,7 +386,7 @@ CAPTION_UPPERCASE = True
 # "Arial Black", que normalmente não existe no Linux (a legenda cairia numa
 # fonte genérica do sistema).
 CAPTION_FONT = "Anton"
-CAPTION_FONT_SIZE = 135              # pt de referência para vídeo de 1080px de largura
+CAPTION_FONT_SIZE = 118              # pt de referência para vídeo de 1080px de largura
                                       # (era 22 — praticamente ilegível; depois 84, que
                                       # medido no vídeo final dava letras de ~44px e ocupava
                                       # só ~1/3 da largura — Opus Clip/CapCut usam legendas
@@ -394,9 +394,9 @@ CAPTION_FONT_SIZE = 135              # pt de referência para vídeo de 1080px d
 CAPTION_OUTLINE_WIDTH = 8            # pt de referência p/ 1080px; escala junto com a fonte
 CAPTION_SHADOW = 4                   # sombra preta semitransparente atrás do contorno
 CAPTION_LETTER_SPACING = 1
-CAPTION_POP_START_SCALE = 70         # cada grupo entra crescendo de 70% -> 108% -> 100% ("bounce")
-CAPTION_TILT_DEGREES = 1.5          # inclinação alternada entre grupos (0 = reto)
-CAPTION_RISE_PX = 18                # quanto o grupo "sobe" ao entrar
+CAPTION_POP_START_SCALE = 79         # cada grupo entra crescendo de 79% -> 106% -> 100% ("bounce")
+CAPTION_TILT_DEGREES = 1.0          # inclinação alternada entre grupos (0 = reto)
+CAPTION_RISE_PX = 13                # quanto o grupo "sobe" ao entrar
 CAPTION_PRIMARY_BGR = "FFFFFF"      # branco (formato BGR usado pelo ASS)
 CAPTION_HIGHLIGHT_BGR = "00D7FF"    # dourado/amarelo (BGR) — palavra sendo falada
 CAPTION_EMPHASIS_BGR = "5BFF3C"     # verde (BGR) — números, dinheiro, palavras de impacto
@@ -409,7 +409,7 @@ CAPTION_OUTLINE_BGR = "000000"      # preto
 # posicionam.
 CAPTION_MARGIN_V = 560               # distância da legenda até a base do quadro
 CAPTION_MARGIN_H = 120               # margem lateral (quebra de linha antes dos botões da direita)
-CAPTION_HIGHLIGHT_SCALE = 115        # escala (%) da palavra destacada — "pop" ao ser falada
+CAPTION_HIGHLIGHT_SCALE = 111        # escala (%) da palavra destacada — "pop" ao ser falada
 
 # Exporta também clip_XX_..._sem_musica.mp4 (mesma imagem, só a voz) pra
 # postar com um som em alta escolhido na biblioteca do próprio TikTok /
@@ -421,6 +421,7 @@ EXPORT_NO_MUSIC_VERSION = True
 # Momento-chave = palavra com peso (número/dinheiro, palavra de impacto,
 # palavra com emoji, "!" / pergunta forte) + voz mais alta que o normal.
 FX_ENABLED = True
+FX_INTENSITY = 0.7                   # força de TODOS os efeitos visuais (1.0 = original; 0.7 = 30% mais suave)
 FX_KEY_MOMENT_MIN_WEIGHT = 1.5       # peso mínimo de uma palavra pra virar momento-chave
 FX_ZOOM_MIN_GAP_SECONDS = 3.5        # distância mínima entre dois zooms de momento-chave
 FX_ZOOM_MAX = 1.16                   # zoom máximo num momento-chave (1.16 = +16%)
@@ -440,12 +441,12 @@ FX_EMOJI_ENABLED = True              # emoji acima da legenda quando uma palavra
 FX_EMOJI_MIN_GAP_SECONDS = 4.0
 FX_EMOJI_SECONDS = 1.3
 FX_EMOJI_REPEAT_GAP_SECONDS = 25.0  # o mesmo emoji só volta depois disso
-FX_EMOJI_SIZE = 170
+FX_EMOJI_SIZE = 140
 
 # --- Efeitos sonoros (src/sfx.py, sintetizados localmente) ---
 SFX_ENABLED = True
-SFX_WHOOSH_DB = -18.0                # volume do whoosh na entrada do título-gancho
-SFX_IMPACT_DB = -16.0                # volume do "boom" grave nos momentos de impacto
+SFX_WHOOSH_DB = -21.0                # volume do whoosh na entrada do título-gancho
+SFX_IMPACT_DB = -19.0                # volume do "boom" grave nos momentos de impacto
 
 # --- Título-gancho no topo (primeiros segundos de cada clipe) ---
 # Balão branco com texto preto (visual clássico de TikTok/Reels) com o
@@ -516,7 +517,7 @@ MUSIC_VOLUME_DB = -20.94  # +50% de ganho linear sobre o valor anterior
 # abaixa mais ainda enquanto alguém fala. Maior = música mais baixa.
 # (Com o valor fixo acima, medido em clipes reais, a música ficava só ~9 dB
 # abaixo da voz — alta demais.) None = usa MUSIC_VOLUME_DB fixo.
-MUSIC_BELOW_VOICE_DB = 24.0
+MUSIC_BELOW_VOICE_DB = 22.1          # (era 24: +25% de volume = +1.9 dB)
 MUSIC_DUCKING = True
 MUSIC_DUCKING_RATIO = 4              # compressão do ducking (era 8 = quase mutava a música
                                       # inteira enquanto havia qualquer fala)
@@ -554,7 +555,7 @@ COLOR_EQ_SATURATION = 1.18
 COLOR_EQ_BRIGHTNESS = 0.015
 COLOR_EQ_GAMMA = 1.02
 VIGNETTE_ENABLED = True
-VIGNETTE_ANGLE = "PI/4.2"            # maior = vinheta mais forte/fechada (era PI/5)
+VIGNETTE_ANGLE = "PI/4.6"            # maior = vinheta mais forte/fechada
 
 # --- Qualidade/tamanho do encode final ---
 # CRF pro caminho de CPU (libx264) e QP pro caminho de GPU (VAAPI/AMF —

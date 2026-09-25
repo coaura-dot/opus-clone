@@ -116,6 +116,12 @@ def _detect_yunet(detector, frame_bgr, det_width: int, min_score: float) -> list
     # que o nariz aponta, deixando o rosto no terço oposto, como um
     # cinegrafista enquadra (FACE_LOOK_ROOM x largura do rosto).
     look_room = getattr(config, "FACE_LOOK_ROOM", 0.3)
+    # o recorte padrão tem a altura cheia da fonte em 9:16; o deslocamento
+    # de "espaço de olhar" nunca pode tirar a cabeça do quadro. Achado real:
+    # num close de perfil bem de perto (rosto ~metade da largura do recorte)
+    # o deslocamento empurrava a nuca/cabelo pra fora da borda.
+    crop_w = small.shape[0] * 9.0 / 16.0
+    margin = 0.08 * crop_w
     out = []
     for f in faces:
         if float(f[-1]) < min_score:
@@ -123,7 +129,16 @@ def _detect_yunet(detector, frame_bgr, det_width: int, min_score: float) -> list
         x, y, fw, fh = f[0], f[1], f[2], f[3]
         eyes_x = (f[4] + f[6]) / 2.0
         yaw = float(np.clip((f[8] - eyes_x) / max(fw * 0.25, 1e-3), -1.0, 1.0))
-        cx = eyes_x + yaw * look_room * fw
+        # a caixa do YuNet cobre só a FRENTE do rosto; num perfil a nuca e o
+        # cabelo ficam atrás dela (medido num close: caixa em x=566-744, cabeça
+        # começando em x~340). Estima a cabeça inteira estendendo a caixa pro
+        # lado oposto ao olhar, e só dá "espaço de olhar" se ela couber.
+        back = abs(yaw) * 0.9 * fw
+        head_l, head_r = (x - back, x + fw) if yaw > 0 else (x, x + fw + back)
+        lo = head_r + margin - crop_w / 2.0
+        hi = head_l - margin + crop_w / 2.0
+        desired = eyes_x + yaw * look_room * fw
+        cx = float(np.clip(desired, lo, hi)) if lo <= hi else (head_l + head_r) / 2.0
         out.append((cx / scale, (y + fh / 2.0) / scale, fw / scale, fh / scale))
     return out
 
@@ -1660,7 +1675,8 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             zoom_factor = 1.0
             if keep_segments is not None and mode == "face" and seg_i % 2 == 1:
                 # jump cut: trechos alternados ficam um pouco mais fechados
-                zoom_factor = max(getattr(config, "JUMPCUT_PUNCH_ZOOM", 1.0), 1.0)
+                zoom_factor = 1.0 + (max(getattr(config, "JUMPCUT_PUNCH_ZOOM", 1.0), 1.0) - 1.0) * float(
+                    getattr(config, "FX_INTENSITY", 1.0))
             if config.ZOOM_PUNCH_ENABLED and mode == "face":
                 ease_s = getattr(config, "ZOOM_PUNCH_EASE_SECONDS", 0.25)
                 half_hold = getattr(config, "ZOOM_PUNCH_HOLD", 0.30) / 2.0

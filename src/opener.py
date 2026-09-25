@@ -89,6 +89,8 @@ def depends_on_context(text: str) -> bool:
         return True
     if text.endswith(("...", "…")) and len(text.split()) <= 5:
         return True  # hesitação que morre no meio ("O 1...", "Mas como é...")
+    if _unintroduced_person_pronoun(text):
+        return True  # "Você viu ele falando...?" / "Na verdade, ele é..." — quem?
     first = _first_word(text)
     question = text.rstrip().endswith("?")
     if first in _LISTENER_VERBS or (question and first not in _ANAPHORIC_PRONOUNS):
@@ -115,3 +117,67 @@ def depends_on_context(text: str) -> bool:
                 return False
             return "3" in tok.morph.get("Person")  # sujeito oculto de 3ª pessoa
     return False
+
+
+_PERSON_PRONOUNS = {"ele", "ela", "eles", "elas", "he", "she", "they"}
+
+
+def _referent_tokens(doc):
+    """Índices dos tokens que apresentam alguém/algo (nome próprio ou
+    substantivo), ignorando interjeição/vocativo solto ("Puts, ...",
+    "..., cara, ...") e "a gente" (= nós)."""
+    idx = []
+    for i, tok in enumerate(doc):
+        if tok.pos_ not in ("PROPN", "NOUN"):
+            continue
+        after = doc[i + 1].text if i + 1 < len(doc) else ""
+        before = doc[i - 1].text if i > 0 else ""
+        if after == "," and (i == 0 or before == ","):
+            continue
+        if tok.text.lower() == "gente" and before.lower() == "a":
+            continue
+        idx.append(i)
+    return idx
+
+
+def _unintroduced_person_pronoun(text: str) -> bool:
+    """"ele/ela/eles/elas" aparece antes de qualquer pessoa/coisa citada na
+    própria frase?"""
+    nlp = _nlp()
+    if nlp is None:
+        m = re.search(r"\b(ele|ela|eles|elas)\b", text, re.IGNORECASE)
+        return bool(m) and not re.search(r"\b[A-ZÀ-Ý][a-zà-ÿ]{2,}", text[1:m.start()])
+    doc = nlp(text)
+    first_ref = min(_referent_tokens(doc), default=len(doc))
+    return any(tok.text.lower() in _PERSON_PRONOUNS and tok.pos_ == "PRON" and i < first_ref
+               for i, tok in enumerate(doc))
+
+
+def _has_anaphoric_subject(text: str) -> bool:
+    """A frase tem "ele/ela/eles/elas" como sujeito ("Ah, não sei se ele
+    é...", "Ele posta textos de política")?"""
+    nlp = _nlp()
+    if nlp is None:
+        return bool(re.search(r"\b(ele|ela|eles|elas)\s+\w+", text, re.IGNORECASE))
+    return any(tok.dep_.startswith("nsubj") and tok.text.lower() in _PERSON_PRONOUNS
+               for tok in nlp(text))
+
+
+def _introduces_referent(text: str) -> bool:
+    """A frase cita alguém/algo que um "ele" logo depois possa retomar
+    (nome próprio ou substantivo)?"""
+    nlp = _nlp()
+    if nlp is None:
+        return bool(re.search(r"(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}", text.strip()))
+    return bool(_referent_tokens(nlp(text)))
+
+
+def opening_depends_on_context(first: str, second: str = "") -> bool:
+    """Como `depends_on_context`, mas olhando as DUAS primeiras frases do
+    clipe: uma abertura que se sustenta sozinha ("Puts, tu virar muito são,
+    tu fica louco.") ainda depende do que veio antes se a frase seguinte
+    fala de "ele" sem que a primeira tenha apresentado ninguém ("Ah, não sei
+    se ele é..." -- quem?). Achado real no teste com podcast."""
+    if depends_on_context(first):
+        return True
+    return bool(second) and _has_anaphoric_subject(second) and not _introduces_referent(first)

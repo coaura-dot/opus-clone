@@ -30,6 +30,13 @@ from .emoji_map import EMOJI_KEYWORDS
 EMOJI_DIR = Path(__file__).resolve().parent.parent / "assets" / "emoji"
 
 
+def intensity() -> float:
+    """Multiplicador global da força dos efeitos (FX_INTENSITY): 1.0 = como
+    calibrado, 0.7 = 30% mais suave. Afeta zoom, abertura, flash, tremida,
+    RGB e flicker (não a quantidade de efeitos)."""
+    return max(float(getattr(config, "FX_INTENSITY", 1.0)), 0.0)
+
+
 def _norm(word: str) -> str:
     w = unicodedata.normalize("NFKD", word.lower())
     w = "".join(c for c in w if not unicodedata.combining(c))
@@ -89,7 +96,7 @@ class FxPlan:
             dur = getattr(config, "FX_INTRO_ZOOM_SECONDS", 0.7)
             if t < dur:
                 p = t / dur
-                z *= 1.0 + (getattr(config, "FX_INTRO_ZOOM", 1.18) - 1.0) * (1 - p) ** 3
+                z *= 1.0 + (getattr(config, "FX_INTRO_ZOOM", 1.18) - 1.0) * intensity() * (1 - p) ** 3
         return z
 
     # ----- efeitos no quadro já composto ---------------------------------
@@ -101,9 +108,10 @@ class FxPlan:
             if 0 <= dt < 0.30:
                 decay = (1 - dt / 0.30) ** 2
                 if dt < 0.18:
-                    gain = 1.0 + getattr(config, "FX_FLASH_STRENGTH", 0.45) * (1 - dt / 0.18) ** 2
-                    out = cv2.convertScaleAbs(out, alpha=gain, beta=18 * (1 - dt / 0.18))
-                amp = getattr(config, "FX_SHAKE_PX", 14) * decay
+                    k = intensity()
+                    gain = 1.0 + getattr(config, "FX_FLASH_STRENGTH", 0.45) * k * (1 - dt / 0.18) ** 2
+                    out = cv2.convertScaleAbs(out, alpha=gain, beta=18 * k * (1 - dt / 0.18))
+                amp = getattr(config, "FX_SHAKE_PX", 14) * intensity() * decay
                 if amp >= 1:
                     rng = np.random.default_rng(int(t * 1000))
                     dx, dy = rng.uniform(-amp, amp, 2)
@@ -111,7 +119,7 @@ class FxPlan:
                     out = cv2.warpAffine(out, m, (out.shape[1], out.shape[0]),
                                          borderMode=cv2.BORDER_REFLECT)
                 if dt < 0.14:
-                    shift = int(round(getattr(config, "FX_RGB_SPLIT_PX", 10) * (1 - dt / 0.14)))
+                    shift = int(round(getattr(config, "FX_RGB_SPLIT_PX", 10) * intensity() * (1 - dt / 0.14)))
                     if shift:
                         out = out.copy()
                         out[:, :, 2] = np.roll(out[:, :, 2], shift, axis=1)   # vermelho pra direita
@@ -120,7 +128,8 @@ class FxPlan:
         # flicker de abertura (película antiga, só nos primeiros instantes)
         if self.intro and t < getattr(config, "FX_INTRO_FLICKER_SECONDS", 0.45):
             rng = np.random.default_rng(int(t * 30))
-            out = cv2.convertScaleAbs(out, alpha=float(rng.uniform(0.82, 1.22)), beta=0)
+            amp = 0.2 * intensity()
+            out = cv2.convertScaleAbs(out, alpha=float(rng.uniform(1 - amp, 1 + amp)), beta=0)
         # emoji acima da legenda
         for t0, t1, code in self.emojis:
             if t0 <= t <= t1:
@@ -133,6 +142,27 @@ class FxPlan:
             img = cv2.imread(str(EMOJI_DIR / f"{code}.png"), cv2.IMREAD_UNCHANGED)
             self._emoji_cache[code] = img if img is not None and img.shape[2] == 4 else None
         return self._emoji_cache[code]
+
+    def _sticker(self, code: str, img: np.ndarray, size: int):
+        """Emoji no tamanho `size` já em estilo "adesivo": contorno branco +
+        sombra suave (um emoji escuro -- 💣, 💀 -- sumia em fundo escuro),
+        com margem transparente pra o contorno não ser cortado na borda.
+        Em cache: o tamanho só muda nos ~0.2s do "pop" de entrada, e refazer
+        dilatação/desfoque todo quadro custava ~7ms por quadro."""
+        key = (code, size)
+        if key not in self._emoji_cache:
+            sprite = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+            pad = max(size // 10, 4)
+            sprite = cv2.copyMakeBorder(sprite, pad, pad, pad, pad, cv2.BORDER_CONSTANT,
+                                        value=(0, 0, 0, 0))
+            a_full = sprite[:, :, 3].astype(np.float32) / 255.0
+            k = max(size // 24, 2)
+            stroke = cv2.dilate(a_full, cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                                  (2 * k + 1, 2 * k + 1)))
+            stroke = cv2.GaussianBlur(stroke, (0, 0), sigmaX=1.0)
+            shadow = cv2.GaussianBlur(stroke, (0, 0), sigmaX=max(size / 20.0, 1.5))
+            self._emoji_cache[key] = (sprite, a_full, stroke, shadow)
+        return self._emoji_cache[key]
 
     def _draw_emoji(self, frame, code: str, since: float, left: float, out_h: int):
         img = self._emoji_rgba(code)
@@ -148,17 +178,7 @@ class FxPlan:
             s = 1.0
         alpha = min(1.0, left / 0.15) if left < 0.15 else 1.0
         size = max(int(base * s), 8)
-        sprite = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
-        # estilo "adesivo": contorno branco + sombra suave em volta do emoji
-        # (um emoji escuro -- 💣, 💀 -- sumia em fundo escuro). Margem
-        # transparente antes, pra o contorno não ser cortado na borda.
-        pad = max(size // 10, 4)
-        sprite = cv2.copyMakeBorder(sprite, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0, 0))
-        a_full = sprite[:, :, 3].astype(np.float32) / 255.0
-        k = max(size // 24, 2)
-        stroke = cv2.dilate(a_full, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1)))
-        stroke = cv2.GaussianBlur(stroke, (0, 0), sigmaX=1.0)
-        shadow = cv2.GaussianBlur(stroke, (0, 0), sigmaX=max(size / 20.0, 1.5))
+        sprite, a_full, stroke, shadow = self._sticker(code, img, size)
         h, w = frame.shape[:2]
         # a legenda fica com a BASE em CAPTION_MARGIN_V; o emoji vai logo acima.
         # folga acima da legenda: o grupo entra crescendo até 108% e a
@@ -179,7 +199,7 @@ class FxPlan:
         a = a_full[ys, xs, None] * alpha
         st = stroke[ys, xs, None] * alpha
         sd = shadow[ys, xs, None] * alpha
-        out = frame.copy()
+        out = frame  # o quadro composto já é um array novo a cada frame: desenha nele
         region = out[y0:y1, x0:x1].astype(np.float32)
         region *= 1.0 - 0.45 * sd                       # sombra
         region = region * (1 - st) + 255.0 * st          # contorno branco
@@ -247,7 +267,7 @@ def plan_effects(words, duration: float, energies: Optional[np.ndarray] = None,
             t1 = w.end
             if w.text.rstrip().endswith((".", "!", "?")):
                 break
-        level = 1.0 + min(0.08 + 0.025 * weight, getattr(config, "FX_ZOOM_MAX", 1.16) - 1.0)
+        level = 1.0 + min(0.08 + 0.025 * weight, getattr(config, "FX_ZOOM_MAX", 1.16) - 1.0) * intensity()
         plan.zooms.append((t0, max(t1, t0 + 0.6), level))
         taken.append(t0)
     plan.zooms.sort()
