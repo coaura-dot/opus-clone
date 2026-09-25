@@ -878,13 +878,11 @@ FACECAM_SMALL_HEIGHT_FRAC = 0.16
 # recorte, a não ser que o rosto não chegue nem a
 # SUBJECT_FIT_SINGLE_FACE_FRAC. Não vale no modo REACT (usa a lógica de
 # facecam).
-SUBJECT_TARGET_FACE_FRAC = 0.22
-# Close "mais afastado": se o rosto ocuparia mais que FACE_MAX_WIDTH_FRAC da
-# largura da tela no 9:16, o recorte abre pros lados (proporção até
-# FACE_MAX_ASPECT, largura/altura) e em cima/embaixo vira fundo desfocado.
-# Menor FACE_MAX_WIDTH_FRAC = rosto menor na tela. 0.5625 (=9:16) desliga.
-FACE_MAX_WIDTH_FRAC = 0.38
-FACE_MAX_ASPECT = 0.95
+# (0.15: "sempre o máximo zoom out possível" — com 0.22 o plano médio
+# fechava mais do que precisava; agora só aproxima quando a pessoa está
+# realmente pequena, e só o necessário. Em close o recorte já usa a altura
+# inteira da fonte, o mais aberto possível sem sair da imagem.)
+SUBJECT_TARGET_FACE_FRAC = 0.15
 SUBJECT_MAX_UPSCALE = 3.0
 SUBJECT_FIT_GROUP_FACE_FRAC = 0.20
 SUBJECT_FIT_SINGLE_FACE_FRAC = 0.07

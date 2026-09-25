@@ -1141,17 +1141,7 @@ def _compose_tracked_frame(frame, smoothed_x: float, smoothed_y: float,
     if cropped.shape[0] == 0 or cropped.shape[1] == 0:
         cropped = frame
     interp = cv2.INTER_AREA if cur_crop_w > out_w else cv2.INTER_LINEAR
-    ch, cw = cropped.shape[:2]
-    fg_h = int(round(out_w * ch / max(cw, 1)))
-    if fg_h >= out_h - 2:
-        return cv2.resize(cropped, (out_w, out_h), interpolation=interp)
-    # recorte mais largo que 9:16 (close afastado, ver FACE_MAX_WIDTH_FRAC):
-    # ocupa a largura toda e o resto vira fundo desfocado da própria imagem
-    canvas = _blurred_cover(cropped, out_w, out_h)
-    fg = cv2.resize(cropped, (out_w, fg_h), interpolation=interp)
-    fy0 = (out_h - fg_h) // 2
-    canvas[fy0:fy0 + fg_h] = fg
-    return canvas
+    return cv2.resize(cropped, (out_w, out_h), interpolation=interp)
 
 
 def _compose_screen_frame(frame, region, src_w: int, src_h: int,
@@ -1299,15 +1289,6 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     # FACECAM_SMALL_HEIGHT_FRAC/FACECAM_TARGET_FACE_FRAC em config.py.
     target_crop_h = float(crop_h)
     smoothed_crop_h = float(crop_h)
-    # proporção (largura/altura) do recorte em modo rosto: 9:16 normalmente;
-    # num close em que o rosto ocuparia mais que FACE_MAX_WIDTH_FRAC da
-    # largura, o recorte abre pros lados (até FACE_MAX_ASPECT) e o que sobra
-    # em cima/embaixo vira fundo desfocado — "câmera mais afastada". Achado
-    # real: nos closes de podcast o rosto ocupava ~75-80% da largura da tela.
-    portrait_aspect = out_w / out_h
-    target_aspect = smoothed_aspect = portrait_aspect
-    face_max_width = getattr(config, "FACE_MAX_WIDTH_FRAC", 0.45)
-    face_max_aspect = max(getattr(config, "FACE_MAX_ASPECT", 0.85), portrait_aspect)
     facecam_small_frac = getattr(config, "FACECAM_SMALL_HEIGHT_FRAC", 0.16)
 
     # --- Enquadramento pelo tamanho do rosto (vídeo comum/podcast) ---
@@ -1542,8 +1523,6 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     if face_size is not None and face_size[1] > 0 and subject_framing:
                         target_crop_h = float(np.clip(face_size[1] / subject_target_frac,
                                                       subject_min_crop_h, crop_h))
-                        target_aspect = float(np.clip(face_size[0] / face_max_width / target_crop_h,
-                                                      portrait_aspect, face_max_aspect))
                         out_frac = face_size[1] / target_crop_h
                         if subject_face_frac is None or _in_burst:
                             subject_face_frac = out_frac
@@ -1572,7 +1551,6 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         # junto com a posição (senão o zoom "respira" por ~1s
                         # depois de cada corte de câmera)
                         smoothed_crop_h = target_crop_h
-                        smoothed_aspect = target_aspect
                 else:
                     # sem rosto detectado nesta checagem: NÃO puxa o alvo de
                     # volta pro centro (era o bug original — ao perder o
@@ -1593,12 +1571,11 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             # deriva a largura do crop dinâmico mantendo a proporção 9:16,
             # com a mesma folga de "não passar da fonte" já usada no
             # cálculo original de crop_w/crop_h.
-            smoothed_aspect = (1 - alpha) * smoothed_aspect + alpha * target_aspect
             dyn_crop_h = smoothed_crop_h
-            dyn_crop_w = dyn_crop_h * smoothed_aspect
+            dyn_crop_w = dyn_crop_h * out_w / out_h
             if dyn_crop_w > src_w:
                 dyn_crop_w = src_w
-                dyn_crop_h = dyn_crop_w / smoothed_aspect
+                dyn_crop_h = dyn_crop_w * out_h / out_w
 
             # decide o modo deste frame: "screen" (vídeo-dentro-do-vídeo
             # confirmado) tem prioridade sobre o rastreamento de rosto — ver
