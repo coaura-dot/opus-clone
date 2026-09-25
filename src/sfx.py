@@ -33,6 +33,35 @@ def _whoosh(sr: int, seconds: float = 0.55) -> np.ndarray:
     return out / peak
 
 
+def _impact(sr: int, seconds: float = 0.45) -> np.ndarray:
+    """Batida grave curta ("boom" de edição): seno de ~55Hz caindo pra ~40Hz
+    com envelope rápido + um clique de ataque."""
+    n = int(seconds * sr)
+    t = np.arange(n, dtype=np.float32) / sr
+    freq = 55.0 - 15.0 * (t / seconds)
+    phase = 2 * np.pi * np.cumsum(freq) / sr
+    body = np.sin(phase) * np.exp(-t * 9.0)
+    click = np.random.default_rng(3).standard_normal(n).astype(np.float32) * np.exp(-t * 180.0) * 0.35
+    out = (body + click).astype(np.float32)
+    return out / (float(np.abs(out).max()) or 1.0)
+
+
+def add_impacts(wav_path: str, times) -> str:
+    """Soma um "boom" grave em cada instante de `times` (sobrescreve)."""
+    if not getattr(config, "SFX_ENABLED", True) or not times:
+        return wav_path
+    pcm, sr = _read_wav_mono(wav_path)
+    fx = _impact(sr) * (10 ** (getattr(config, "SFX_IMPACT_DB", -16.0) / 20.0)) * 32767.0
+    mixed = pcm.astype(np.float32)
+    for at in times:
+        start = max(int(at * sr), 0)
+        end = min(start + len(fx), len(mixed))
+        if end > start:
+            mixed[start:end] += fx[:end - start]
+    _write_wav_mono(wav_path, np.clip(mixed, -32768, 32767), sr)
+    return wav_path
+
+
 def add_whoosh(wav_path: str, at: float = 0.0) -> str:
     """Soma um whoosh em `wav_path` (sobrescreve) no instante `at`."""
     if not getattr(config, "SFX_ENABLED", True):

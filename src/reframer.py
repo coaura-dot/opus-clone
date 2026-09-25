@@ -1205,7 +1205,8 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                           audio_energy: Optional[np.ndarray] = None,
                           audio_energy_hop: float = 0.1,
                           reference_times: Optional[List[float]] = None,
-                          keep_segments: Optional[List[tuple]] = None) -> str:
+                          keep_segments: Optional[List[tuple]] = None,
+                          fx=None) -> str:
     """Gera o clipe vertical final (9:16) em um único passe: decodifica só o
     trecho necessário do vídeo original, recorta seguindo o rosto do
     orador (com fallback para plano aberto quando não há rosto em quadro),
@@ -1222,7 +1223,10 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     quadros fora deles (pausas cortadas) são lidos e descartados. Nesse caso
     `audio_energy`, `zoom_peak_times` e `reference_times` já vêm na linha do
     tempo SEM as pausas (a do áudio final), e é nela que tudo que depende de
-    tempo é consultado aqui."""
+    tempo é consultado aqui.
+
+    `fx`: plano de efeitos do clipe (src/fx.py — zoom nos momentos-chave,
+    impacto, emoji, abertura), consultado pelo tempo da linha final."""
     zoom_peak_times = zoom_peak_times or []
     reference_times = sorted(reference_times or [])
     duration = max(end - start, 0.1)
@@ -1673,6 +1677,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     if w > best_weight:
                         best_weight = w
                 zoom_factor *= 1.0 + config.ZOOM_PUNCH_INTENSITY * best_weight
+            fx_zoom = fx.zoom_at(t) if fx is not None else 1.0
+            if mode == "face":
+                zoom_factor = min(zoom_factor * fx_zoom, getattr(config, "FX_ZOOM_TOTAL_MAX", 1.28))
             if getattr(config, "ENERGY_BREATHING_ENABLED", False) and mode == "face" and audio_energy is not None:
                 e_idx = min(int(t / audio_energy_hop), len(audio_energy) - 1)
                 smooth_breath = _breath_alpha * smooth_breath + (1.0 - _breath_alpha) * float(audio_energy[e_idx])
@@ -1698,6 +1705,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         out_w, out_h, 1.0,
                     )
                 push = min(1.0 + push_rate * wide_frames, push_max)
+                push *= 1.0 + (fx_zoom - 1.0) * 0.6  # momentos-chave também no plano aberto
                 focus = smoothed_x if last_detected_xy is not None else None
                 return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
                                            push=push, focus_x=focus)
@@ -1722,6 +1730,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 blend_remaining -= 1
             else:
                 out_frame = _compose_mode(mode)
+
+            if fx is not None:
+                out_frame = fx.apply_frame_effects(out_frame, t, out_h)
 
             try:
                 writer.stdin.write(out_frame.tobytes())
@@ -1775,7 +1786,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             ass_path=ass_path, audio_path=audio_path, fonts_dir=fonts_dir,
             zoom_peak_times=zoom_peak_times, force_cpu=True,
             audio_energy=audio_energy, audio_energy_hop=audio_energy_hop,
-            reference_times=reference_times, keep_segments=keep_segments,
+            reference_times=reference_times, keep_segments=keep_segments, fx=fx,
         )
 
     if hw_failed_mid_stream:

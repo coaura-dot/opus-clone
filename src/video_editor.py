@@ -12,7 +12,8 @@ from .reframer import render_vertical_clip
 from .captioner import generate_ass
 from .music import mix_with_music, pick_music_track, load_track_credit
 from .post_kit import write_post_kit, make_title
-from .sfx import add_whoosh
+from .sfx import add_whoosh, add_impacts
+from .fx import plan_effects
 from . import jumpcut
 from .react_detector import find_reference_times
 from .utils import run, ensure_dir, sanitize_filename
@@ -153,6 +154,14 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     if hook_text:
         add_whoosh(str(voice_audio), at=0.0)  # marca a entrada do título
 
+    # efeitos de edição planejados pela fala (src/fx.py): zoom nos
+    # momentos-chave, impacto (flash/tremida/RGB + "boom"), emojis, abertura
+    fx_plan = plan_effects(clip_words, out_duration, face_gate_energies, face_gate_hop,
+                           hook=bool(hook_text))
+    add_impacts(str(voice_audio), fx_plan.impacts)
+    print(f"    -> Clip {clip_index}: {len(fx_plan.zooms)} zoom(s) em momento-chave, "
+          f"{len(fx_plan.impacts)} impacto(s), {len(fx_plan.emojis)} emoji(s)")
+
     mixed_audio = work / "mixed.wav"
     music_track = pick_music_track()
     mix_with_music(str(voice_audio), out_duration, str(mixed_audio), track=music_track)
@@ -183,6 +192,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         audio_energy=face_gate_energies, audio_energy_hop=face_gate_hop,
         reference_times=reference_times,
         keep_segments=keep_segments,
+        fx=fx_plan,
     )
 
     # render_vertical_clip só levanta exceção se o ffmpeg terminar com

@@ -33,7 +33,7 @@ YCbCr Matrix: TV.601
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Caption,{font},{fontsize},&H00{primary},&H00{primary},&H00{outline},&H{shadow_alpha}000000,1,0,0,0,100,100,{spacing},0,1,{outline_w},{shadow},2,{marginh},{marginh},{marginv},1
-Style: Hook,{hook_font},{hook_fontsize},&H00{hook_text},&H00{hook_text},&H00{hook_box},&H00{hook_box},1,0,0,0,100,100,0,0,3,{hook_pad},0,8,{hook_marginh},{hook_marginh},{hook_marginv},1
+Style: Hook,{hook_font},{hook_fontsize},&H00{hook_text},&H00{hook_text},&H00{hook_box},&H70000000,1,0,0,0,100,100,0,0,3,{hook_pad},{hook_shadow},8,{hook_marginh},{hook_marginh},{hook_marginv},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -114,13 +114,19 @@ def _line_with_highlight(group: List[Word], active_idx: int, emphasis: set) -> s
         clean = _display(w.text)
         if not clean:
             continue
+        emph = _is_emphasis(w.text, emphasis)
         if i == active_idx:
+            # acende e cresce passando do ponto (overshoot) antes de assentar
+            peak = hl_scale + 10
+            color = emph_color if emph else highlight
             parts.append(
-                f"{{\\c&H{highlight}&\\fscx100\\fscy100\\t(0,70,\\fscx{hl_scale}\\fscy{hl_scale})}}"
+                f"{{\\c&H{color}&\\fscx100\\fscy100"
+                f"\\t(0,60,\\fscx{peak}\\fscy{peak})\\t(60,130,\\fscx{hl_scale}\\fscy{hl_scale})}}"
                 f"{clean}{{\\c&H{primary}&\\fscx100\\fscy100}}"
             )
-        elif _is_emphasis(w.text, emphasis):
-            parts.append(f"{{\\c&H{emph_color}&}}{clean}{{\\c&H{primary}&}}")
+        elif emph:
+            parts.append(f"{{\\c&H{emph_color}&\\fscx108\\fscy108}}{clean}"
+                         f"{{\\c&H{primary}&\\fscx100\\fscy100}}")
         else:
             parts.append(clean)
     return " ".join(parts)  # texto em uma linha só dentro do grupo
@@ -189,6 +195,7 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
         hook_text=getattr(config, "HOOK_TEXT_BGR", "000000"),
         hook_box=getattr(config, "HOOK_BOX_BGR", "FFFFFF"),
         hook_pad=max(int(round(getattr(config, "HOOK_BOX_PADDING", 16) * scale)), 1),
+        hook_shadow=max(int(round(8 * scale)), 0),
         hook_marginh=max(int(round(getattr(config, "HOOK_MARGIN_H", 110) * scale)), 0),
         hook_marginv=max(int(round(getattr(config, "HOOK_MARGIN_V", 250) * scale)), 0),
     )
@@ -199,13 +206,19 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
         end = hook_seconds if clip_duration is None else min(hook_seconds, clip_duration)
         text = _wrap_hook(hook_text.replace("{", "").replace("}", ""),
                           getattr(config, "HOOK_MAX_LINE_CHARS", 24))
-        # balão entra com um pop rápido e some com fade
-        anim = r"{\fad(80,220)\fscx80\fscy80\t(0,140,\fscx100\fscy100)}"
+        # balão entra com bounce (passa do tamanho e volta), levemente
+        # inclinado, e some com fade
+        tilt = getattr(config, "HOOK_TILT_DEGREES", -2.0)
+        anim = (rf"{{\fad(80,220)\frz{tilt}\fscx60\fscy60"
+                r"\t(0,120,\fscx110\fscy110)\t(120,220,\fscx100\fscy100)}")
         lines.append(f"Dialogue: 1,{fmt_time(0)},{fmt_time(end)},Hook,,0,0,0,,{anim}{text}")
 
     emphasis = _emphasis_set()
     pop = getattr(config, "CAPTION_POP_START_SCALE", 70)
-    for group in groups:
+    tilt = abs(getattr(config, "CAPTION_TILT_DEGREES", 1.5))
+    rise = int(round(getattr(config, "CAPTION_RISE_PX", 18) * scale))
+    base_x, base_y = video_width // 2, video_height - marginv
+    for g_idx, group in enumerate(groups):
         clean_group = [w for w in group if _display(w.text)]
         if not clean_group:
             continue
@@ -229,12 +242,18 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
             # o grupo entra com "pop" (só na primeira palavra) e sai com um
             # fade curto (só na última) — entre palavras do mesmo grupo não
             # há animação de entrada/saída, senão a legenda "pisca"
-            tags = ""
+            # inclinação alternada por grupo (±CAPTION_TILT_DEGREES) e borda
+            # levemente suavizada; o grupo entra subindo alguns px com bounce
+            # (70% -> 108% -> 100%)
+            tags = rf"\blur0.8\frz{tilt if g_idx % 2 else -tilt}"
             if i == 0:
-                tags += rf"\fscx{pop}\fscy{pop}\t(0,80,\fscx100\fscy100)"
+                tags += (rf"\move({base_x},{base_y + rise},{base_x},{base_y},0,110)"
+                         rf"\fscx{pop}\fscy{pop}\t(0,70,\fscx108\fscy108)\t(70,140,\fscx100\fscy100)")
                 tags += r"\fad(40,0)" if i != n - 1 else r"\fad(40,60)"
-            elif i == n - 1:
-                tags += r"\fad(0,60)"
+            else:
+                tags += rf"\pos({base_x},{base_y})"
+                if i == n - 1:
+                    tags += r"\fad(0,60)"
             tag_block = f"{{{tags}}}" if tags else ""
             line = (f"Dialogue: 0,{fmt_time(start)},{fmt_time(end)},Caption,,0,0,0,,"
                     f"{tag_block}{text}")

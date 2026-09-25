@@ -394,7 +394,9 @@ CAPTION_FONT_SIZE = 135              # pt de referência para vídeo de 1080px d
 CAPTION_OUTLINE_WIDTH = 8            # pt de referência p/ 1080px; escala junto com a fonte
 CAPTION_SHADOW = 4                   # sombra preta semitransparente atrás do contorno
 CAPTION_LETTER_SPACING = 1
-CAPTION_POP_START_SCALE = 70         # cada grupo entra crescendo de 70% -> 100% ("pop")
+CAPTION_POP_START_SCALE = 70         # cada grupo entra crescendo de 70% -> 108% -> 100% ("bounce")
+CAPTION_TILT_DEGREES = 1.5          # inclinação alternada entre grupos (0 = reto)
+CAPTION_RISE_PX = 18                # quanto o grupo "sobe" ao entrar
 CAPTION_PRIMARY_BGR = "FFFFFF"      # branco (formato BGR usado pelo ASS)
 CAPTION_HIGHLIGHT_BGR = "00D7FF"    # dourado/amarelo (BGR) — palavra sendo falada
 CAPTION_EMPHASIS_BGR = "5BFF3C"     # verde (BGR) — números, dinheiro, palavras de impacto
@@ -415,9 +417,35 @@ CAPTION_HIGHLIGHT_SCALE = 115        # escala (%) da palavra destacada — "pop"
 # reivindicação de direitos, e o algoritmo favorece vídeo com som em alta.
 EXPORT_NO_MUSIC_VERSION = True
 
+# --- Efeitos de edição (src/fx.py) — planejados pela FALA do clipe ---
+# Momento-chave = palavra com peso (número/dinheiro, palavra de impacto,
+# palavra com emoji, "!" / pergunta forte) + voz mais alta que o normal.
+FX_ENABLED = True
+FX_KEY_MOMENT_MIN_WEIGHT = 1.5       # peso mínimo de uma palavra pra virar momento-chave
+FX_ZOOM_MIN_GAP_SECONDS = 3.5        # distância mínima entre dois zooms de momento-chave
+FX_ZOOM_MAX = 1.16                   # zoom máximo num momento-chave (1.16 = +16%)
+FX_ZOOM_TOTAL_MAX = 1.28             # teto somando todos os zooms (jump cut, momento-chave...)
+FX_ZOOM_IN_SECONDS = 0.22            # entrada do zoom (com overshoot)
+FX_ZOOM_OUT_SECONDS = 0.45           # saída do zoom (volta suave)
+FX_INTRO_ENABLED = True              # abertura: zoom out de impacto + flicker
+FX_INTRO_ZOOM = 1.18
+FX_INTRO_ZOOM_SECONDS = 0.7
+FX_INTRO_FLICKER_SECONDS = 0.45
+FX_IMPACT_MIN_WEIGHT = 3.0           # só os momentos mais fortes viram impacto (flash+tremida+RGB+boom)
+FX_IMPACT_MIN_GAP_SECONDS = 8.0
+FX_FLASH_STRENGTH = 0.45
+FX_SHAKE_PX = 14
+FX_RGB_SPLIT_PX = 10
+FX_EMOJI_ENABLED = True              # emoji acima da legenda quando uma palavra-chave é dita
+FX_EMOJI_MIN_GAP_SECONDS = 4.0
+FX_EMOJI_SECONDS = 1.3
+FX_EMOJI_REPEAT_GAP_SECONDS = 25.0  # o mesmo emoji só volta depois disso
+FX_EMOJI_SIZE = 170
+
 # --- Efeitos sonoros (src/sfx.py, sintetizados localmente) ---
 SFX_ENABLED = True
 SFX_WHOOSH_DB = -18.0                # volume do whoosh na entrada do título-gancho
+SFX_IMPACT_DB = -16.0                # volume do "boom" grave nos momentos de impacto
 
 # --- Título-gancho no topo (primeiros segundos de cada clipe) ---
 # Balão branco com texto preto (visual clássico de TikTok/Reels) com o
@@ -426,7 +454,8 @@ SFX_WHOOSH_DB = -18.0                # volume do whoosh na entrada do título-ga
 HOOK_ENABLED = True
 HOOK_SECONDS = 3.2
 HOOK_FONT = "Anton"
-HOOK_FONT_SIZE = 86
+HOOK_FONT_SIZE = 96
+HOOK_TILT_DEGREES = -2.0            # balão levemente inclinado (0 = reto)
 HOOK_TEXT_BGR = "000000"
 HOOK_BOX_BGR = "FFFFFF"
 HOOK_BOX_PADDING = 20
@@ -525,7 +554,7 @@ COLOR_EQ_SATURATION = 1.18
 COLOR_EQ_BRIGHTNESS = 0.015
 COLOR_EQ_GAMMA = 1.02
 VIGNETTE_ENABLED = True
-VIGNETTE_ANGLE = "PI/5"              # maior = vinheta mais forte/fechada
+VIGNETTE_ANGLE = "PI/4.2"            # maior = vinheta mais forte/fechada (era PI/5)
 
 # --- Qualidade/tamanho do encode final ---
 # CRF pro caminho de CPU (libx264) e QP pro caminho de GPU (VAAPI/AMF —

@@ -424,6 +424,26 @@ da faixa de baixo que o TikTok/Reels/Shorts cobrem com a descrição do post,
 o nome da música e os botões — e com margem lateral pra não passar por baixo
 dos botões de curtir/comentar da direita.
 
+## Efeitos de edição (zoom, impacto, emoji)
+
+`src/fx.py` planeja os efeitos **pela fala** de cada clipe — nada é aleatório:
+
+- **Zoom nos momentos-chave**: palavra com peso (número/dinheiro, palavra de
+  impacto, palavra com emoji, "!" ou pergunta forte, voz mais alta que o
+  normal) ganha um zoom rápido com *overshoot*, segura durante a frase e
+  volta suave (zoom out). Espaçados (`FX_ZOOM_MIN_GAP_SECONDS`).
+- **Abertura**: o clipe começa com um zoom out de impacto e um flicker curto.
+- **Impacto** nos momentos mais fortes (no máx. 1 a cada 8s): flash de luz,
+  tremida de câmera, separação RGB e um "boom" grave.
+- **Emojis**: quando alguém fala uma palavra-chave (dinheiro 💰, polícia 🚔,
+  Brasil 🇧🇷, morreu 💀, loucura 🤯...), o emoji entra com "pop" acima da
+  legenda, em estilo adesivo (contorno branco). Ignora negação ("não tem
+  vitória" não ganha 🏆) e expressões ("todo mundo" não é 🌎); mapa de
+  palavras em `src/emoji_map.py`. Emojis: Twemoji (CC BY 4.0, `assets/emoji/`).
+- **Vinheta** mais marcada e grade de cor.
+
+Tudo ligável/desligável e ajustável nos `FX_*` do `config.py`.
+
 ## Jump cuts (corte das pausas)
 
 `src/jumpcut.py` tira as pausas de dentro do clipe (vão entre palavras maior
@@ -460,7 +480,10 @@ opus-clip-clone/
 │   ├── video_editor.py       # orquestra a montagem final de cada clipe
 │   ├── post_kit.py            # título/descrição/hashtags/crédito (.post.txt)
 │   ├── jumpcut.py             # corte das pausas (jump cuts)
-│   ├── sfx.py                 # efeitos sonoros sintetizados (whoosh)
+│   ├── sfx.py                 # efeitos sonoros sintetizados (whoosh, boom)
+│   ├── fx.py                  # zoom em momento-chave, impacto, emoji, abertura
+│   ├── emoji_map.py           # palavra falada -> emoji
+│   ├── opener.py              # a frase de abertura se sustenta sozinha?
 │   └── utils.py
 ├── assets/
 │   ├── fonts/                 # fonte Anton (OFL) embutida p/ legendas
