@@ -1091,6 +1091,34 @@ def _open_ffmpeg_writer(output_path: str, width: int, height: int, fps: float,
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+def _blurred_cover(img, out_w: int, out_h: int) -> np.ndarray:
+    """Fundo desfocado/escurecido que cobre o quadro inteiro (escala "cover"),
+    usado atrás do vídeo quando ele não preenche o 9:16 (layout fit e close
+    afastado)."""
+    src_h, src_w = img.shape[:2]
+    bg_scale = max(out_w / src_w, out_h / src_h)
+    bg_w, bg_h = max(int(round(src_w * bg_scale)), out_w), max(int(round(src_h * bg_scale)), out_h)
+    bg = cv2.resize(img, (bg_w, bg_h), interpolation=cv2.INTER_LINEAR)
+    bx0 = (bg_w - out_w) // 2
+    by0 = (bg_h - out_h) // 2
+    bg = bg[by0:by0 + out_h, bx0:bx0 + out_w]
+    # o desfoque de fundo é aplicado numa cópia BEM menor e depois
+    # redimensionado de volta: em resolução cheia (1080x1920) um
+    # GaussianBlur com sigma alto custa ~300ms/frame sozinho (medido) —
+    # mais caro que o resto do pipeline inteiro somado, e sem nenhum
+    # ganho visual (o resultado, de propósito, é um borrão irreconhecível
+    # de qualquer forma). Borrando em baixa resolução o mesmo efeito sai
+    # ~50x mais rápido.
+    sigma = getattr(config, "FALLBACK_BG_BLUR_SIGMA", 25.0)
+    down = 6
+    small_w, small_h = max(out_w // down, 8), max(out_h // down, 8)
+    small = cv2.resize(bg, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    small = cv2.GaussianBlur(small, (0, 0), sigmaX=max(sigma / down, 1.0))
+    bg = cv2.resize(small, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
+    darken = float(np.clip(getattr(config, "FALLBACK_BG_DARKEN", 0.55), 0.0, 1.0))
+    return (bg.astype(np.float32) * darken).astype(np.uint8)
+
+
 def _compose_tracked_frame(frame, smoothed_x: float, smoothed_y: float,
                             crop_w: int, crop_h: int, src_w: int, src_h: int,
                             out_w: int, out_h: int, zoom_factor: float) -> np.ndarray:
@@ -1113,7 +1141,17 @@ def _compose_tracked_frame(frame, smoothed_x: float, smoothed_y: float,
     if cropped.shape[0] == 0 or cropped.shape[1] == 0:
         cropped = frame
     interp = cv2.INTER_AREA if cur_crop_w > out_w else cv2.INTER_LINEAR
-    return cv2.resize(cropped, (out_w, out_h), interpolation=interp)
+    ch, cw = cropped.shape[:2]
+    fg_h = int(round(out_w * ch / max(cw, 1)))
+    if fg_h >= out_h - 2:
+        return cv2.resize(cropped, (out_w, out_h), interpolation=interp)
+    # recorte mais largo que 9:16 (close afastado, ver FACE_MAX_WIDTH_FRAC):
+    # ocupa a largura toda e o resto vira fundo desfocado da própria imagem
+    canvas = _blurred_cover(cropped, out_w, out_h)
+    fg = cv2.resize(cropped, (out_w, fg_h), interpolation=interp)
+    fy0 = (out_h - fg_h) // 2
+    canvas[fy0:fy0 + fg_h] = fg
+    return canvas
 
 
 def _compose_screen_frame(frame, region, src_w: int, src_h: int,
@@ -1162,27 +1200,7 @@ def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int,
     # fundo: escala "cover" (preenche o quadro inteiro, pode cortar um pouco
     # das bordas) + desfoque forte + escurecido, pra não competir com o
     # conteúdo principal nem com a legenda.
-    bg_scale = max(out_w / src_w, out_h / src_h)
-    bg_w, bg_h = max(int(round(src_w * bg_scale)), out_w), max(int(round(src_h * bg_scale)), out_h)
-    bg = cv2.resize(frame, (bg_w, bg_h), interpolation=cv2.INTER_LINEAR)
-    bx0 = (bg_w - out_w) // 2
-    by0 = (bg_h - out_h) // 2
-    bg = bg[by0:by0 + out_h, bx0:bx0 + out_w]
-    # o desfoque de fundo é aplicado numa cópia BEM menor e depois
-    # redimensionado de volta: em resolução cheia (1080x1920) um
-    # GaussianBlur com sigma alto custa ~300ms/frame sozinho (medido) —
-    # mais caro que o resto do pipeline inteiro somado, e sem nenhum
-    # ganho visual (o resultado, de propósito, é um borrão irreconhecível
-    # de qualquer forma). Borrando em baixa resolução o mesmo efeito sai
-    # ~50x mais rápido.
-    sigma = getattr(config, "FALLBACK_BG_BLUR_SIGMA", 25.0)
-    down = 6
-    small_w, small_h = max(out_w // down, 8), max(out_h // down, 8)
-    small = cv2.resize(bg, (small_w, small_h), interpolation=cv2.INTER_AREA)
-    small = cv2.GaussianBlur(small, (0, 0), sigmaX=max(sigma / down, 1.0))
-    bg = cv2.resize(small, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
-    darken = float(np.clip(getattr(config, "FALLBACK_BG_DARKEN", 0.55), 0.0, 1.0))
-    bg = (bg.astype(np.float32) * darken).astype(np.uint8)
+    bg = _blurred_cover(frame, out_w, out_h)
 
     # primeiro plano: escala "contain" (cabe a largura inteira), um pouco
     # ampliada por WIDE_FIT_ZOOM (corta só uma lasquinha das laterais, onde
@@ -1281,6 +1299,15 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     # FACECAM_SMALL_HEIGHT_FRAC/FACECAM_TARGET_FACE_FRAC em config.py.
     target_crop_h = float(crop_h)
     smoothed_crop_h = float(crop_h)
+    # proporção (largura/altura) do recorte em modo rosto: 9:16 normalmente;
+    # num close em que o rosto ocuparia mais que FACE_MAX_WIDTH_FRAC da
+    # largura, o recorte abre pros lados (até FACE_MAX_ASPECT) e o que sobra
+    # em cima/embaixo vira fundo desfocado — "câmera mais afastada". Achado
+    # real: nos closes de podcast o rosto ocupava ~75-80% da largura da tela.
+    portrait_aspect = out_w / out_h
+    target_aspect = smoothed_aspect = portrait_aspect
+    face_max_width = getattr(config, "FACE_MAX_WIDTH_FRAC", 0.45)
+    face_max_aspect = max(getattr(config, "FACE_MAX_ASPECT", 0.85), portrait_aspect)
     facecam_small_frac = getattr(config, "FACECAM_SMALL_HEIGHT_FRAC", 0.16)
 
     # --- Enquadramento pelo tamanho do rosto (vídeo comum/podcast) ---
@@ -1515,6 +1542,8 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     if face_size is not None and face_size[1] > 0 and subject_framing:
                         target_crop_h = float(np.clip(face_size[1] / subject_target_frac,
                                                       subject_min_crop_h, crop_h))
+                        target_aspect = float(np.clip(face_size[0] / face_max_width / target_crop_h,
+                                                      portrait_aspect, face_max_aspect))
                         out_frac = face_size[1] / target_crop_h
                         if subject_face_frac is None or _in_burst:
                             subject_face_frac = out_frac
@@ -1543,6 +1572,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         # junto com a posição (senão o zoom "respira" por ~1s
                         # depois de cada corte de câmera)
                         smoothed_crop_h = target_crop_h
+                        smoothed_aspect = target_aspect
                 else:
                     # sem rosto detectado nesta checagem: NÃO puxa o alvo de
                     # volta pro centro (era o bug original — ao perder o
@@ -1563,11 +1593,12 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             # deriva a largura do crop dinâmico mantendo a proporção 9:16,
             # com a mesma folga de "não passar da fonte" já usada no
             # cálculo original de crop_w/crop_h.
+            smoothed_aspect = (1 - alpha) * smoothed_aspect + alpha * target_aspect
             dyn_crop_h = smoothed_crop_h
-            dyn_crop_w = dyn_crop_h * out_w / out_h
+            dyn_crop_w = dyn_crop_h * smoothed_aspect
             if dyn_crop_w > src_w:
                 dyn_crop_w = src_w
-                dyn_crop_h = dyn_crop_w * out_h / out_w
+                dyn_crop_h = dyn_crop_w / smoothed_aspect
 
             # decide o modo deste frame: "screen" (vídeo-dentro-do-vídeo
             # confirmado) tem prioridade sobre o rastreamento de rosto — ver

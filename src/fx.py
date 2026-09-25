@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 from . import config
-from .emoji_map import EMOJI_KEYWORDS
+from .emoji_map import EMOJI_KEYWORDS, EMOJI_PHRASES
 
 EMOJI_DIR = Path(__file__).resolve().parent.parent / "assets" / "emoji"
 
@@ -47,18 +47,31 @@ def _norm(word: str) -> str:
 _KEYS_LONGEST_FIRST = sorted(EMOJI_KEYWORDS, key=len, reverse=True)
 
 
-def emoji_for(word: str) -> Optional[str]:
-    """Código do emoji pra uma palavra falada (ver emoji_map.py), ou None."""
+def emoji_for(word: str) -> Optional[List[str]]:
+    """Grupo de emojis pra uma palavra falada (ver emoji_map.py), ou None."""
     w = _norm(word)
     if len(w) < 3:
         return None
     for key in _KEYS_LONGEST_FIRST:
-        code = EMOJI_KEYWORDS[key]
+        pool = EMOJI_KEYWORDS[key]
         if key.endswith("="):
             if w == key[:-1]:
-                return code
+                return pool
         elif w.startswith(key):
-            return code
+            return pool
+    return None
+
+
+def phrase_emoji_for(words, i: int) -> Optional[List[str]]:
+    """Grupo de emojis de uma expressão ("meu deus", "sei lá") que TERMINA
+    na palavra `i`, ou None. Grupo vazio = expressão que bloqueia emoji
+    ("todo mundo" não é 🌎)."""
+    for n in (3, 2):
+        if i - n + 1 < 0:
+            continue
+        phrase = " ".join(_norm(w.text) for w in words[i - n + 1:i + 1])
+        if phrase in EMOJI_PHRASES:
+            return EMOJI_PHRASES[phrase]
     return None
 
 
@@ -293,18 +306,21 @@ def plan_effects(words, duration: float, energies: Optional[np.ndarray] = None,
         last_by_code: dict = {}
         hook_until = getattr(config, "HOOK_SECONDS", 3.2) if hook else 0.0
         for i, w in enumerate(words):
-            code = emoji_for(w.text)
-            if not code or w.start - last < emo_gap or w.start < hook_until * 0.5:
-                continue
-            if w.start - last_by_code.get(code, -1e9) < repeat_gap:
-                continue  # o mesmo emoji de novo logo em seguida perde a graça
+            pool = phrase_emoji_for(words, i)
+            if pool is None:
+                pool = emoji_for(w.text)
+            if not pool or w.start - last < emo_gap or w.start < hook_until * 0.5:
+                continue  # sem emoji, ou expressão que bloqueia ("todo mundo")
             prev = [_norm(x.text) for x in words[max(0, i - 2):i]]
             if any(x in _NEGATIONS for x in prev):
                 continue  # "não tem vitória" não ganha troféu
-            if prev and prev[-1] in ("todo", "toda") and _norm(w.text) == "mundo":
-                continue  # "todo mundo" = todos, não o planeta
-            if not (EMOJI_DIR / f"{code}.png").exists():
+            # do grupo, o emoji usado há mais tempo (variedade), fora os que
+            # acabaram de aparecer
+            ready = [c for c in pool if (EMOJI_DIR / f"{c}.png").exists()
+                     and w.start - last_by_code.get(c, -1e9) >= repeat_gap]
+            if not ready:
                 continue
+            code = min(ready, key=lambda c: last_by_code.get(c, -1e9))
             plan.emojis.append((w.start, min(w.start + hold, duration), code))
             last = last_by_code[code] = w.start
     return plan

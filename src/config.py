@@ -441,7 +441,7 @@ FX_EMOJI_ENABLED = True              # emoji acima da legenda quando uma palavra
 FX_EMOJI_MIN_GAP_SECONDS = 4.0
 FX_EMOJI_SECONDS = 1.3
 FX_EMOJI_REPEAT_GAP_SECONDS = 25.0  # o mesmo emoji só volta depois disso
-FX_EMOJI_SIZE = 140
+FX_EMOJI_SIZE = 100
 
 # --- Efeitos sonoros (src/sfx.py, sintetizados localmente) ---
 SFX_ENABLED = True
@@ -879,6 +879,12 @@ FACECAM_SMALL_HEIGHT_FRAC = 0.16
 # SUBJECT_FIT_SINGLE_FACE_FRAC. Não vale no modo REACT (usa a lógica de
 # facecam).
 SUBJECT_TARGET_FACE_FRAC = 0.22
+# Close "mais afastado": se o rosto ocuparia mais que FACE_MAX_WIDTH_FRAC da
+# largura da tela no 9:16, o recorte abre pros lados (proporção até
+# FACE_MAX_ASPECT, largura/altura) e em cima/embaixo vira fundo desfocado.
+# Menor FACE_MAX_WIDTH_FRAC = rosto menor na tela. 0.5625 (=9:16) desliga.
+FACE_MAX_WIDTH_FRAC = 0.38
+FACE_MAX_ASPECT = 0.95
 SUBJECT_MAX_UPSCALE = 3.0
 SUBJECT_FIT_GROUP_FACE_FRAC = 0.20
 SUBJECT_FIT_SINGLE_FACE_FRAC = 0.07
