@@ -110,35 +110,17 @@ def _detect_yunet(detector, frame_bgr, det_width: int, min_score: float) -> list
     _, faces = detector.detect(small)
     if faces is None:
         return []
-    # Centro horizontal: nos OLHOS (não no centro da caixa -- num perfil a
-    # caixa pega cabelo/nuca e fica ~100px atrás do rosto, que acabava
-    # colado na borda do quadro) + "espaço de olhar": desloca pro lado em
-    # que o nariz aponta, deixando o rosto no terço oposto, como um
-    # cinegrafista enquadra (FACE_LOOK_ROOM x largura do rosto).
-    look_room = getattr(config, "FACE_LOOK_ROOM", 0.3)
-    # o recorte padrão tem a altura cheia da fonte em 9:16; o deslocamento
-    # de "espaço de olhar" nunca pode tirar a cabeça do quadro. Achado real:
-    # num close de perfil bem de perto (rosto ~metade da largura do recorte)
-    # o deslocamento empurrava a nuca/cabelo pra fora da borda.
-    crop_w = small.shape[0] * 9.0 / 16.0
-    margin = 0.08 * crop_w
+    # Centro horizontal: no ROSTO (média dos 5 pontos do YuNet -- olhos,
+    # nariz e cantos da boca), não no centro da caixa nem na cabeça inteira.
+    # Num perfil a caixa pega cabelo/nuca e ficava ~100px atrás do rosto; e
+    # centralizar a cabeça estimada (rosto + nuca) jogava o rosto pra um
+    # lado do quadro. Pedido do usuário: "centralize o rosto".
     out = []
     for f in faces:
         if float(f[-1]) < min_score:
             continue
         x, y, fw, fh = f[0], f[1], f[2], f[3]
-        eyes_x = (f[4] + f[6]) / 2.0
-        yaw = float(np.clip((f[8] - eyes_x) / max(fw * 0.25, 1e-3), -1.0, 1.0))
-        # a caixa do YuNet cobre só a FRENTE do rosto; num perfil a nuca e o
-        # cabelo ficam atrás dela (medido num close: caixa em x=566-744, cabeça
-        # começando em x~340). Estima a cabeça inteira estendendo a caixa pro
-        # lado oposto ao olhar, e só dá "espaço de olhar" se ela couber.
-        back = abs(yaw) * 0.9 * fw
-        head_l, head_r = (x - back, x + fw) if yaw > 0 else (x, x + fw + back)
-        lo = head_r + margin - crop_w / 2.0
-        hi = head_l - margin + crop_w / 2.0
-        desired = eyes_x + yaw * look_room * fw
-        cx = float(np.clip(desired, lo, hi)) if lo <= hi else (head_l + head_r) / 2.0
+        cx = float(np.mean([f[4], f[6], f[8], f[10], f[12]]))
         out.append((cx / scale, (y + fh / 2.0) / scale, fw / scale, fh / scale))
     return out
 
@@ -1708,6 +1690,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 e_idx = min(int(t / audio_energy_hop), len(audio_energy) - 1)
                 smooth_breath = _breath_alpha * smooth_breath + (1.0 - _breath_alpha) * float(audio_energy[e_idx])
                 zoom_factor *= 1.0 + smooth_breath * getattr(config, "ENERGY_BREATHING_MAX", 0.025)
+            # um knob só pra intensidade de TODOS os zooms (jump cut,
+            # momento-chave, entrada do clipe, respiração)
+            zoom_factor = 1.0 + (zoom_factor - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
 
             def _compose_mode(m: str) -> np.ndarray:
                 if m == "screen" and screen_region is not None:

@@ -118,7 +118,6 @@ FACE_DETECT_WIDTH_FALLBACK = 960
 FACE_DETECTOR = "yunet"
 YUNET_DETECT_WIDTH = 640
 YUNET_SCORE_THRESHOLD = 0.6
-FACE_LOOK_ROOM = 0.3                 # espaço na direção do olhar (fração da largura do rosto)
 # Fração máxima de altura do frame onde o centro de um rosto detectado pode
 # estar. Detecções abaixo desse limite (ex.: logos, brinquedos, placas de mesa
 # num plano aberto de podcast) são descartadas como falsos positivos — rostos
@@ -386,7 +385,7 @@ CAPTION_UPPERCASE = True
 # "Arial Black", que normalmente não existe no Linux (a legenda cairia numa
 # fonte genérica do sistema).
 CAPTION_FONT = "Anton"
-CAPTION_FONT_SIZE = 118              # pt de referência para vídeo de 1080px de largura
+CAPTION_FONT_SIZE = 104              # pt de referência para vídeo de 1080px de largura
                                       # (era 22 — praticamente ilegível; depois 84, que
                                       # medido no vídeo final dava letras de ~44px e ocupava
                                       # só ~1/3 da largura — Opus Clip/CapCut usam legendas
@@ -426,6 +425,7 @@ FX_KEY_MOMENT_MIN_WEIGHT = 1.5       # peso mínimo de uma palavra pra virar mom
 FX_ZOOM_MIN_GAP_SECONDS = 3.5        # distância mínima entre dois zooms de momento-chave
 FX_ZOOM_MAX = 1.16                   # zoom máximo num momento-chave (1.16 = +16%)
 FX_ZOOM_TOTAL_MAX = 1.28             # teto somando todos os zooms (jump cut, momento-chave...)
+ZOOM_AMOUNT_SCALE = 0.8              # escala todos os zooms acima (0.8 = 20% menos zoom)
 FX_ZOOM_IN_SECONDS = 0.22            # entrada do zoom (com overshoot)
 FX_ZOOM_OUT_SECONDS = 0.45           # saída do zoom (volta suave)
 FX_INTRO_ENABLED = True              # abertura: zoom out de impacto + flicker
@@ -882,7 +882,7 @@ FACECAM_SMALL_HEIGHT_FRAC = 0.16
 # fechava mais do que precisava; agora só aproxima quando a pessoa está
 # realmente pequena, e só o necessário. Em close o recorte já usa a altura
 # inteira da fonte, o mais aberto possível sem sair da imagem.)
-SUBJECT_TARGET_FACE_FRAC = 0.15
+SUBJECT_TARGET_FACE_FRAC = 0.12
 SUBJECT_MAX_UPSCALE = 3.0
 SUBJECT_FIT_GROUP_FACE_FRAC = 0.20
 SUBJECT_FIT_SINGLE_FACE_FRAC = 0.07
