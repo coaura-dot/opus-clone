@@ -27,6 +27,7 @@ from src import config
 from src import hwaccel
 from src import long_video
 from src import react_layout
+from src import aspect_fix
 from src.utils import ensure_ffmpeg, ensure_dir, check_dependency, video_info
 from src.downloader import download_youtube_video, get_video_title
 from src.transcriber import transcribe
@@ -167,6 +168,9 @@ def main():
         info = video_info(source_path)
         print(f"    Duração: {info['duration']/60:.1f} min | "
               f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")
+        # vídeo salvo esticado (ex.: gravado no celular em pé e salvo em
+        # 16:9): corrige a proporção antes de tudo -- ver src/aspect_fix.py
+        source_path, info = aspect_fix.fix_squeezed_source(str(source_path), info, str(work_dir))
 
         # Modo REACT: o vídeo é um streamer com facecam sobreposta ao vídeo
         # que ele está reagindo? Se for, os clipes saem em tela dividida

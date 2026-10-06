@@ -837,6 +837,9 @@ EXIT_WATCHDOG_SECONDS = 6
 # tiver um rosto fixo, pequeno, numa caixa que não muda enquanto o resto
 # da imagem muda, é react: os clipes saem em TELA DIVIDIDA, conteúdo em
 # cima (uma janela fixa por clipe) e streamer embaixo, legenda na divisória.
+# vídeo salvo esticado/amassado (sem a proporção certa no arquivo): o
+# programa percebe pelo formato dos rostos e corrige antes de cortar
+ASPECT_FIX_ENABLED = True
 REACT_MODE_AUTO_DETECT = True
 REACT_LAYOUT_SAMPLES = 48           # quadros amostrados no vídeo inteiro
 REACT_MIN_PRESENCE = 0.25           # o rosto da facecam aparece em pelo menos 25% deles (o streamer
