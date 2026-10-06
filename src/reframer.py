@@ -1161,7 +1161,8 @@ def _compose_screen_frame(frame, region, src_w: int, src_h: int,
 
 
 def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int,
-                        push: float = 1.0, focus_x: Optional[float] = None) -> np.ndarray:
+                        push: float = 1.0, focus_x: Optional[float] = None,
+                        fit_zoom: Optional[float] = None) -> np.ndarray:
     """Modo "plano aberto" (fallback quando nenhum rosto é encontrado por
     tempo suficiente): em vez de cravar um crop apertado num ponto
     qualquer da imagem — o que, num plano largo, quase sempre mostra só
@@ -1180,7 +1181,9 @@ def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int,
     # ficar pequena demais no celular; centralizado verticalmente.
     # `push` > 1: aproximação lenta (Ken Burns) durante um plano aberto
     # longo, puxando pro lado de `focus_x` (quem está falando).
-    fit_zoom = max(float(getattr(config, "WIDE_FIT_ZOOM", 1.0)), 1.0) * max(push, 1.0)
+    if fit_zoom is None:
+        fit_zoom = float(getattr(config, "WIDE_FIT_ZOOM", 1.0))
+    fit_zoom = max(fit_zoom, 1.0) * max(push, 1.0)
     fg_scale = out_w / src_w * fit_zoom
     fg_w = max(int(round(src_w * fg_scale)), out_w)
     fg_h = max(int(round(src_h * fg_scale)), 1)
@@ -1723,11 +1726,18 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         frame, smoothed_x, smoothed_y, dyn_crop_w, dyn_crop_h, src_w, src_h,
                         out_w, out_h, 1.0,
                     )
+                if not face_in_shot:
+                    # plano SEM rosto (cartão de texto, print, gráfico): mostra
+                    # a largura inteira, sem zoom nem aproximação lenta -- o
+                    # Ken Burns (até +35%) somado ao WIDE_FIT_ZOOM cortava o
+                    # texto dos dois lados (achado num vídeo real de
+                    # comentário com cartões de texto entre as falas)
+                    return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
+                                               fit_zoom=1.0)
                 push = min(1.0 + push_rate * wide_frames, push_max)
                 push *= 1.0 + (fx_zoom - 1.0) * 0.6  # momentos-chave também no plano aberto
-                focus = smoothed_x if face_in_shot else None
                 return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
-                                           push=push, focus_x=focus)
+                                           push=push, focus_x=smoothed_x)
 
             # Ken Burns: conta o tempo no plano aberto atual; zera ao sair
             # dele ou num corte de câmera (plano novo começa sem zoom)
