@@ -1298,6 +1298,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     smoothed_y = center_y
     target_x = center_x
     target_y = center_y
+    face_in_shot = False  # algum rosto já apareceu no plano atual (desde o último corte)?
     last_detected_xy: Optional[tuple] = None  # última posição CRUA detectada
                                                # (não suavizada) — usada só
                                                # para CONFIRMAR cortes reais
@@ -1435,6 +1436,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         # choose_active() retornar a posição errada (ex: mão)
                         # no novo enquadramento.
                         tracker.on_scene_cut()
+                        face_in_shot = False
                         face_confidence = 0.0
                         frames_since_cut = 0
                         subject_face_frac = None
@@ -1483,6 +1485,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                                      + (face_center[1] - last_detected_xy[1]) ** 2) ** 0.5
                         confirmed_cut = prev_dist < cut_confirm_tolerance
                     last_detected_xy = face_center
+                    face_in_shot = True
 
                     # só atualiza o ALVO aqui (posição crua detectada); a
                     # câmera suavizada (smoothed_x/y) caminha em direção a
@@ -1711,16 +1714,18 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 # o crop NORMAL de rosto ancorado na última posição conhecida
                 # (a câmera "congela" onde o rosto foi visto por último, em
                 # vez de pular pro letterbox vazio do centro da mesa).
-                # Só vai pro letterbox completo se NUNCA houve rosto neste clip.
+                # Vai pro quadro inteiro (fit) se nenhum rosto apareceu no PLANO
+                # atual: depois de um corte pra um cartão de texto/print/gráfico,
+                # congelar o recorte do rosto anterior cortava o texto dos lados.
                 if (getattr(config, "WIDE_MODE_MEDIUM_ENABLED", True)
-                        and last_detected_xy is not None):
+                        and last_detected_xy is not None and face_in_shot):
                     return _compose_tracked_frame(
                         frame, smoothed_x, smoothed_y, dyn_crop_w, dyn_crop_h, src_w, src_h,
                         out_w, out_h, 1.0,
                     )
                 push = min(1.0 + push_rate * wide_frames, push_max)
                 push *= 1.0 + (fx_zoom - 1.0) * 0.6  # momentos-chave também no plano aberto
-                focus = smoothed_x if last_detected_xy is not None else None
+                focus = smoothed_x if face_in_shot else None
                 return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
                                            push=push, focus_x=focus)
 
