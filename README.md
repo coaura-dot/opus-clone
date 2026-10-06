@@ -362,30 +362,26 @@ Tudo é configurável em um único arquivo:
 
 ## Música de fundo
 
-`assets/music/` vem com 23 faixas de edit do **NoCopyrightSounds (NCS)** —
-Brazilian Phonk, Phonk, Jersey Club, Future Trap, lançamentos de 2024-2026
-(lista completa em `assets/music/CREDITS.txt`). A política do NCS libera o
-uso por criadores independentes, **inclusive em vídeo monetizado**, desde
-que o crédito vá na descrição — o `.post.txt` de cada clipe já traz a linha
-de crédito da faixa sorteada. Cada arquivo é um trecho de ~95s a partir do
-drop, normalizado pra -16 LUFS.
+**Suas músicas:** jogue os arquivos (`.mp3`, `.wav`, `.m4a`, `.ogg`,
+`.flac`) direto em `assets/music/`. Não precisa anotar nada: o programa
+acha sozinho o "drop" (a parte que explode) de cada uma, sorteia uma por
+clipe e evita repetir as últimas. Para conferir o que ele está vendo:
+`python diag_music.py`.
 
-Para usar as suas músicas, coloque os `.mp3`/`.wav`/`.m4a` na pasta e
-adicione cada uma em:
+- Quer fixar o ponto de início? `assets/music/track_drops.txt` com
+  `Título - M:SS`.
+- Música que exige crédito? `assets/music/track_credits.txt` com
+  `Título | crédito` (vai sozinho na descrição do vídeo).
+- Sem nenhuma música na pasta, o clipe sai **só com a voz**.
+- A biblioteca **NCS** que vinha com o programa (23 faixas de phonk/funk)
+  fica em `assets/music/ncs/`, desligada. Para usar: `MUSIC_USE_NCS = True`.
 
-- `assets/music/track_drops.txt` — `Título - M:SS` (onde começa o
-  drop/refrão). **Faixa sem linha aqui é ignorada.**
-- `assets/music/track_credits.txt` (opcional) — `Título | linha de crédito`,
-  para faixas cuja licença exige atribuição.
-
-> ⚠️ Música "viral" comercial (hits do momento) quase sempre tem direitos
-> autorais: no YouTube o clipe leva reivindicação do Content ID (receita vai
-> pro dono da música ou o vídeo é bloqueado), e Instagram/TikTok podem
-> silenciar o áudio. Para trends com música famosa, poste o
-> `*_sem_musica.mp4` e escolha o som pela biblioteca do próprio app.
-
-Se a pasta estiver vazia, o programa gera uma trilha ambiente simples para
-não travar o fluxo automático.
+> ⚠️ Música comercial (os hits do TikTok/Instagram/rádio) é reconhecida pelo
+> Content ID do YouTube: o clipe é reivindicado (a receita vai pra
+> gravadora), fica sem som ou é bloqueado, conforme a gravadora. Para trend
+> com som famoso, poste o `*_sem_musica.mp4` (gerado quando o clipe tem
+> música) e escolha o som em alta pela biblioteca do próprio app, que já
+> tem a licença.
 
 ## Vídeos longos (podcasts, entrevistas de horas)
 

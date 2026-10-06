@@ -3,15 +3,13 @@ Seleção e mixagem automática de música de fundo, com "ducking" (redução
 automática do volume da música sempre que há fala) para o áudio ficar
 com aparência profissional sem trabalho manual.
 
-Faixas em assets/music/ só são usadas se estiverem listadas em
-assets/music/track_drops.txt (formato "Título - M:SS" por linha, o mesmo
-formato exportado por sites tipo ytmp3.gg) — o "M:SS" é o tempo do
-"drop"/refrão de cada música, o trecho mais chamativo, que é onde a trilha
-começa a tocar no clipe (em vez de começar pela introdução, que costuma ser
-mais lenta/menos "viral"). Faixas sem entrada correspondente no manifesto,
-ou que o ffprobe não reconhece como áudio de verdade (arquivo corrompido,
-página de erro salva como .mp3 etc. — comum em downloads em lote de sites
-de conversão), são ignoradas.
+Músicas: qualquer arquivo de áudio em assets/music/ (as suas) e, se
+MUSIC_USE_NCS estiver ligado, a biblioteca NCS em assets/music/ncs/. A
+trilha começa no "drop"/refrão (o trecho mais chamativo, em vez da
+introdução): o tempo vem do track_drops.txt da pasta ("Título - M:SS") ou,
+se a faixa não estiver lá, é detectado automaticamente. Arquivo que o
+ffprobe não reconhece como áudio (download corrompido etc.) é ignorado.
+Sem nenhuma música, o clipe sai só com a voz.
 """
 import random
 import re
@@ -73,11 +71,11 @@ def _parse_timestamp(s: str) -> Optional[float]:
     return float(h * 3600 + m * 60 + sec)
 
 
-def _load_drop_manifest() -> dict:
-    """Lê assets/music/track_drops.txt e retorna {título_normalizado: segundos}.
+def _load_drop_manifest(music_dir: Optional[Path] = None) -> dict:
+    """Lê track_drops.txt da pasta e retorna {título_normalizado: segundos}.
     Linhas que não batem com 'Título - M:SS' são ignoradas silenciosamente
     (ex: linha em branco, cabeçalho)."""
-    manifest_path = Path(config.MUSIC_DIR) / "track_drops.txt"
+    manifest_path = Path(music_dir or config.MUSIC_DIR) / "track_drops.txt"
     manifest = {}
     if not manifest_path.exists():
         return manifest
@@ -150,61 +148,107 @@ def _is_real_audio(path: Path) -> bool:
         return False
 
 
+def _music_dirs() -> list:
+    """Pasta das SUAS músicas (assets/music/) e, se ligado, a biblioteca
+    NCS que vem junto (assets/music/ncs/)."""
+    root = Path(config.MUSIC_DIR)
+    dirs = [root]
+    if getattr(config, "MUSIC_USE_NCS", False):
+        dirs.append(root / "ncs")
+    return [d for d in dirs if d.exists()]
+
+
+def _auto_drop_seconds(path: Path) -> float:
+    """Acha sozinho onde a música "explode" (o drop/refrão): o primeiro
+    trecho, depois da introdução, em que a energia chega perto do máximo da
+    faixa. Assim você só joga o mp3 na pasta, sem anotar tempo nenhum."""
+    try:
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-t", "150", "-i", str(path), "-ac", "1", "-ar", "8000",
+             "-f", "s16le", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60).stdout
+    except Exception:
+        return 0.0
+    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+    hop = 4000  # 0.5 s
+    if len(x) < hop * 20:
+        return 0.0
+    rms = np.sqrt(np.array([np.mean(x[i:i + hop] ** 2) for i in range(0, len(x) - hop, hop)]) + 1e-6)
+    smooth = np.convolve(rms, np.ones(4) / 4, mode="same")  # janela de 2 s
+    ref = np.percentile(smooth, 90)
+    for i in range(4, len(smooth)):
+        if smooth[i] >= 0.8 * ref:
+            return round(max(i * 0.5 - 1.0, 0.0), 1)
+    return 0.0
+
+
+def _auto_drops_cache(music_dir: Path) -> dict:
+    import json
+    f = music_dir / ".drops_automaticos.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def list_usable_tracks() -> list:
-    """Varre assets/music/, valida cada arquivo (áudio de verdade + tempo de
-    drop listado no manifesto) e retorna a lista de MusicTrack utilizáveis.
-    Arquivos que falham em qualquer uma das duas checagens são ignorados —
-    por pedido explícito: só entra faixa real com drop conhecido."""
-    music_dir = Path(config.MUSIC_DIR)
-    if not music_dir.exists():
-        return []
-    candidates = (list(music_dir.glob("*.mp3")) + list(music_dir.glob("*.wav"))
-                  + list(music_dir.glob("*.m4a")))
-    manifest = _load_drop_manifest()
+    """Todas as faixas utilizáveis das pastas de música. O drop vem do
+    track_drops.txt da pasta, se a faixa estiver lá; senão é detectado
+    automaticamente (e guardado em .drops_automaticos.json pra não medir de
+    novo). Arquivo que não é áudio de verdade é ignorado."""
+    import json
     tracks = []
-    for path in candidates:
-        drop = _match_title(path.stem, manifest)
-        if drop is None:
-            continue  # sem tempo de drop listado -> não entra
-        if not _is_real_audio(path):
-            continue  # não é áudio de verdade -> não entra
-        tracks.append(MusicTrack(path=path, drop_seconds=drop))
+    for music_dir in _music_dirs():
+        manifest = _load_drop_manifest(music_dir)
+        cache = _auto_drops_cache(music_dir)
+        changed = False
+        for path in sorted(p for ext in ("*.mp3", "*.wav", "*.m4a", "*.ogg", "*.flac")
+                           for p in music_dir.glob(ext)):
+            drop = _match_title(path.stem, manifest)
+            if drop is None:
+                key = f"{path.name}|{path.stat().st_size}"
+                if key not in cache:
+                    if not _is_real_audio(path):
+                        continue
+                    cache[key] = _auto_drop_seconds(path)
+                    changed = True
+                drop = cache[key]
+            elif not _is_real_audio(path):
+                continue
+            tracks.append(MusicTrack(path=path, drop_seconds=float(drop)))
+        if changed:
+            try:
+                (music_dir / ".drops_automaticos.json").write_text(
+                    json.dumps(cache, ensure_ascii=False, indent=1), encoding="utf-8")
+            except OSError:
+                pass
     return tracks
 
 
+def _recent_file() -> Path:
+    return Path(config.WORK_DIR) / "musicas_recentes.json"
+
+
 def pick_music_track() -> Optional[MusicTrack]:
-    """Escolhe aleatoriamente uma trilha utilizável de assets/music/, se
-    houver alguma."""
+    """Sorteia uma faixa, evitando repetir as últimas usadas (o modo
+    automático roda um processo por vídeo, então o histórico fica salvo)."""
+    import json
     tracks = list_usable_tracks()
-    return random.choice(tracks) if tracks else None
-
-
-def _generate_ambient_bed(duration: float, output_path: str):
-    """Fallback: sintetiza uma trilha ambiente simples (acordes suaves) caso
-    nenhuma faixa em assets/music/ passe nas checagens acima (pasta vazia,
-    nenhum arquivo com drop listado no manifesto, ou arquivos inválidos).
-    Não depende de internet nem de arquivos externos.
-
-    OBS: aqui a trilha só é normalizada (sem pré-atenuação agressiva) — o
-    volume relativo final é decidido em UM único lugar, por MUSIC_VOLUME_DB
-    em mix_with_music(). Antes esta função já aplicava volume=0.15 e depois
-    mix_with_music() aplicava outros -22dB (~0.08x) em cima disso, deixando
-    a trilha praticamente inaudível (~0.012x) mesmo antes do ducking."""
-    duration = max(duration, 0.5)
-    fadeout_start = max(duration - 2, 0)
-    filter_complex = (
-        f"[0:a][1:a][2:a]amix=inputs=3:duration=longest,"
-        f"afade=t=in:d=2,afade=t=out:st={fadeout_start}:d=2[out]"
-    )
-    cmd = [
-        "ffmpeg", "-y", "-v", "error",
-        "-f", "lavfi", "-i", f"sine=frequency=110:duration={duration}",
-        "-f", "lavfi", "-i", f"sine=frequency=164.81:duration={duration}",
-        "-f", "lavfi", "-i", f"sine=frequency=220:duration={duration}",
-        "-filter_complex", filter_complex,
-        "-map", "[out]", "-ar", "44100", str(output_path),
-    ]
-    run(cmd)
+    if not tracks:
+        return None
+    try:
+        recent = json.loads(_recent_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        recent = []
+    keep = min(len(tracks) - 1, 10)
+    fresh = [t for t in tracks if t.path.name not in recent[-keep:]] if keep > 0 else tracks
+    track = random.choice(fresh or tracks)
+    try:
+        _recent_file().parent.mkdir(parents=True, exist_ok=True)
+        _recent_file().write_text(json.dumps((recent + [track.path.name])[-30:], ensure_ascii=False),
+                                  encoding="utf-8")
+    except OSError:
+        pass
+    return track
 
 
 def _db_to_factor(db: float) -> float:
@@ -247,7 +291,7 @@ def load_track_credit(track: Optional[MusicTrack]) -> Optional[str]:
     crédito cadastrado (ou nenhuma trilha, só o fundo sintetizado)."""
     if track is None:
         return None
-    credits_path = Path(config.MUSIC_DIR) / "track_credits.txt"
+    credits_path = track.path.parent / "track_credits.txt"
     if not credits_path.exists():
         return None
     credits = {}
@@ -270,33 +314,37 @@ def mix_with_music(voice_audio: str, duration: float, output_path: str,
     sem ele, sorteia aqui mesmo. None = fundo sintetizado."""
     if track is _AUTO:
         track = pick_music_track()
+    loudnorm = f"loudnorm=I={config.LOUDNESS_TARGET_LUFS}:TP=-1.5:LRA=11"
+    if track is None:
+        # sem música na pasta: só a voz (o fundo sintetizado de antes soava
+        # artificial)
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(voice_audio), "-af", loudnorm,
+             "-ar", "44100", str(output_path)])
+        return output_path
     work_dir = Path(output_path).parent
     music_path = work_dir / "_music_bed.wav"
 
-    if track is not None:
-        # -ar/-ac explícitos: sem isso, a trilha do usuário mantém a taxa de
-        # amostragem original do arquivo (ex: 48kHz, ou até 192kHz em
-        # algumas trilhas royalty-free) enquanto o áudio de voz sai sempre
-        # em 44100Hz mono — o amix/sidechaincompress então tinha que
-        # reamostrar silenciosamente nos bastidores, o que já é desperdício
-        # de CPU e, com alguns builds de ffmpeg, gerava artefatos.
-        #
-        # -ss antes de -i faz o ffmpeg começar a ler a trilha já a partir do
-        # "drop" (trecho mais chamativo) em vez do início/introdução —
-        # assim a música já entra animada desde o primeiro segundo do
-        # clipe, em vez de começar por um trecho arrastado. -stream_loop -1
-        # garante que, se o clipe for mais longo que o resto da música
-        # depois do drop, ela recomeça do início do arquivo em vez de
-        # cortar/silenciar.
-        cmd = [
-            "ffmpeg", "-y", "-v", "error",
-            "-stream_loop", "-1", "-ss", str(max(track.drop_seconds, 0.0)),
-            "-i", str(track.path),
-            "-t", str(duration), "-ar", "44100", "-ac", "1", str(music_path),
-        ]
-        run(cmd)
-    else:
-        _generate_ambient_bed(duration, str(music_path))
+    # -ar/-ac explícitos: sem isso, a trilha do usuário mantém a taxa de
+    # amostragem original do arquivo (ex: 48kHz, ou até 192kHz em
+    # algumas trilhas royalty-free) enquanto o áudio de voz sai sempre
+    # em 44100Hz mono — o amix/sidechaincompress então tinha que
+    # reamostrar silenciosamente nos bastidores, o que já é desperdício
+    # de CPU e, com alguns builds de ffmpeg, gerava artefatos.
+    #
+    # -ss antes de -i faz o ffmpeg começar a ler a trilha já a partir do
+    # "drop" (trecho mais chamativo) em vez do início/introdução —
+    # assim a música já entra animada desde o primeiro segundo do
+    # clipe, em vez de começar por um trecho arrastado. -stream_loop -1
+    # garante que, se o clipe for mais longo que o resto da música
+    # depois do drop, ela recomeça do início do arquivo em vez de
+    # cortar/silenciar.
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-stream_loop", "-1", "-ss", str(max(track.drop_seconds, 0.0)),
+        "-i", str(track.path),
+        "-t", str(duration), "-ar", "44100", "-ac", "1", str(music_path),
+    ]
+    run(cmd)
 
     music_vol = _db_to_factor(_music_gain_db(voice_audio, str(music_path)))
     ratio = getattr(config, "MUSIC_DUCKING_RATIO", 4)
@@ -305,7 +353,6 @@ def mix_with_music(voice_audio: str, duration: float, output_path: str,
     # TikTok/YouTube/Instagram), deixando o áudio com volume consistente e
     # "profissional" entre clipes diferentes, em vez de depender de quão
     # alto/baixo a fala original ou a trilha escolhida estavam.
-    loudnorm = f"loudnorm=I={config.LOUDNESS_TARGET_LUFS}:TP=-1.5:LRA=11"
     if config.MUSIC_DUCKING:
         # ratio/threshold mais suaves que antes (era ratio=8, threshold=0.05):
         # aquilo abaixava a música quase a zero durante QUALQUER fala, e como

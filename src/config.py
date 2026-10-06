@@ -428,7 +428,7 @@ FX_ZOOM_TOTAL_MAX = 1.28             # teto somando todos os zooms (jump cut, mo
 ZOOM_AMOUNT_SCALE = 0.8              # escala todos os zooms acima (0.8 = 20% menos zoom)
 FX_ZOOM_IN_SECONDS = 0.22            # entrada do zoom (com overshoot)
 FX_ZOOM_OUT_SECONDS = 0.45           # saída do zoom (volta suave)
-FX_INTRO_ENABLED = True              # abertura: zoom out de impacto + flicker
+FX_INTRO_ENABLED = False             # abertura: zoom out de impacto + flicker (desligado: exagerado)
 FX_INTRO_ZOOM = 1.18
 FX_INTRO_ZOOM_SECONDS = 0.7
 FX_INTRO_FLICKER_SECONDS = 0.45
@@ -498,6 +498,11 @@ POST_EXTRA_HASHTAGS = ["#cortes"]
 # — que é sempre a mesma, o que parece "a música não está sendo sorteada"
 # mesmo a lógica de sorteio (random.choice) estando correta.
 MUSIC_DIR = str(_PROJECT_ROOT / "assets" / "music")
+# Suas músicas: jogue os arquivos (mp3/wav/m4a/ogg/flac) direto em
+# assets/music/ -- o programa acha o drop sozinho. A biblioteca NCS que vem
+# junto fica em assets/music/ncs/ e só entra se ligar aqui. Sem nenhuma
+# música, o clipe sai só com a voz.
+MUSIC_USE_NCS = False
 # Pedido: reduzir o volume da música em 60%, deixando 40% do volume ATUAL
 # (não 40% de um "volume normal" hipotético — 40% do que já estava
 # configurado). Valor anterior: -16.5dB, que em fator de amplitude

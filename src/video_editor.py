@@ -242,7 +242,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
             f"interrompido no meio, mesmo o ffmpeg tendo retornado sem erro."
         )
 
-    if getattr(config, "EXPORT_NO_MUSIC_VERSION", True):
+    if getattr(config, "EXPORT_NO_MUSIC_VERSION", True) and music_track is not None:
         # mesma imagem (sem recodificar), áudio só com a voz -- pra postar
         # com um som em alta escolhido pela biblioteca do próprio app
         # (música comercial licenciada pelo app + empurrão do algoritmo)
