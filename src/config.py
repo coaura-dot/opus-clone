@@ -130,6 +130,22 @@ FACE_MAX_Y_FRAC = 0.80
 CUT_FACE_MAX_Y_FRAC = 0.55   # frame inteiro: apenas metade superior
 CUT_HALF_FACE_MAX_Y_FRAC = 0.70  # busca por metades: um pouco mais relaxado
 FACE_SMOOTHING_ALPHA = 0.18         # menor = mais suave/lento, maior = mais responsivo
+# Câmera "de cinegrafista" (achado real: movimentos bruscos incomodavam).
+# Zona morta: o rosto pode se mexer até essa fração do quadro sem a câmera
+# andar. Fora dela, a câmera vai até ele por uma mola amortecida (começa e
+# termina devagar) em ~CAMERA_SETTLE_SECONDS, nunca mais rápido que
+# CAMERA_MAX_PAN_SPEED larguras de quadro por segundo. Troca de câmera da
+# fonte continua sendo corte seco.
+CAMERA_DEADZONE_X = 0.08
+CAMERA_DEADZONE_Y = 0.06
+CAMERA_DEADZONE_ZOOM = 0.12
+CAMERA_SETTLE_SECONDS = 1.2
+CAMERA_MAX_PAN_SPEED = 0.25
+# deslocamento maior que essa fração do quadro (ex.: passar de uma pessoa
+# pra outra no mesmo plano) vira CORTE, não pan -- como um editor faria
+CAMERA_CUT_INSTEAD_OF_PAN = 0.30
+CAMERA_MIN_SECONDS_BETWEEN_CUTS = 1.5
+CAMERA_ZOOM_HALF_LIFE = 0.5
 HEADROOM_RATIO = 0.38               # posição vertical do rosto no quadro (0=topo, 1=base)
 # 1.0 = sem zoom extra: usa o maior crop 9:16 possível preservando a altura
 # toda da fonte, só centralizado no rosto rastreado (era 1.18 — apertava o
@@ -422,12 +438,12 @@ EXPORT_NO_MUSIC_VERSION = True
 FX_ENABLED = True
 FX_INTENSITY = 0.7                   # força de TODOS os efeitos visuais (1.0 = original; 0.7 = 30% mais suave)
 FX_KEY_MOMENT_MIN_WEIGHT = 1.5       # peso mínimo de uma palavra pra virar momento-chave
-FX_ZOOM_MIN_GAP_SECONDS = 3.5        # distância mínima entre dois zooms de momento-chave
-FX_ZOOM_MAX = 1.16                   # zoom máximo num momento-chave (1.16 = +16%)
+FX_ZOOM_MIN_GAP_SECONDS = 7.0        # distância mínima entre dois zooms de momento-chave
+FX_ZOOM_MAX = 1.10                   # zoom máximo num momento-chave (1.16 = +16%)
 FX_ZOOM_TOTAL_MAX = 1.28             # teto somando todos os zooms (jump cut, momento-chave...)
 ZOOM_AMOUNT_SCALE = 0.8              # escala todos os zooms acima (0.8 = 20% menos zoom)
-FX_ZOOM_IN_SECONDS = 0.22            # entrada do zoom (com overshoot)
-FX_ZOOM_OUT_SECONDS = 0.45           # saída do zoom (volta suave)
+FX_ZOOM_IN_SECONDS = 0.7             # entrada do zoom (suave, sem overshoot)
+FX_ZOOM_OUT_SECONDS = 0.9           # saída do zoom (volta suave)
 FX_INTRO_ENABLED = False             # abertura: zoom out de impacto + flicker (desligado: exagerado)
 FX_INTRO_ZOOM = 1.18
 FX_INTRO_ZOOM_SECONDS = 0.7
@@ -435,7 +451,7 @@ FX_INTRO_FLICKER_SECONDS = 0.45
 FX_IMPACT_MIN_WEIGHT = 3.0           # só os momentos mais fortes viram impacto (flash+tremida+RGB+boom)
 FX_IMPACT_MIN_GAP_SECONDS = 8.0
 FX_FLASH_STRENGTH = 0.45
-FX_SHAKE_PX = 14
+FX_SHAKE_PX = 0                      # tremida desligada (parecia a câmera dando tranco)
 FX_RGB_SPLIT_PX = 10
 FX_EMOJI_ENABLED = True              # emoji acima da legenda quando uma palavra-chave é dita
 FX_EMOJI_MIN_GAP_SECONDS = 4.0
@@ -479,7 +495,7 @@ JUMPCUT_TAIL_KEEP_SECONDS = 0.35
 JUMPCUT_SILENCE_RATIO = 0.35
 # a cada jump cut o enquadramento alterna entre normal e este zoom (técnica
 # clássica de editor: esconde o "pulo" do corte e dá ritmo). 1.0 = desliga.
-JUMPCUT_PUNCH_ZOOM = 1.08
+JUMPCUT_PUNCH_ZOOM = 1.0             # 1.0 = sem o zoom alternado a cada corte de pausa (dava tranco)
 
 # --- Kit de postagem (arquivo .post.txt ao lado de cada clipe) ---
 # Hashtags fixas do seu canal, somadas às de assunto (tiradas da fala do
@@ -549,7 +565,7 @@ ZOOM_PUNCH_MIN_GAP = 3.0             # mínimo entre punches (era 2.5s)
 # Acompanha a curva de energia RMS com suavização EMA alta (resposta lenta),
 # produzindo um zoom sutil e gradual que dá vida ao enquadramento — diferente
 # do punch (que reage a picos isolados, este acompanha o "nível" geral).
-ENERGY_BREATHING_ENABLED = True
+ENERGY_BREATHING_ENABLED = False     # zoom que respira com a voz: deixava a imagem balançando
 ENERGY_BREATHING_MAX = 0.012         # máximo de zoom adicional pela respiração (1.2%)
 ENERGY_BREATHING_SMOOTHING = 0.97    # EMA alpha (próximo de 1 = resposta muito lenta)
 

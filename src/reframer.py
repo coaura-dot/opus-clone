@@ -1299,6 +1299,14 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     center_y = src_h * config.HEADROOM_RATIO
     smoothed_x = center_x
     smoothed_y = center_y
+    # câmera "de cinegrafista" (ver CAMERA_* em config.py): a posição segue
+    # um ALVO ancorado com zona morta, por uma mola criticamente amortecida
+    # (acelera e freia suave, sem tranco), com velocidade máxima
+    anchor_x, anchor_y = center_x, center_y
+    vel_x = vel_y = 0.0
+    anchor_crop_h = float(crop_h)
+    last_virtual_cut = -10 ** 9
+    need_snap = True  # primeira detecção do clipe / depois de um corte: pula direto
     target_x = center_x
     target_y = center_y
     face_in_shot = False  # algum rosto já apareceu no plano atual (desde o último corte)?
@@ -1364,6 +1372,15 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     detect_interval = max(config.FACE_DETECT_EVERY_N_FRAMES, 1)
     alpha_per_check = config.FACE_SMOOTHING_ALPHA
     alpha = 1.0 - (1.0 - alpha_per_check) ** (1.0 / detect_interval)
+    cam_dt = 1.0 / max(fps, 1.0)
+    cam_omega = 5.0 / max(getattr(config, "CAMERA_SETTLE_SECONDS", 1.0), 0.1)
+    cam_max_speed = getattr(config, "CAMERA_MAX_PAN_SPEED", 0.6)       # larguras do quadro / s
+    cam_deadzone_x = getattr(config, "CAMERA_DEADZONE_X", 0.08)
+    cam_deadzone_y = getattr(config, "CAMERA_DEADZONE_Y", 0.06)
+    cam_deadzone_zoom = getattr(config, "CAMERA_DEADZONE_ZOOM", 0.12)
+    cam_cut_frac = getattr(config, "CAMERA_CUT_INSTEAD_OF_PAN", 0.30)
+    cam_cut_min_frames = int(round(getattr(config, "CAMERA_MIN_SECONDS_BETWEEN_CUTS", 1.5) * fps))
+    cam_zoom_alpha = 1.0 - 0.5 ** (cam_dt / max(getattr(config, "CAMERA_ZOOM_HALF_LIFE", 0.5), 0.05))
     write_error = None
     frame_idx = 0
     out_idx = 0      # quadros efetivamente escritos (linha do tempo final)
@@ -1440,6 +1457,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         # no novo enquadramento.
                         tracker.on_scene_cut()
                         face_in_shot = False
+                        need_snap = True
                         face_confidence = 0.0
                         frames_since_cut = 0
                         subject_face_frac = None
@@ -1498,8 +1516,18 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     target_x, target_y = face_center
                     # burst pós-corte: snapa imediatamente sem esperar EMA
                     # — o rosto encontrado no burst É o novo enquadramento certo.
-                    if _in_burst:
+                    if need_snap:
+                        # PRIMEIRA detecção depois do corte (ou do início do
+                        # clipe): a câmera já começa no rosto, sem atravessar
+                        # a tela. As seguintes do burst passam pela
+                        # suavização -- re-pular a cada quadro do burst dava
+                        # uma tremedeira rápida (medido: ~20 quadros a
+                        # 15-35 px/quadro depois de cada corte).
                         smoothed_x, smoothed_y = target_x, target_y
+                        anchor_x, anchor_y, vel_x, vel_y = target_x, target_y, 0.0, 0.0
+                        need_snap = False
+                        face_confidence = 1.0
+                    elif _in_burst:
                         face_confidence = 1.0
                     else:
                         # EMA normal fora de burst: sobe gradualmente pra evitar
@@ -1507,6 +1535,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         face_confidence = min(1.0, face_confidence * 0.65 + 0.35)
                         if confirmed_cut:
                             smoothed_x, smoothed_y = target_x, target_y
+                            anchor_x, anchor_y, vel_x, vel_y = target_x, target_y, 0.0, 0.0
 
                     # facecam pequena (modo REACT, item 14): recalcula o
                     # alvo de altura do crop a partir do tamanho REAL do
@@ -1543,6 +1572,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         # junto com a posição (senão o zoom "respira" por ~1s
                         # depois de cada corte de câmera)
                         smoothed_crop_h = target_crop_h
+                        anchor_crop_h = target_crop_h
                 else:
                     # sem rosto detectado nesta checagem: NÃO puxa o alvo de
                     # volta pro centro (era o bug original — ao perder o
@@ -1557,9 +1587,32 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             # detecção) — é isso que faz a câmera virtual se mover de forma
             # contínua em vez de ficar parada por N frames e pular de uma
             # vez quando a detecção roda de novo.
-            smoothed_x = (1 - alpha) * smoothed_x + alpha * target_x
-            smoothed_y = (1 - alpha) * smoothed_y + alpha * target_y
-            smoothed_crop_h = (1 - alpha) * smoothed_crop_h + alpha * target_crop_h
+            # zona morta: mexidinha de cabeça não move a câmera; só quando o
+            # rosto sai da zona é que o alvo é reposicionado
+            cur_w = smoothed_crop_h * out_w / out_h
+            if abs(target_x - anchor_x) > cam_deadzone_x * cur_w:
+                anchor_x = target_x
+                # troca grande (outra pessoa do mesmo plano): um editor CORTA
+                # em vez de atravessar meio quadro num pan rápido
+                if (abs(anchor_x - smoothed_x) > cam_cut_frac * cur_w
+                        and frame_idx - last_virtual_cut >= cam_cut_min_frames):
+                    smoothed_x, vel_x = anchor_x, 0.0
+                    smoothed_y, vel_y = target_y, 0.0
+                    anchor_y = target_y
+                    last_virtual_cut = frame_idx
+            if abs(target_y - anchor_y) > cam_deadzone_y * smoothed_crop_h:
+                anchor_y = target_y
+            if abs(target_crop_h - anchor_crop_h) > cam_deadzone_zoom * anchor_crop_h:
+                anchor_crop_h = target_crop_h
+            # mola criticamente amortecida + velocidade máxima
+            vmax = cam_max_speed * cur_w
+            vel_x += (cam_omega ** 2 * (anchor_x - smoothed_x) - 2 * cam_omega * vel_x) * cam_dt
+            vel_y += (cam_omega ** 2 * (anchor_y - smoothed_y) - 2 * cam_omega * vel_y) * cam_dt
+            vel_x = float(np.clip(vel_x, -vmax, vmax))
+            vel_y = float(np.clip(vel_y, -vmax, vmax))
+            smoothed_x += vel_x * cam_dt
+            smoothed_y += vel_y * cam_dt
+            smoothed_crop_h += (anchor_crop_h - smoothed_crop_h) * cam_zoom_alpha
             # deriva a largura do crop dinâmico mantendo a proporção 9:16,
             # com a mesma folga de "não passar da fonte" já usada no
             # cálculo original de crop_w/crop_h.

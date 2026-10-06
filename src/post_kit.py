@@ -62,8 +62,15 @@ def _trim_at_word(text: str, max_chars: int) -> str:
 def _clean_title(sentence: str) -> str:
     # conectivos soltos no começo ("E", "Então", "Mas"...) só fazem sentido
     # com a frase anterior — num título isolado soam como frase cortada
-    s = re.sub(r"^(e|então|mas|aí|daí|porque|tipo|né|and|so|but)\b[,\s]*", "",
-               sentence, flags=re.IGNORECASE)
+    # e interjeição/vocativo/palavrão abrindo a frase ("Porra, por que...",
+    # "Cara, ...", "Mano, ...") -- na fala é natural, num título fica feio
+    # (achado real nos primeiros posts do piloto automático)
+    s = sentence
+    for _ in range(3):
+        s = re.sub(r"^(e|então|mas|aí|daí|porque|tipo|né|cara|mano|velho|véi|bicho|po|pô|porra|caralho|"
+                   r"puta merda|nossa|olha|ó|ah|eh|é|ué|bom|enfim|sabe|tá|beleza|and|so|but)\b[,!.\s]*",
+                   "", s.strip(), flags=re.IGNORECASE)
+    s = re.sub(r",?\s*\b(né|tá ligado|entendeu|sabe)\?*$", "", s, flags=re.IGNORECASE)
     s = s.strip(" .…,;:")
     if len(s) > TITLE_MAX_CHARS:
         # frase longa: fecha na última vírgula que caiba (oração completa)

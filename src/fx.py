@@ -97,14 +97,14 @@ class FxPlan:
                 continue
             if t < t0 + ease_in:
                 p = (t - t0) / ease_in
-                # ease-out-back: passa um pouco do alvo e volta ("overshoot")
-                c1 = 1.70158
-                k = 1 + (c1 + 1) * (p - 1) ** 3 + c1 * (p - 1) ** 2
+                # entra e sai suave (smootherstep), sem "estilingue" -- o
+                # overshoot de antes parecia tranco de câmera
+                k = p * p * p * (p * (6 * p - 15) + 10)
             elif t <= t1:
                 k = 1.0
             else:
                 p = (t - t1) / ease_out
-                k = 1 - (p * p * (3 - 2 * p))  # smoothstep de volta
+                k = 1 - p * p * p * (p * (6 * p - 15) + 10)  # volta suave
             z = max(z, 1.0 + (level - 1.0) * k)
         if self.intro:
             dur = getattr(config, "FX_INTRO_ZOOM_SECONDS", 0.7)
