@@ -27,6 +27,8 @@ programa faz **tudo sozinho**:
    título, descrição, hashtags para YouTube Shorts / Instagram Reels /
    TikTok e o crédito da música
 
+Política de privacidade: [PRIVACY.md](PRIVACY.md) · Termos de uso: [TERMS.md](TERMS.md)
+
 ## ⚠️ Sobre os testes
 
 O pipeline inteiro foi testado de ponta a ponta com vídeo real (entrevista
