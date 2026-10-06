@@ -192,6 +192,22 @@ crédito do vídeo original e da música.
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.
 
+### Enquanto a auditoria não sai: vídeos privados que se liberam sozinhos
+
+Pode deixar o piloto postando normalmente: os vídeos sobem privados e ficam
+anotados. Todo dia (logo que o piloto liga e, depois, a partir das 10h --
+`AUTOPILOT_RELEASE_CHECK_HOUR`) ele confere se a auditoria já saiu, tentando
+deixar público o privado mais antigo. Saiu: solta os privados **de pouco em
+pouco** (`AUTOPILOT_RELEASE_PER_DAY` = 3 por dia, um a cada
+`AUTOPILOT_RELEASE_MINUTES_BETWEEN` = 120 min, no horário de postagem). Se um
+vídeo antigo continuar travado mesmo depois da aprovação (o YouTube pode
+manter travado o que subiu antes dela), ele **reposta o arquivo** que ficou
+no PC, já público, e o privado antigo fica pra você apagar no YouTube Studio.
+Para conferir na hora: menu, opção **5** (`python autopilot.py --liberar`).
+
+Mudar a visibilidade precisa de uma permissão a mais: depois de atualizar o
+programa, faça o login (opção 3) uma vez de novo.
+
 ### Ajustes (`src/config.py`, seção "POSTAGEM AUTOMÁTICA")
 
 | Opção | Padrão | O que faz |

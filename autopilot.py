@@ -9,6 +9,7 @@ Baixa, edita e POSTA no YouTube sozinho: título, descrição, hashtags, tudo.
     python autopilot.py --url LINK   um vídeo: edita e posta os clipes
     python autopilot.py --login      conecta o seu canal do YouTube (uma vez)
     python autopilot.py --status     mostra fila, postados e cota do dia
+    python autopilot.py --liberar    confere agora se a auditoria saiu e solta 1 vídeo privado
     --no-upload                      gera os clipes mas não posta (teste)
 
 Configuração: src/config.py, seção "POSTAGEM AUTOMÁTICA".
@@ -56,8 +57,35 @@ def _status():
     for p in posted[-10:]:
         print(f"  • {datetime.fromtimestamp(p['at']):%d/%m %H:%M}  https://youtube.com/shorts/{p['youtube_id']}"
               f"  {p['title']}")
+    priv = [p for p in posted if p.get("privacy") not in (None, "public")
+            and not p.get("replaced") and not p.get("gave_up")]
+    if priv:
+        rel = st.data.get("release", {})
+        print(f"\nPrivados esperando a auditoria do YouTube: {len(priv)} "
+              f"({'aprovada -- liberando aos poucos' if rel.get('approved') else 'ainda não aprovada'})")
     used = [s for s in st.data["sources"].values() if s.get("status") == "done"]
     print(f"\nVídeos já usados: {len(used)}")
+
+
+def _release_now():
+    from src import release
+    from src import youtube_uploader as yt
+    st = autopilot.State(autopilot.DATA_DIR / "state.json")
+    log = autopilot.Log(autopilot.DATA_DIR / "autopilot.log")
+    try:
+        svc = yt.get_service(interactive=True)
+    except yt.UploadError as e:
+        print(f"\n[ERRO] {e}")
+        return
+    if not release._pending(st) and st.data["posted"]:
+        release.refresh_unknown(st, svc)
+    if not release._pending(st):
+        print("\nNenhum vídeo privado esperando liberação.")
+        return
+    try:
+        release.release_step(st, svc, log, force=True)
+    except yt.UploadError as e:
+        print(f"\n[ERRO] {e}")
 
 
 def _ask_int(prompt: str, default: int) -> int:
@@ -73,6 +101,7 @@ def main():
     ap.add_argument("--login", action="store_true")
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--no-upload", action="store_true")
+    ap.add_argument("--liberar", action="store_true")
     args = ap.parse_args()
     upload = not args.no_upload and getattr(config, "AUTOPILOT_UPLOAD", True)
 
@@ -86,6 +115,9 @@ def main():
     if args.status:
         _status()
         return
+    if args.liberar:
+        _release_now()
+        return
     if args.auto:
         autopilot.run_forever(upload=upload)
         return
@@ -97,6 +129,7 @@ def main():
     print("  2) Modo automático: procura vídeos bombando e posta sem parar")
     print("  3) Conectar / trocar o canal do YouTube")
     print("  4) Ver fila e vídeos postados")
+    print("  5) Conferir agora se a auditoria saiu e liberar vídeos privados")
     choice = input("\nEscolha [2]: ").strip() or "2"
     if choice == "1":
         url = input("Link do vídeo (ou caminho do arquivo): ").strip()
@@ -107,6 +140,8 @@ def main():
         _login()
     elif choice == "4":
         _status()
+    elif choice == "5":
+        _release_now()
     else:
         autopilot.run_forever(upload=upload)
 

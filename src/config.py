@@ -973,6 +973,14 @@ AUTOPILOT_DELETE_POSTED_FILES = False   # True = apaga o .mp4 logo depois de pos
 AUTOPILOT_OUTPUT_DIR = "output/autopiloto"
 YTDLP_COOKIES_FROM_BROWSER = None       # ex.: "chrome" se o YouTube pedir login pra listar
 
+# Vídeos que subiram PRIVADOS (projeto da API ainda sem auditoria):
+# o piloto confere a aprovação todo dia (ao ligar e a partir desta hora) e,
+# aprovado, solta de pouco em pouco -- ver src/release.py
+AUTOPILOT_RELEASE_ENABLED = True
+AUTOPILOT_RELEASE_CHECK_HOUR = 10
+AUTOPILOT_RELEASE_PER_DAY = 3
+AUTOPILOT_RELEASE_MINUTES_BETWEEN = 120
+AUTOPILOT_REUPLOAD_LOCKED = True        # travado mesmo após a aprovação: reposta o arquivo
 YOUTUBE_PRIVACY = "public"              # "public", "unlisted" ou "private"
 YOUTUBE_CATEGORY_ID = "24"              # 24 = Entretenimento (22 = Pessoas e blogs)
 YOUTUBE_LANGUAGE = "pt-BR"

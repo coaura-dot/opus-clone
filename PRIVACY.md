@@ -20,7 +20,9 @@ Com a sua autorização (login OAuth do Google), o Auto Clipper usa:
 
 - **youtube.upload**: para enviar ao seu canal os vídeos que a ferramenta gerou;
 - **youtube.readonly**: só para ler o nome do seu próprio canal e confirmar
-  em qual canal os vídeos serão postados.
+  em qual canal os vídeos serão postados;
+- **youtube**: só para mudar a visibilidade (privado → público) dos vídeos que
+  a própria ferramenta enviou ao seu canal.
 
 A ferramenta **não** lê, coleta ou guarda dados de outros usuários, de outros
 canais, comentários, inscritos ou estatísticas.
@@ -60,8 +62,9 @@ Services). By authorizing it you agree to the
 [YouTube Terms of Service](https://www.youtube.com/t/terms); see also the
 [Google Privacy Policy](https://policies.google.com/privacy).
 
-- Scopes: `youtube.upload` (upload the generated videos to your channel) and
-  `youtube.readonly` (read your own channel name only).
+- Scopes: `youtube.upload` (upload the generated videos to your channel),
+  `youtube.readonly` (read your own channel name only) and `youtube` (only to
+  change the visibility, private to public, of videos the tool itself uploaded).
 - No data about other users or channels is accessed. The OAuth token is stored
   only on your computer; there is no Auto Clipper server. Only the IDs of
   videos the tool uploaded are kept locally, to avoid duplicates. No data is

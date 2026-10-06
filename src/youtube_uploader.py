@@ -26,7 +26,11 @@ from typing import Optional
 from . import config
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
-          "https://www.googleapis.com/auth/youtube.readonly"]
+          "https://www.googleapis.com/auth/youtube.readonly",
+          # mudar a visibilidade dos próprios vídeos (privado -> público
+          # depois da auditoria; ver src/release.py)
+          "https://www.googleapis.com/auth/youtube"]
+MANAGE_SCOPE = "https://www.googleapis.com/auth/youtube"
 UPLOAD_QUOTA_COST = 1600
 _RETRIABLE_STATUS = {500, 502, 503, 504}
 
@@ -78,10 +82,17 @@ def get_service(interactive: bool = True):
 
     creds = None
     tok = token_path()
+    granted = set()
     if tok.exists():
         try:
-            creds = Credentials.from_authorized_user_file(str(tok), SCOPES)
+            granted = set(json.loads(tok.read_text(encoding="utf-8")).get("scopes") or [])
+            # usa as permissões que o login realmente tem (um login antigo
+            # não tem a de mudar visibilidade -- ver src/release.py)
+            creds = Credentials.from_authorized_user_file(str(tok))
         except Exception:
+            creds = None
+        if creds is not None and interactive and not set(SCOPES) <= granted:
+            print("    O login salvo é de uma versão antiga (falta permissão nova): vamos autorizar de novo.")
             creds = None
     if creds and creds.expired and creds.refresh_token:
         try:
@@ -104,7 +115,10 @@ def get_service(interactive: bool = True):
                                       authorization_prompt_message="",
                                       success_message="Pronto! Pode fechar esta aba e voltar pro programa.")
     tok.write_text(creds.to_json(), encoding="utf-8")
-    return build("youtube", "v3", credentials=creds, cache_discovery=False)
+    service = build("youtube", "v3", credentials=creds, cache_discovery=False)
+    scopes = set(getattr(creds, "granted_scopes", None) or creds.scopes or granted or [])
+    service.autoclipper_can_manage = MANAGE_SCOPE in scopes
+    return service
 
 
 def channel_check(service) -> tuple:

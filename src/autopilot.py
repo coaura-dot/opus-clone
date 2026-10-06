@@ -212,7 +212,9 @@ def make_room(state: State, out_root: Path, log: Log) -> bool:
     need = getattr(config, "AUTOPILOT_MIN_FREE_GB", 5)
     if free_gb(out_root) >= need:
         return True
-    for p in sorted(state.data["posted"], key=lambda x: x.get("at", 0)):
+    # primeiro os já públicos; os ainda privados guardam o arquivo pra um
+    # possível repost depois da auditoria (src/release.py)
+    for p in sorted(state.data["posted"], key=lambda x: (x.get("privacy") != "public", x.get("at", 0))):
         for key in ("video", "video_sem_musica"):
             f = p.get(key)
             if f and Path(f).exists():
@@ -290,12 +292,23 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         state.save()
         return False
     queue.pop(0)
-    state.data["posted"].append({"youtube_id": vid, "title": meta["title"], "at": time.time(),
-                                 "source_id": item.get("source_id"), "video": item["video"],
-                                 "video_sem_musica": item.get("video_sem_musica")})
+    try:
+        from .release import privacy_of
+        privacy = privacy_of(service, [vid]).get(vid) or "?"
+    except Exception:
+        privacy = "?"
+    entry = {"youtube_id": vid, "title": meta["title"], "at": time.time(),
+             "source_id": item.get("source_id"), "video": item["video"],
+             "video_sem_musica": item.get("video_sem_musica"), "privacy": privacy}
+    if item.get("replaces"):
+        entry["replaces"] = item["replaces"]
+    if privacy == "?":
+        del entry["privacy"]  # confere depois
+    state.data["posted"].append(entry)
     state.count_upload()
+    note = "" if privacy in ("public", "?") else f" [{privacy} -- libera sozinho quando a auditoria sair]"
     log(f"    postado: https://youtube.com/shorts/{vid}  "
-        f"({state.uploads_today()}/{daily_limit()} hoje)")
+        f"({state.uploads_today()}/{daily_limit()} hoje){note}")
     if getattr(config, "AUTOPILOT_DELETE_POSTED_FILES", False):
         for f in (item["video"], item.get("video_sem_musica")):
             if f and Path(f).exists():
@@ -379,11 +392,27 @@ def run_forever(upload: bool = True):
     service = _get_service(log, upload)
     next_auth_try = time.time() + 3600
     failures = 0
+    startup = True
     while True:
         try:
             if upload and service is None and time.time() >= next_auth_try:
                 service = _get_service(log, upload)
                 next_auth_try = time.time() + 3600
+
+            # 0) vídeos que subiram privados: confere a auditoria / solta aos poucos
+            if service is not None:
+                from . import release
+                from . import youtube_uploader as yt
+                try:
+                    acted = release.release_step(state, service, log, startup=startup)
+                except yt.QuotaExceeded as e:
+                    state.data["blocked_until"] = _next_pacific_midnight()
+                    state.save()
+                    log(f"  [!] {e}")
+                    acted = False
+                startup = False
+                if acted:
+                    continue
 
             # 1) postar, se estiver na hora
             if service is not None and state.data["queue"]:
