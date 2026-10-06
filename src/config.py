@@ -829,26 +829,21 @@ WATCHDOG_TIMEOUT_SECONDS = 90 * 60
 # não há motivo legítimo pra essa etapa demorar.
 EXIT_WATCHDOG_SECONDS = 6
 
-# --- Modo REACT (ver RELATORIO_PROXIMOS_PASSOS.txt, item 14) ---
-# NOVO -- construído em cima do rastreamento de tela do item 3a
-# (_ScreenTracker/_compose_screen_frame em reframer.py), que já existia mas
-# ficava sempre desligado (VIDEO_IN_VIDEO_ENABLED=False fixo). Agora, em
-# vez de um interruptor manual, o próprio vídeo é classificado automatica-
-# mente (ver detect_react_video em src/react_detector.py): se for
-# detectado como REACT, VIDEO_IN_VIDEO_ENABLED é ligado dinamicamente só
-# pra ESSE vídeo (main.py faz isso depois da classificação, antes de
-# montar os clipes) -- vídeos comuns de pessoa falando continuam sem pagar
-# o custo/risco desse pipeline.
+# --- Modo REACT: streamer com facecam sobreposta ao vídeo reagido ---
+# (src/react_layout.py) Achado num clipe real: a câmera pulava entre o rosto
+# do vídeo reagido, o do streamer e um terceiro enquadramento ("tela") que
+# na verdade era a moldura da facecam -- pisca-pisca. Agora o vídeo é
+# amostrado inteiro uma vez (REACT_LAYOUT_SAMPLES quadros espalhados); se
+# tiver um rosto fixo, pequeno, numa caixa que não muda enquanto o resto
+# da imagem muda, é react: os clipes saem em TELA DIVIDIDA, conteúdo em
+# cima (uma janela fixa por clipe) e streamer embaixo, legenda na divisória.
 REACT_MODE_AUTO_DETECT = True
-# a cada quantos segundos o vídeo inteiro é reamostrado pra decidir se é
-# REACT -- pedido explícito do usuário ("a cada 10 segundos"), cobre
-# vídeos que alternam entre reagir e ficar em full-cam.
-REACT_CHECK_INTERVAL_SECONDS = 10.0
-# fração mínima das amostras com uma tela plausível detectada pra
-# considerar o vídeo como um todo um REACT. NÃO CALIBRADO contra nenhum
-# vídeo real -- é um palpite inicial razoável (1 em cada 4 checagens),
-# ajuste se estiver classificando vídeo comum como react ou vice-versa.
-REACT_MIN_SCREEN_FRACTION = 0.25
+REACT_LAYOUT_SAMPLES = 48           # quadros amostrados no vídeo inteiro
+REACT_MIN_PRESENCE = 0.45           # o rosto da facecam aparece em pelo menos 45% deles
+REACT_CONTENT_FRAC = 0.5            # altura do painel de conteúdo (resto = streamer)
+REACT_CAM_FACE_FRAC = 0.30          # rosto do streamer ~30% da altura do painel dele
+REACT_MIN_SEGMENT_SECONDS = 3.0     # trecho mínimo com/sem facecam (sem pisca-pisca)
+REACT_CAM_MATCH_MAX_DIFF = 22.0     # diferença máx. do fundo da facecam pra "ela está na tela"
 
 # --- Facecam pequena (layout típico de react: reator numa caixinha
 # pequena sobre a tela reagida, às vezes com chat do lado) ---

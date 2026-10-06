@@ -381,6 +381,17 @@ arquitetura já foi pensada para isso.
 - **troca de câmera** da fonte: o enquadramento muda junto, em corte seco
   (sem fade).
 
+**Vídeo de react** (streamer com facecam sobreposta ao vídeo que está
+reagindo): o programa detecta a facecam uma vez por vídeo — um rosto que
+fica sempre no mesmo lugar, numa caixa que não muda enquanto o resto da
+imagem muda — e os clipes saem em **tela dividida**: o vídeo reagido em cima
+(uma janela fixa por clipe, cobrindo quem está falando nele e sem pegar a
+facecam) e o streamer embaixo, com a legenda na divisória e o título logo
+acima dela. Nos trechos em que a facecam some (troca de cena), volta pro
+enquadramento normal — sempre em trechos de pelo menos 3s, sem pisca-pisca.
+Ajustes em `REACT_*` (`src/config.py`); `REACT_MODE_AUTO_DETECT = False`
+desliga.
+
 Usa detecção de rosto via OpenCV (Haar Cascade, incluso na própria lib —
 não precisa baixar nada), combinando **dois classificadores**: rosto de
 frente e rosto de perfil (testado nos dois lados, via espelhamento). Isso
@@ -484,6 +495,8 @@ opus-clip-clone/
 │   ├── fx.py                  # zoom em momento-chave, impacto, emoji, abertura
 │   ├── emoji_map.py           # palavra falada -> emoji
 │   ├── opener.py              # a frase de abertura se sustenta sozinha?
+│   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
+│   ├── react_detector.py      # react: "olha isso" na fala
 │   └── utils.py
 ├── assets/
 │   ├── fonts/                 # fonte Anton (OFL) embutida p/ legendas

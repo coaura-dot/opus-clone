@@ -1,95 +1,16 @@
-"""Modo REACT (RELATORIO_PROXIMOS_PASSOS.txt, item 14).
+"""Modo REACT: referências visuais na fala ("olha a camisa dele").
 
-Duas responsabilidades bem separadas:
-
-1. `detect_react_video`: varre o vídeo INTEIRO em intervalos grosseiros
-   (a cada REACT_CHECK_INTERVAL_SECONDS, padrão 10s) procurando uma região
-   de "tela dentro da tela" (ver reframer._detect_screen_region) de forma
-   RECORRENTE ao longo do tempo -- decide se o vídeo como um todo é um
-   REACT (pessoa comentando/reagindo a conteúdo de tela) ou um vídeo comum
-   de pessoa(s) falando. Roda UMA VEZ por vídeo, antes de gerar qualquer
-   clipe, e o resultado liga (ou não) o pipeline de rastreamento de tela já
-   existente (_ScreenTracker/_compose_screen_frame em reframer.py) para
-   TODOS os clipes deste vídeo.
-
-   Isso é deliberadamente separado do rastreamento fino DENTRO de cada
-   clipe (que já roda a cada poucos frames via _ScreenTracker) -- aqui só
-   precisamos de um veredito grosso "este vídeo tem conteúdo de tela
-   reagido, vale a pena tentar" antes de pagar o custo/risco desse
-   pipeline em vídeos que não são react nenhum.
-
-2. `find_reference_times`: varre o TEXTO transcrito por frases que
-   indicam o comentador apontando pra algo visualmente na tela (ex.:
-   "olha a cor da camisa dele", "repara ali", "vê aquilo") -- quando uma
-   bate, devolve o timestamp (relativo ao início do clipe) pra forçar um
-   zoom breve na tela reagida mesmo que ela esteja pausada/parada naquele
-   momento (ver REFERENCE_ZOOM_HOLD_SECONDS em config.py e o uso em
-   render_vertical_clip).
-
-HONESTIDADE (mesma de sempre neste projeto): nenhuma das duas heurísticas
-foi validada contra um vídeo de reação real (não tenho um disponível neste
-ambiente). A geometria de detecção de tela já reusada aqui (Canny +
-contorno de 4 vértices) é a mesma do item 3a, que também nunca foi
-validada. Teste com um clipe real antes de confiar cegamente no resultado.
+`find_reference_times` varre o TEXTO transcrito por frases que indicam o
+comentador apontando pra algo visualmente na tela (ex.: "olha a cor da
+camisa dele", "repara ali", "vê aquilo") e devolve o timestamp (relativo ao
+início do clipe) de cada uma. (A detecção de que o vídeo é um react e o
+layout em tela dividida ficam em src/react_layout.py.)
 """
 
 import re
-from dataclasses import dataclass, field
-from typing import List, Optional
-
-import cv2
+from typing import List
 
 from . import config
-from .reframer import _new_cascades, _detect_all_faces, _detect_screen_region
-
-
-@dataclass
-class ReactVideoReport:
-    is_react: bool
-    screen_fraction: float          # fração das checagens com uma tela plausível detectada
-    face_fraction: float            # fração das checagens com um rosto detectado
-    n_checks: int
-    samples: List[tuple] = field(default_factory=list)  # (t, has_screen, has_face)
-
-
-def detect_react_video(source_path: str, duration: float,
-                        check_interval: Optional[float] = None) -> ReactVideoReport:
-    """Amostra o vídeo inteiro a cada `check_interval` segundos (padrão
-    config.REACT_CHECK_INTERVAL_SECONDS) e decide se é um vídeo REACT."""
-    check_interval = check_interval or getattr(config, "REACT_CHECK_INTERVAL_SECONDS", 10.0)
-    check_interval = max(check_interval, 1.0)
-
-    cap = cv2.VideoCapture(source_path)
-    if not cap.isOpened():
-        return ReactVideoReport(is_react=False, screen_fraction=0.0, face_fraction=0.0, n_checks=0)
-
-    cascades = _new_cascades()
-    n_checks = max(int(duration // check_interval), 1)
-    samples = []
-    screen_hits = face_hits = 0
-
-    for i in range(n_checks):
-        t = min(i * check_interval + check_interval / 2.0, max(duration - 0.1, 0.0))
-        cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
-        ok, frame = cap.read()
-        if not ok:
-            continue
-        has_screen = _detect_screen_region(frame) is not None
-        has_face = len(_detect_all_faces(cascades, frame)) > 0
-        samples.append((t, has_screen, has_face))
-        screen_hits += int(has_screen)
-        face_hits += int(has_face)
-
-    cap.release()
-
-    n = max(len(samples), 1)
-    screen_fraction = screen_hits / n
-    face_fraction = face_hits / n
-    min_fraction = getattr(config, "REACT_MIN_SCREEN_FRACTION", 0.25)
-    is_react = screen_fraction >= min_fraction
-
-    return ReactVideoReport(is_react=is_react, screen_fraction=screen_fraction,
-                             face_fraction=face_fraction, n_checks=len(samples), samples=samples)
 
 
 # --- Referências visuais ("olha a camisa dele") ---

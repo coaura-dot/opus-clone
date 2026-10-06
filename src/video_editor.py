@@ -16,6 +16,7 @@ from .sfx import add_whoosh, add_impacts
 from .fx import plan_effects
 from . import jumpcut
 from .react_detector import find_reference_times
+from . import react_layout as react_layout_mod
 from .utils import run, ensure_dir, sanitize_filename
 from . import config
 
@@ -104,7 +105,8 @@ def _write_context_dump(transcript_words, candidate, txt_path: str,
 def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                 work_dir: str, output_dir: str,
                 src_w: int = None, src_h: int = None, src_fps: float = None,
-                source_title: str = None, source_url: str = None) -> str:
+                source_title: str = None, source_url: str = None,
+                react_layout=None) -> str:
     work = ensure_dir(Path(work_dir) / f"clip_{clip_index}")
     ensure_dir(output_dir)
 
@@ -143,6 +145,21 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     face_gate_energies = audio_energy(str(voice_audio), out_duration,
                                        hop=face_gate_hop)
 
+    # vídeo REACT: confere em que trechos deste clipe a facecam está na tela
+    # e monta o plano da tela dividida (src/react_layout.py)
+    react_plan = None
+    caption_margin_v = None
+    hook_bottom_y = None
+    if react_layout is not None:
+        react_plan = react_layout_mod.plan_clip(react_layout, source_path, candidate.start,
+                                                candidate.end, config.TARGET_WIDTH, config.TARGET_HEIGHT)
+        if react_plan is not None:
+            print(f"    -> Clip {clip_index}: react em tela dividida "
+                  f"({react_plan.active_fraction * 100:.0f}% do clipe com a facecam)")
+            if react_plan.active_fraction >= 0.5:
+                caption_margin_v = react_layout_mod.caption_margin_v(config.TARGET_HEIGHT)
+                hook_bottom_y = react_layout_mod.hook_bottom_y(config.TARGET_HEIGHT)
+
     print(f"[5/6] Clip {clip_index}: gerando legendas e mixando música...")
     ass_path = work / "captions.ass"
     # título = a frase-gancho que originou o clipe (a mesma no balão do topo
@@ -150,7 +167,8 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     title = make_title(getattr(candidate, "hook_text", "") or candidate.text)
     hook_text = title if getattr(config, "HOOK_ENABLED", True) else None
     generate_ass(clip_words, clip_offset=0.0, output_path=str(ass_path),
-                 clip_duration=out_duration, hook_text=hook_text)
+                 clip_duration=out_duration, hook_text=hook_text,
+                 margin_v=caption_margin_v, hook_bottom_y=hook_bottom_y)
     if hook_text:
         add_whoosh(str(voice_audio), at=0.0)  # marca a entrada do título
 
@@ -158,6 +176,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     # momentos-chave, impacto (flash/tremida/RGB + "boom"), emojis, abertura
     fx_plan = plan_effects(clip_words, out_duration, face_gate_energies, face_gate_hop,
                            hook=bool(hook_text))
+    fx_plan.caption_margin_v = caption_margin_v
     add_impacts(str(voice_audio), fx_plan.impacts)
     print(f"    -> Clip {clip_index}: {len(fx_plan.zooms)} zoom(s) em momento-chave, "
           f"{len(fx_plan.impacts)} impacto(s), {len(fx_plan.emojis)} emoji(s)")
@@ -193,6 +212,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         reference_times=reference_times,
         keep_segments=keep_segments,
         fx=fx_plan,
+        react_plan=react_plan,
     )
 
     # render_vertical_clip só levanta exceção se o ffmpeg terminar com

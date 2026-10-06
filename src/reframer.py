@@ -1211,7 +1211,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                           audio_energy_hop: float = 0.1,
                           reference_times: Optional[List[float]] = None,
                           keep_segments: Optional[List[tuple]] = None,
-                          fx=None) -> str:
+                          fx=None, react_plan=None) -> str:
     """Gera o clipe vertical final (9:16) em um único passe: decodifica só o
     trecho necessário do vídeo original, recorta seguindo o rosto do
     orador (com fallback para plano aberto quando não há rosto em quadro),
@@ -1231,7 +1231,11 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     tempo é consultado aqui.
 
     `fx`: plano de efeitos do clipe (src/fx.py — zoom nos momentos-chave,
-    impacto, emoji, abertura), consultado pelo tempo da linha final."""
+    impacto, emoji, abertura), consultado pelo tempo da linha final.
+
+    `react_plan`: plano de tela dividida de um vídeo REACT (src/react_layout.py).
+    Nos trechos em que a facecam do streamer está na tela, o quadro sai com o
+    conteúdo em cima e o streamer embaixo, em vez do rastreamento de rosto."""
     zoom_peak_times = zoom_peak_times or []
     reference_times = sorted(reference_times or [])
     duration = max(end - start, 0.1)
@@ -1663,10 +1667,11 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 mode_hold_remaining = mode_min_hold_frames
 
             zoom_factor = 1.0
+            punch_zoom = 1.0 + (max(getattr(config, "JUMPCUT_PUNCH_ZOOM", 1.0), 1.0) - 1.0) * float(
+                getattr(config, "FX_INTENSITY", 1.0))
             if keep_segments is not None and mode == "face" and seg_i % 2 == 1:
                 # jump cut: trechos alternados ficam um pouco mais fechados
-                zoom_factor = 1.0 + (max(getattr(config, "JUMPCUT_PUNCH_ZOOM", 1.0), 1.0) - 1.0) * float(
-                    getattr(config, "FX_INTENSITY", 1.0))
+                zoom_factor = punch_zoom
             if config.ZOOM_PUNCH_ENABLED and mode == "face":
                 ease_s = getattr(config, "ZOOM_PUNCH_EASE_SECONDS", 0.25)
                 half_hold = getattr(config, "ZOOM_PUNCH_HOLD", 0.30) / 2.0
@@ -1726,7 +1731,15 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             else:
                 wide_frames = 0
 
-            if blend_remaining > 0:
+            react_on = react_plan is not None and react_plan.active(frame_idx / fps)
+            if react_on:
+                # tela dividida (react): os zooms de edição vão só no painel
+                # do streamer
+                rz = punch_zoom if (keep_segments is not None and seg_i % 2 == 1) else 1.0
+                rz = min(rz * fx_zoom, getattr(config, "FX_ZOOM_TOTAL_MAX", 1.28))
+                rz = 1.0 + (rz - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
+                out_frame = react_plan.compose(frame, frame_idx / fps, out_w, out_h, rz)
+            elif blend_remaining > 0:
                 # transição suave (crossfade) entre os dois modos envolvidos
                 # na troca, pra não dar um "pulo" visual — generaliza o
                 # crossfade binário original pra qualquer par de modos
@@ -1796,6 +1809,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             zoom_peak_times=zoom_peak_times, force_cpu=True,
             audio_energy=audio_energy, audio_energy_hop=audio_energy_hop,
             reference_times=reference_times, keep_segments=keep_segments, fx=fx,
+            react_plan=react_plan,
         )
 
     if hw_failed_mid_stream:

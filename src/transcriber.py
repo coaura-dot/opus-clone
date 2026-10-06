@@ -2,6 +2,7 @@
 Transcrição com timestamps por palavra usando faster-whisper.
 """
 import os
+import re
 from dataclasses import dataclass, field
 from typing import List
 
@@ -72,6 +73,22 @@ def _drop_repetition_loops(words: List[Word]) -> List[Word]:
     return out
 
 
+# símbolo que o Whisper às vezes devolve como "palavra" separada: "100 %"
+# aparecia assim na legenda e no título
+_SYMBOL_ONLY_RE = re.compile(r"^[%°ºª]+[.,!?;:]*$")
+
+
+def _attach_symbols(words: List[Word]) -> List[Word]:
+    out: List[Word] = []
+    for w in words:
+        if out and _SYMBOL_ONLY_RE.match(w.text.strip()):
+            prev = out[-1]
+            out[-1] = Word(start=prev.start, end=max(prev.end, w.end), text=prev.text.rstrip() + w.text.strip())
+        else:
+            out.append(w)
+    return out
+
+
 def _clean_transcript(t: "Transcript") -> "Transcript":
     # o filtro roda na sequência de palavras do vídeo INTEIRO (um loop
     # costuma atravessar vários segmentos do Whisper) e depois devolve cada
@@ -80,7 +97,7 @@ def _clean_transcript(t: "Transcript") -> "Transcript":
     kept = {id(w) for w in _drop_repetition_loops(t.words)}
     segments = []
     for i, seg in enumerate(t.segments):
-        words = [w for w in seg.words if id(w) in kept and owner[id(w)] == i]
+        words = _attach_symbols([w for w in seg.words if id(w) in kept and owner[id(w)] == i])
         if len(words) != len(seg.words):
             seg = Segment(start=seg.start, end=seg.end,
                           text=" ".join(w.text for w in words), words=words)

@@ -150,7 +150,9 @@ def _wrap_hook(text: str, max_chars: int) -> str:
 def generate_ass(words: List[Word], clip_offset: float, output_path: str,
                   clip_duration: float = None,
                   video_width: int = None, video_height: int = None,
-                  hook_text: Optional[str] = None) -> str:
+                  hook_text: Optional[str] = None,
+                  margin_v: Optional[int] = None,
+                  hook_bottom_y: Optional[int] = None) -> str:
     """Gera um arquivo .ass com legendas estilo karaokê, com timestamps
     relativos ao início do clipe (clip_offset = tempo de início no vídeo
     original). Se `clip_duration` for informado, descarta/corta palavras
@@ -180,7 +182,7 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
     fontsize = max(int(config.CAPTION_FONT_SIZE * scale), 10)
     outline_w = max(int(round(getattr(config, "CAPTION_OUTLINE_WIDTH", 6) * scale)), 1)
     shadow = max(int(round(getattr(config, "CAPTION_SHADOW", 4) * scale)), 0)
-    marginv = max(int(round(config.CAPTION_MARGIN_V * scale)), 0)
+    marginv = max(int(round((config.CAPTION_MARGIN_V if margin_v is None else margin_v) * scale)), 0)
     marginh = max(int(round(getattr(config, "CAPTION_MARGIN_H", 50) * scale)), 0)
 
     header = ASS_HEADER.format(
@@ -211,6 +213,11 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
         tilt = getattr(config, "HOOK_TILT_DEGREES", -2.0)
         anim = (rf"{{\fad(80,220)\frz{tilt}\fscx60\fscy60"
                 r"\t(0,120,\fscx110\fscy110)\t(120,220,\fscx100\fscy100)}")
+        if hook_bottom_y is not None:
+            # layout react: o balão fica logo acima da legenda (na base do
+            # painel de conteúdo) em vez de no topo, onde cobriria o rosto
+            # de quem está no vídeo reagido
+            anim = anim[:-1] + rf"\an2\pos({video_width // 2},{int(hook_bottom_y * scale)})}}"
         lines.append(f"Dialogue: 1,{fmt_time(0)},{fmt_time(end)},Hook,,0,0,0,,{anim}{text}")
 
     emphasis = _emphasis_set()

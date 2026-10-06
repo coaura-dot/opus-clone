@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src import config
 from src import hwaccel
 from src import long_video
-from src import react_detector
+from src import react_layout
 from src.utils import ensure_ffmpeg, ensure_dir, check_dependency, video_info
 from src.downloader import download_youtube_video, get_video_title
 from src.transcriber import transcribe
@@ -168,23 +168,21 @@ def main():
         print(f"    Duração: {info['duration']/60:.1f} min | "
               f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")
 
-        # Modo REACT (RELATORIO item 14): classifica o vídeo INTEIRO antes
-        # de gerar qualquer clipe -- se for detectado como reação a
-        # conteúdo de tela, liga o rastreamento de tela (item 3a, que por
-        # padrão fica desligado) dinamicamente só pra este vídeo. NÃO
-        # VALIDADO contra vídeo de reação real (ver src/react_detector.py e
-        # RELATORIO_PROXIMOS_PASSOS.txt).
+        # Modo REACT: o vídeo é um streamer com facecam sobreposta ao vídeo
+        # que ele está reagindo? Se for, os clipes saem em tela dividida
+        # (conteúdo em cima, streamer embaixo) em vez de a câmera ficar
+        # pulando entre o rosto do vídeo reagido e o do streamer.
+        react = None
         if getattr(config, "REACT_MODE_AUTO_DETECT", True):
-            print("    Analisando se o vídeo é do tipo 'reaction'...")
-            react_report = react_detector.detect_react_video(str(source_path), info["duration"])
-            if react_report.is_react:
-                config.VIDEO_IN_VIDEO_ENABLED = True
-                print(f"    -> Detectado como REACT (tela plausível em "
-                      f"{react_report.screen_fraction*100:.0f}% das checagens) -- "
-                      f"câmera vai seguir o vídeo reagido quando ele estiver tocando.")
+            print("    Analisando se o vídeo é um react (facecam sobreposta)...")
+            react = react_layout.detect_react_layout(
+                str(source_path), info["duration"], info["width"], info["height"])
+            if react is not None:
+                x, y, w, h = react.cam_box
+                print(f"    -> REACT detectado: facecam em x={x} y={y} ({w}x{h}) -- "
+                      f"clipes em tela dividida (conteúdo em cima, streamer embaixo).")
             else:
-                print(f"    -> Vídeo comum (tela plausível em só "
-                      f"{react_report.screen_fraction*100:.0f}% das checagens).")
+                print("    -> Vídeo comum (sem facecam sobreposta).")
 
         if long_video.is_long_video(info["duration"]):
             # Vídeo longo (> LONG_VIDEO_THRESHOLD_SECONDS): não transcreve o
@@ -214,7 +212,7 @@ def main():
                         str(source_path), cand, clip_index, cand.words,
                         str(work_dir), str(output_dir),
                         info["width"], info["height"], info["fps"],
-                        source_title=source_title, source_url=url,
+                        source_title=source_title, source_url=url, react_layout=react,
                     )
                     results.append((final_path, cand))
         else:
@@ -243,7 +241,7 @@ def main():
                             build_clip, str(source_path), cand, i + 1,
                             transcript.words, str(work_dir), str(output_dir),
                             info["width"], info["height"], info["fps"],
-                            source_title=source_title, source_url=url,
+                            source_title=source_title, source_url=url, react_layout=react,
                         ): i
                         for i, cand in enumerate(candidates)
                     }
@@ -255,7 +253,7 @@ def main():
                     final_path = build_clip(
                         str(source_path), cand, i, transcript.words, str(work_dir), str(output_dir),
                         info["width"], info["height"], info["fps"],
-                        source_title=source_title, source_url=url,
+                        source_title=source_title, source_url=url, react_layout=react,
                     )
                     results[i - 1] = (final_path, cand)
 

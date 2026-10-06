@@ -84,6 +84,7 @@ class FxPlan:
     impacts: List[float] = field(default_factory=list)
     emojis: List[Tuple[float, float, str]] = field(default_factory=list)    # (início, fim, código)
     intro: bool = True
+    caption_margin_v: Optional[int] = None   # None = config.CAPTION_MARGIN_V
     _emoji_cache: dict = field(default_factory=dict, repr=False)
 
     # ----- zoom ---------------------------------------------------------
@@ -196,7 +197,8 @@ class FxPlan:
         # a legenda fica com a BASE em CAPTION_MARGIN_V; o emoji vai logo acima.
         # folga acima da legenda: o grupo entra crescendo até 108% e a
         # palavra falada até 125% — com 10px o emoji encostava no texto
-        cap_top = out_h - getattr(config, "CAPTION_MARGIN_V", 560) - int(getattr(config, "CAPTION_FONT_SIZE", 135) * 0.95)
+        margin_v = self.caption_margin_v if self.caption_margin_v is not None else getattr(config, "CAPTION_MARGIN_V", 560)
+        cap_top = out_h - margin_v - int(getattr(config, "CAPTION_FONT_SIZE", 135) * 0.95)
         cy = cap_top - base // 2 - 60 + int(6 * math.sin(since * 6.0))
         cx = w // 2 + int(8 * math.sin(since * 3.0))
         sh, sw = sprite.shape[:2]
