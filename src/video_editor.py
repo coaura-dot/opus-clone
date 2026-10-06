@@ -11,7 +11,7 @@ from .effects import find_energy_peaks
 from .reframer import render_vertical_clip
 from .captioner import generate_ass
 from .music import mix_with_music, pick_music_track, load_track_credit
-from .post_kit import write_post_kit, make_title
+from .post_kit import write_post_kit, write_post_meta, make_title
 from .sfx import add_whoosh, add_impacts
 from .fx import plan_effects
 from . import jumpcut
@@ -199,6 +199,11 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     post_txt_path = final_path.with_suffix(".post.txt")
     write_post_kit(str(post_txt_path), candidate.text, load_track_credit(music_track),
                    source_title, source_url, title=title)
+    # o mesmo kit em JSON, pra postagem automática (autopilot.py)
+    write_post_meta(str(final_path.with_suffix(".meta.json")), candidate.text,
+                    load_track_credit(music_track), source_title, source_url, title=title,
+                    extra={"start": round(candidate.start, 2), "end": round(candidate.end, 2),
+                           "score": round(float(getattr(candidate, "score", 0.0)), 2)})
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")

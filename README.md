@@ -143,6 +143,83 @@ um com estes arquivos ao lado:
 - `clip_XX_....contexto.txt` — a transcrição do clipe com 60s de contexto
   antes e depois, pra conferir se o corte começou/terminou no lugar certo.
 
+## Postagem automática no YouTube (piloto automático)
+
+`autopilot.py` usa o programa acima como "motor" e faz o resto sozinho:
+baixa, edita e **posta** no seu canal, com título, descrição, hashtags,
+crédito do vídeo original e da música.
+
+- **Duplo clique em `INICIAR_AUTOMATICO.bat`** -- modo automático infinito:
+  procura os vídeos que estão ganhando views mais rápido nos canais da sua
+  lista (`AUTOPILOT_CHANNELS` em `src/config.py`), corta, posta espaçado e
+  repete até você fechar a janela ou desligar o PC. Mantém o PC acordado
+  enquanto roda. Se desligar no meio, ao abrir de novo continua de onde parou.
+- **`AUTO_CLIPPER_MENU.bat`** -- menu: colar um link (ou arquivo do PC) e
+  postar os cortes na hora, conectar o canal, ver a fila e o que já foi postado.
+
+### Configuração (uma vez só, ~10 min)
+
+1. `pip install -r requirements.txt` (instala as bibliotecas do Google).
+2. No [Google Cloud Console](https://console.cloud.google.com/):
+   1. crie um projeto (qualquer nome);
+   2. em **APIs e serviços → Biblioteca**, ative a **YouTube Data API v3**;
+   3. em **Tela de consentimento OAuth**: tipo **Externo**, preencha nome e
+      e-mail, adicione o seu e-mail em **Usuários de teste** e depois clique
+      em **Publicar app** (em "Teste" o login expira a cada 7 dias e o
+      piloto para de postar);
+   4. em **Credenciais → Criar credenciais → ID do cliente OAuth**, tipo
+      **App para computador**; baixe o JSON e salve como
+      `credentials/client_secret.json` (dentro da pasta do programa).
+3. Rode `AUTO_CLIPPER_MENU.bat` → opção **3** (ou `python autopilot.py --login`).
+   Abre o navegador: escolha o canal e autorize. Como o app é seu e não é
+   verificado, o Google mostra um aviso -- clique em **Avançado → Acessar**.
+   O login fica salvo em `credentials/youtube_token.json`.
+
+**Importante -- regras do YouTube, não do programa:**
+
+- **Vídeos privados até a auditoria:** vídeos enviados por um projeto da API
+  ainda **não auditado** pelo Google ficam **travados como privados**. Para
+  postar público, peça a auditoria (é grátis) pelo formulário
+  ["YouTube API Services - Audit and Quota Extension"](https://support.google.com/youtube/contact/yt_api_form).
+  Até sair, os vídeos sobem privados e você pode torná-los públicos no
+  YouTube Studio.
+- **Cota:** 10.000 unidades por dia, e cada upload gasta 1.600, então são no
+  máximo **6 postagens por dia**. O programa respeita isso sozinho. A
+  auditoria também serve para pedir mais cota.
+- **Direitos:** use canais que **liberam cortes**. Clipe de canal que não
+  libera pode render reivindicação ou strike no seu canal. A descrição de cada
+  vídeo já leva o crédito do vídeo original e da música.
+
+### Ajustes (`src/config.py`, seção "POSTAGEM AUTOMÁTICA")
+
+| Opção | Padrão | O que faz |
+|---|---|---|
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah | canais acompanhados |
+| `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
+| `AUTOPILOT_MAX_AGE_DAYS` | 7 | só vídeos publicados há até N dias |
+| `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
+| `AUTOPILOT_POSTS_PER_DAY` | 6 | limitado pela cota da API |
+| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 120 | espaço entre postagens |
+| `AUTOPILOT_POST_HOURS` | (9, 23) | horário em que posta (fora dele só produz) |
+| `AUTOPILOT_QUEUE_TARGET` | 8 | clipes prontos esperando na fila |
+| `YOUTUBE_PRIVACY` | "public" | "public", "unlisted" ou "private" |
+| `AUTOPILOT_UPLOAD` | True | False = só gera os clipes (teste) |
+
+Como escolhe o vídeo: entre os últimos vídeos de cada canal, o que está
+ganhando **mais views por hora** desde que saiu (vídeos de até 7 dias, de 8
+min a 4 h, que não sejam live acontecendo nem já usados), variando o canal
+quando um foi usado nas últimas 24 h. A fila posta primeiro os cortes com
+melhor pontuação.
+
+Robustez: cada vídeo é editado num processo separado com tempo máximo
+(`AUTOPILOT_WORKER_TIMEOUT_MINUTES`); se travar, é encerrado e o piloto
+segue. Erro de rede no upload tenta de novo sozinho; cota esgotada espera
+zerar (meia-noite do horário do Pacífico); disco quase cheio apaga primeiro
+clipes já postados. Tudo fica registrado em `autopilot_data/autopilot.log`.
+
+Para iniciar junto com o Windows: `Win+R` → `shell:startup` → cole ali um
+atalho do `INICIAR_AUTOMATICO.bat`.
+
 ## Aceleração de hardware (GPU) e processamento paralelo
 
 O programa detecta e testa sozinho, ao iniciar, qual a melhor forma de
@@ -475,6 +552,9 @@ volume consistente entre si, independente de quão alto/baixo estava o
 ```
 opus-clip-clone/
 ├── main.py                 # CLI principal
+├── autopilot.py            # piloto automático: baixa, edita e posta no YouTube
+├── INICIAR_AUTOMATICO.bat  # 1 clique: modo automático infinito
+├── AUTO_CLIPPER_MENU.bat   # menu (um link, login do canal, fila)
 ├── test_pipeline.py         # teste de integração (sem precisar do YouTube)
 ├── requirements.txt
 ├── src/
@@ -497,6 +577,10 @@ opus-clip-clone/
 │   ├── opener.py              # a frase de abertura se sustenta sozinha?
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
 │   ├── react_detector.py      # react: "olha isso" na fala
+│   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
+│   ├── autopilot.py           # loop do piloto automático (fila, agenda, cota)
+│   ├── discovery.py           # acha o vídeo que mais está bombando
+│   ├── youtube_uploader.py    # upload pela API oficial do YouTube (OAuth)
 │   └── utils.py
 ├── assets/
 │   ├── fonts/                 # fonte Anton (OFL) embutida p/ legendas

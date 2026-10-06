@@ -18,3 +18,9 @@ numpy>=1.24.0
 # Sem ele o programa funciona, com uma regra mais simples.
 spacy>=3.7,<4
 pt_core_news_sm @ https://github.com/explosion/spacy-models/releases/download/pt_core_news_sm-3.8.0/pt_core_news_sm-3.8.0-py3-none-any.whl
+# Postagem automática no YouTube (autopilot.py): API oficial + login OAuth
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.0
+google-auth-httplib2>=0.2
+# fuso horário no Windows (a cota do YouTube zera no horário do Pacífico)
+tzdata

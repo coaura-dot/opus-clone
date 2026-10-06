@@ -13,6 +13,7 @@ filosofia do resto do projeto: sem LLM, sem API, sem custo por vídeo):
     (mesmo filtro de stopwords do TextTiling em clip_selector), mais as tags
     fixas de cada rede e as do seu canal (config.POST_EXTRA_HASHTAGS).
 """
+import json
 import re
 from collections import Counter
 from pathlib import Path
@@ -157,4 +158,79 @@ def write_post_kit(path: str, clip_text: str, music_credit: Optional[str] = None
                    title: Optional[str] = None) -> str:
     Path(path).write_text(
         build_post_text(clip_text, music_credit, source_title, source_url, title), encoding="utf-8")
+    return path
+
+
+YT_TITLE_MAX = 100
+YT_DESCRIPTION_MAX = 4800      # limite real: 5000 bytes
+YT_TAGS_MAX_CHARS = 450        # limite real: 500 caracteres somando as tags
+
+
+def _yt_safe(text: str) -> str:
+    # o YouTube recusa título/descrição com "<" ou ">"
+    return text.replace("<", "‹").replace(">", "›")
+
+
+def _full_title(prefix: str, clip_text: str) -> Optional[str]:
+    """A frase do texto que começa com `prefix`, inteira, se couber em 95."""
+    key = re.sub(r"\s+", " ", prefix).strip().lower()[:40]
+    for sent in _sentences(clip_text):
+        if key and key in sent.lower():
+            t = sent[sent.lower().index(key):].strip(" .,;:")
+            if len(t) <= 95:
+                return t[:1].upper() + t[1:]
+            cut = [m.start() for m in re.finditer(r"[,;:—]", t[:96])]
+            cut = [c for c in cut if c >= 40]
+            if cut:
+                return t[:cut[-1]]
+    return None
+
+
+def build_youtube_meta(clip_text: str, music_credit: Optional[str] = None,
+                       source_title: Optional[str] = None, source_url: Optional[str] = None,
+                       title: Optional[str] = None) -> dict:
+    """Título, descrição e tags prontos pra API do YouTube (postagem
+    automática -- ver autopilot.py). As 3 primeiras hashtags da descrição
+    aparecem em cima do título no Shorts."""
+    title = title or make_title(clip_text)
+    if title.endswith("…"):
+        # o título curto (70, pro texto da capa) cortou a frase; no YouTube
+        # cabem 100 -- usa a frase inteira se couber
+        full = _full_title(title[:-1], clip_text)
+        if full:
+            title = full
+    topic_tags = make_topic_hashtags(clip_text)
+    extra_tags = [t if t.startswith("#") else f"#{t}"
+                  for t in getattr(config, "POST_EXTRA_HASHTAGS", [])]
+    hashtags = list(dict.fromkeys(["#shorts"] + topic_tags + extra_tags))
+
+    parts = [make_description(clip_text), "", " ".join(hashtags)]
+    if source_title or source_url:
+        parts += ["", "Corte de: " + " — ".join(x for x in (source_title, source_url) if x)]
+    if music_credit:
+        parts += ["", "Música: " + music_credit]
+    description = _yt_safe("\n".join(parts)).strip()
+    while len(description.encode("utf-8")) > YT_DESCRIPTION_MAX:
+        description = description[:-50]
+
+    tags, used = [], 0
+    for t in [h.lstrip("#") for h in hashtags if h != "#shorts"] + ["shorts", "cortes"]:
+        if t and t not in tags and used + len(t) + 1 <= YT_TAGS_MAX_CHARS:
+            tags.append(t)
+            used += len(t) + 1
+    return {
+        "title": _yt_safe(title)[:YT_TITLE_MAX].strip() or "Corte",
+        "description": description,
+        "tags": tags,
+        "source_title": source_title,
+        "source_url": source_url,
+    }
+
+
+def write_post_meta(path: str, clip_text: str, music_credit: Optional[str] = None,
+                    source_title: Optional[str] = None, source_url: Optional[str] = None,
+                    title: Optional[str] = None, extra: Optional[dict] = None) -> str:
+    meta = build_youtube_meta(clip_text, music_credit, source_title, source_url, title)
+    meta.update(extra or {})
+    Path(path).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

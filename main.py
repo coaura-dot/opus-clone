@@ -119,11 +119,33 @@ def ask_int(prompt: str, default: int, min_v: int = 1, max_v: int = 20) -> int:
         print(f"   Digite um número entre {min_v} e {max_v}.")
 
 
+def _write_results(path: str, url: str, source_title, results) -> None:
+    """Lista dos clipes gerados, pro autopilot.py saber o que postar."""
+    import json
+    clips = []
+    for final_path, cand in results:
+        p = Path(final_path)
+        clips.append({
+            "video": str(p.resolve()),
+            "meta": str(p.with_suffix(".meta.json").resolve()),
+            "start": round(cand.start, 2), "end": round(cand.end, 2),
+            "score": round(float(cand.score), 2),
+        })
+    Path(path).write_text(json.dumps({"url": url, "source_title": source_title, "clips": clips},
+                                     ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--url", default=None)
     parser.add_argument("--clips", type=int, default=None)
+    # usados pelo autopilot.py (que roda este programa como "operário"):
+    # pasta de saída própria e um .json com a lista dos clipes gerados
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--results", default=None)
     cli_args, _ = parser.parse_known_args()
+    if cli_args.out:
+        config.OUTPUT_DIR = cli_args.out
 
     print("=" * 62)
     print("  AUTO CLIPPER — Cortes virais automáticos (estilo Opus Clip)")
@@ -142,7 +164,7 @@ def main():
         url = cli_args.url.strip()
         print(f"\nCole o link do vídeo do YouTube: {url}")
     else:
-        url = input("\nCole o link do vídeo do YouTube: ").strip()
+        url = input("\nCole o link do vídeo do YouTube (ou o caminho de um arquivo de vídeo): ").strip()
     if not url:
         print("Nenhum link informado. Encerrando.")
         sys.exit(1)
@@ -158,13 +180,20 @@ def main():
 
     t0 = time.time()
     try:
-        source_path = download_youtube_video(url, str(work_dir))
-        # título do vídeo original, só pro crédito no .post.txt de cada
-        # clipe -- se falhar (rede, vídeo privado...), segue sem ele
-        try:
-            source_title = get_video_title(url)
-        except Exception:
-            source_title = None
+        local = Path(url.strip('"'))
+        if local.is_file():
+            # arquivo do próprio PC no lugar do link: usa direto
+            print(f"[1/6] Usando o arquivo local: {local}")
+            source_path, source_title = local, local.stem
+            url = None
+        else:
+            source_path = download_youtube_video(url, str(work_dir))
+            # título do vídeo original, só pro crédito no .post.txt de cada
+            # clipe -- se falhar (rede, vídeo privado...), segue sem ele
+            try:
+                source_title = get_video_title(url)
+            except Exception:
+                source_title = None
         info = video_info(source_path)
         print(f"    Duração: {info['duration']/60:.1f} min | "
               f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")
@@ -260,6 +289,9 @@ def main():
                         source_title=source_title, source_url=url, react_layout=react,
                     )
                     results[i - 1] = (final_path, cand)
+
+        if cli_args.results:
+            _write_results(cli_args.results, url, source_title, results)
 
         elapsed = time.time() - t0
         # watchdog CURTO (independente do de _start_watchdog(90min) lá em

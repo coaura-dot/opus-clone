@@ -932,3 +932,45 @@ REACT_STREAMER_SPEAKING_ACTIVITY_MIN = 3.0  # mesma ORDEM DE GRANDEZA de
                                              # certa, esse é o primeiro valor
                                              # a ajustar (baixe pra ficar mais
                                              # sensível a fala baixa/sutil).
+
+
+# ======================================================================
+# POSTAGEM AUTOMÁTICA (autopilot.py) -- ver README, "Postagem automática"
+# ======================================================================
+AUTOPILOT_UPLOAD = True                 # False = só gera os clipes, não posta
+# Canais que o modo automático acompanha (os vídeos novos de cada um). Use
+# canais que LIBERAM cortes -- clipe de canal que não libera pode render
+# reivindicação/strike no seu canal. Aceita @nome ou o link do canal.
+AUTOPILOT_CHANNELS = [
+    "@flowpodcast",
+    "@inteligencialtda",
+    "@podpah",
+]
+# Buscas no YouTube ("esta semana, mais vistos", só títulos em português)
+# pra achar vídeo bombando fora da lista acima. Vazio = só os canais.
+# Atenção: a busca traz canais que você não conhece -- confira se liberam corte.
+AUTOPILOT_SEARCHES = []
+AUTOPILOT_VIDEOS_PER_CHANNEL = 10       # últimos N vídeos de cada canal
+AUTOPILOT_CHECK_TOP = 8                 # quantos candidatos conferir a fundo por rodada
+AUTOPILOT_MAX_AGE_DAYS = 7              # só vídeos publicados há até N dias
+AUTOPILOT_MIN_VIEWS = 5000
+AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
+AUTOPILOT_MAX_SOURCE_MINUTES = 240
+AUTOPILOT_CLIPS_PER_VIDEO = 3
+AUTOPILOT_QUEUE_TARGET = 8              # mantém até N clipes prontos esperando postagem
+AUTOPILOT_POSTS_PER_DAY = 6             # a cota grátis da API permite 6 uploads/dia
+AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 120
+AUTOPILOT_POST_HOURS = (9, 23)          # só posta entre 9h e 23h (horário do PC)
+AUTOPILOT_WORKER_TIMEOUT_MINUTES = 150  # vídeo que trava na edição é abandonado
+AUTOPILOT_IDLE_MINUTES = 30             # sem vídeo novo: procura de novo depois de N min
+AUTOPILOT_MIN_FREE_GB = 5               # disco abaixo disso: apaga clipes já postados
+AUTOPILOT_DELETE_POSTED_FILES = False   # True = apaga o .mp4 logo depois de postar
+AUTOPILOT_OUTPUT_DIR = "output/autopiloto"
+YTDLP_COOKIES_FROM_BROWSER = None       # ex.: "chrome" se o YouTube pedir login pra listar
+
+YOUTUBE_PRIVACY = "public"              # "public", "unlisted" ou "private"
+YOUTUBE_CATEGORY_ID = "24"              # 24 = Entretenimento (22 = Pessoas e blogs)
+YOUTUBE_LANGUAGE = "pt-BR"
+YOUTUBE_NOTIFY_SUBSCRIBERS = True
+YOUTUBE_DAILY_QUOTA = 10000             # cota do seu projeto no Google Cloud (padrão 10.000)
+YOUTUBE_CREDENTIALS_DIR = "credentials"
