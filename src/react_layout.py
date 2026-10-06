@@ -264,7 +264,7 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
             else:
                 clusters.append([cx, cy, fh, [(i, face)]])
 
-    min_presence = getattr(config, "REACT_MIN_PRESENCE", 0.45)
+    min_presence = getattr(config, "REACT_MIN_PRESENCE", 0.25)
     cands = []
     for c in clusters:
         idx = sorted({i for i, _ in c[3]})
@@ -418,6 +418,10 @@ class ReactClipPlan:
         bot = cv2.resize(bot, (out_w, bot_h),
                          interpolation=cv2.INTER_CUBIC if up > 1.5 else
                          (cv2.INTER_AREA if up < 1 else cv2.INTER_LINEAR))
+        if up > 2.5:
+            # facecam pequena ampliada 3-6x fica mole: realce leve de nitidez
+            soft = cv2.GaussianBlur(bot, (0, 0), 2.0)
+            bot = cv2.addWeighted(bot, 1.45, soft, -0.45, 0)
 
         out = np.empty((out_h, out_w, 3), np.uint8)
         out[:top_h] = top
@@ -479,7 +483,11 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
         track = np.stack([np.convolve(pad[:, j], kernel, mode="valid") for j in range(3)], axis=1)
     track *= s
 
-    window = _content_window(layout, grays, content_faces, W, H, out_w, out_h)
+    # a janela do conteúdo só olha os trechos em tela dividida (nos outros o
+    # streamer pode estar em tela cheia, e o rosto dele não é "conteúdo")
+    on = [i for i in range(len(frames)) if present[i]]
+    window = _content_window(layout, [grays[i] for i in on], [content_faces[i] for i in on],
+                             W, H, out_w, out_h)
     times = np.arange(len(frames)) / rate
     return ReactClipPlan(layout, times, present, track, window)
 
@@ -490,7 +498,15 @@ def _content_window(layout: ReactLayout, grays, content_faces, W, H, out_w, out_
     frac = float(np.clip(getattr(config, "REACT_CONTENT_FRAC", 0.5), 0.3, 0.7))
     aspect = out_w / (out_h * frac)
     bx, by, bw, bh = layout.box_at(W)
-    act = np.std(np.stack(grays).astype(np.float32), axis=0) if len(grays) > 1 else np.zeros((H, W), np.float32)
+    # atividade = o quanto cada ponto muda ao longo do clipe, medida numa
+    # versão BORRADA da imagem: o vídeo reagido muda em áreas grandes; texto
+    # do chat rolando e contadores da live mudam em detalhe fino e somem no
+    # borrão. Interface do navegador e barras da live não mudam.
+    if len(grays) > 1:
+        blurred = [cv2.GaussianBlur(g, (0, 0), 6.0).astype(np.float32) for g in grays]
+        act = np.std(np.stack(blurred), axis=0)
+    else:
+        act = np.zeros((H, W), np.float32)
     pad_x, pad_y = 0.04 * bw, 0.04 * bh
     cx0, cy0 = int(max(bx - pad_x, 0)), int(max(by - pad_y, 0))
     cx1, cy1 = int(min(bx + bw + pad_x, W)), int(min(by + bh + pad_y, H))
@@ -499,9 +515,11 @@ def _content_window(layout: ReactLayout, grays, content_faces, W, H, out_w, out_
     total = float(integ[-1, -1])
     face_frames = [fl for fl in content_faces if fl]
     cam_area = max((cx1 - cx0) * (cy1 - cy0), 1)
+    # referência de "região ativa": média dos 30% de pontos que mais mudam
+    hot = float(np.mean(act[act >= np.percentile(act, 70)])) if total > 1 else 1.0
 
     best, best_score = None, -1e9
-    for sc in (1.0, 0.9, 0.8, 0.7):
+    for sc in (1.0, 0.85, 0.72, 0.6):
         h = H * sc
         w = h * aspect
         if w > W:
@@ -515,7 +533,11 @@ def _content_window(layout: ReactLayout, grays, content_faces, W, H, out_w, out_
                 ix = max(0, min(x1, cx1) - max(x0, cx0))
                 iy = max(0, min(y1, cy1) - max(y0, cy0))
                 cam_ov = ix * iy / cam_area
-                a = (integ[y1, x1] - integ[y0, x1] - integ[y1, x0] + integ[y0, x0]) / total if total > 1 else 0.0
+                mass = integ[y1, x1] - integ[y0, x1] - integ[y1, x0] + integ[y0, x0]
+                a = mass / total if total > 1 else 0.0
+                # pureza: a janela é quase toda conteúdo que se mexe (não
+                # interface parada, barra da live, bordas pretas)?
+                purity = min(mass / max((x1 - x0) * (y1 - y0), 1) / max(hot, 1e-3), 1.0)
                 if face_frames:
                     inside = sum(any(x0 + 0.5 * fc[2] <= fc[0] <= x1 - 0.5 * fc[2]
                                      and y0 + 0.5 * fc[3] <= fc[1] <= y1 - 0.3 * fc[3] for fc in fl)
@@ -523,7 +545,7 @@ def _content_window(layout: ReactLayout, grays, content_faces, W, H, out_w, out_
                     face_score = inside / len(face_frames)
                 else:
                     face_score = 0.0
-                score = 1.5 * face_score + 1.0 * a - 2.5 * cam_ov + 0.3 * sc
+                score = 1.5 * face_score + 0.6 * a + 1.5 * purity - 2.5 * cam_ov + 0.2 * sc
                 if score > best_score:
                     best_score, best = score, (x0, y0, x1 - x0, y1 - y0)
     s = layout.src_w / float(W)

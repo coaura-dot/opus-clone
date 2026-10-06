@@ -839,7 +839,8 @@ EXIT_WATCHDOG_SECONDS = 6
 # cima (uma janela fixa por clipe) e streamer embaixo, legenda na divisória.
 REACT_MODE_AUTO_DETECT = True
 REACT_LAYOUT_SAMPLES = 48           # quadros amostrados no vídeo inteiro
-REACT_MIN_PRESENCE = 0.45           # o rosto da facecam aparece em pelo menos 45% deles
+REACT_MIN_PRESENCE = 0.25           # o rosto da facecam aparece em pelo menos 25% deles (o streamer
+                                    # costuma passar parte da live em tela cheia, sem facecam)
 REACT_CONTENT_FRAC = 0.5            # altura do painel de conteúdo (resto = streamer)
 REACT_CAM_FACE_FRAC = 0.30          # rosto do streamer ~30% da altura do painel dele
 REACT_MIN_SEGMENT_SECONDS = 3.0     # trecho mínimo com/sem facecam (sem pisca-pisca)
