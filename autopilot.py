@@ -33,7 +33,11 @@ def _login():
     except yt.UploadError as e:
         print(f"\n[ERRO] {e}")
         return False
-    print(f"\nConectado ao canal: {yt.channel_name(svc) or '(não consegui ler o nome)'}")
+    name, problem = yt.channel_check(svc)
+    if problem:
+        print(f"\n[!] Login feito, mas: {problem}")
+        return False
+    print(f"\nConectado ao canal: {name}")
     print(f"Login salvo em {yt.token_path()} -- não precisa repetir.")
     return True
 

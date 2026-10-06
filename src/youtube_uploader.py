@@ -107,13 +107,31 @@ def get_service(interactive: bool = True):
     return build("youtube", "v3", credentials=creds, cache_discovery=False)
 
 
-def channel_name(service) -> Optional[str]:
+def channel_check(service) -> tuple:
+    """(nome do canal, problema). Sem canal ou sem acesso, `problema` diz o
+    que fazer (achado real: login OK mas "não consegui ler o nome")."""
     try:
         r = service.channels().list(part="snippet", mine=True).execute()
-        items = r.get("items") or []
-        return items[0]["snippet"]["title"] if items else None
-    except Exception:
-        return None
+    except Exception as e:
+        reason = _error_reason(e) if hasattr(e, "content") else ""
+        if reason in ("accessNotConfigured", "SERVICE_DISABLED") or "has not been used" in str(e):
+            return None, ("a YouTube Data API v3 não está ativada no seu projeto do Google Cloud: "
+                          "busque 'YouTube Data API v3' no console e clique em Enable (ou Ativar)")
+        if reason in ("insufficientPermissions", "forbidden", "PERMISSION_DENIED"):
+            return None, ("faltou permissão no login: apague credentials\\youtube_token.json, rode "
+                          "'autopilot.py --login' de novo e marque TODAS as caixas na tela do Google")
+        return None, f"erro ao consultar o canal ({reason or e.__class__.__name__}): {str(e)[:200]}"
+    items = r.get("items") or []
+    if not items:
+        return None, ("essa conta do Google não tem canal no YouTube. Crie em "
+                      "https://www.youtube.com/create_channel (ou, se o canal é de uma conta de marca, "
+                      "apague credentials\\youtube_token.json e faça o login de novo escolhendo o CANAL "
+                      "na lista, não a conta pessoal)")
+    return items[0]["snippet"]["title"], None
+
+
+def channel_name(service) -> Optional[str]:
+    return channel_check(service)[0]
 
 
 def _error_reason(err) -> str:

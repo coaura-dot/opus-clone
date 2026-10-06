@@ -343,7 +343,11 @@ def _get_service(log: Log, upload: bool):
     from . import youtube_uploader as yt
     try:
         svc = yt.get_service(interactive=False)
-        log(f"  YouTube conectado: canal \"{yt.channel_name(svc) or '?'}\"")
+        name, problem = yt.channel_check(svc)
+        if problem:
+            log(f"  [!] YouTube: {problem}")
+            return None
+        log(f"  YouTube conectado: canal \"{name}\"")
         return svc
     except yt.UploadError as e:
         log(f"  [!] YouTube: {e}")
@@ -438,7 +442,10 @@ def run_once(url: str, n_clips: int, upload: bool = True):
         from . import youtube_uploader as yt
         try:
             service = yt.get_service(interactive=True)
-            log(f"  YouTube conectado: canal \"{yt.channel_name(service) or '?'}\"")
+            name, problem = yt.channel_check(service)
+            if problem:
+                raise yt.UploadError(problem)
+            log(f"  YouTube conectado: canal \"{name}\"")
         except yt.UploadError as e:
             log(f"  [!] YouTube: {e}")
             log("  Vou gerar os clipes mesmo assim; eles ficam na fila pra postar depois.")
