@@ -298,8 +298,15 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
     state.save()
     if not queue:
         return False
-    # melhor nota primeiro; entre parecidos, o mais antigo na fila
-    queue.sort(key=lambda c: (-round(c.get("quality", 50) / 5), -round(c.get("score", 0)), c.get("added", 0)))
+    # os mais promissores ainda sem nota de viralidade: analisa agora (no
+    # máximo 3, pra não atrasar a postagem -- o normal é já terem sido
+    # analisados no tempo ocioso, ver score_idle)
+    from .virality import rank_key
+    pending = sorted((c for c in queue if "viral" not in c), key=lambda c: -c.get("quality", 50))[:3]
+    for c in pending:
+        score_viral(state, c, log)
+    # maior nota combinada (viralidade + qualidade) primeiro
+    queue.sort(key=lambda c: (-rank_key(c), c.get("added", 0)))
     item = queue[0]
     if not Path(item["video"]).exists():
         log(f"    arquivo sumiu, tirando da fila: {item['video']}")
@@ -379,6 +386,52 @@ def judge(state: State, item: dict, log: Log) -> bool:
              "source_id": item.get("source_id"), "at": time.time()})
         state.data["rejected"] = state.data["rejected"][-200:]
     return ok
+
+
+def score_viral(state: State, item: dict, log: Log) -> None:
+    """Nota de viralidade de um clipe da fila (src/virality.py)."""
+    from . import virality
+    try:
+        meta = json.loads(Path(item["meta"]).read_text(encoding="utf-8"))
+        v, parts = virality.analyze(item["video"], meta)
+    except Exception as e:  # análise nunca derruba o piloto
+        log(f"    [!] não consegui medir a viralidade ({e.__class__.__name__}: {e})")
+        item["viral"] = 50
+        state.save()
+        return
+    item["viral"], item["viral_parts"] = v, parts
+    state.save()
+    why = virality.summary(parts)
+    log(f"    viralidade {v}/100 -> nota final {virality.rank_key(item):.0f}: "
+        f"\"{meta.get('title', '')}\"" + (f" ({why})" if why else ""))
+
+
+def score_idle(state: State, log: Log, until: float) -> int:
+    """Tempo ocioso (esperando a hora de postar): analisa a viralidade dos
+    clipes da fila que ainda não têm nota, os de melhor qualidade primeiro,
+    até `until`. Devolve quantos analisou."""
+    todo = sorted((c for c in state.data["queue"] if "viral" not in c),
+                  key=lambda c: -c.get("quality", 50))
+    if not todo:
+        return 0
+    log(f"  >> Tempo livre: medindo a viralidade de {len(todo)} clipe(s) da fila...")
+    done = 0
+    for c in todo:
+        if time.time() > until - 90:
+            break
+        if not Path(c["video"]).exists():
+            continue
+        score_viral(state, c, log)
+        done += 1
+    if done:
+        from .virality import rank_key
+        best = max(state.data["queue"], key=rank_key)
+        try:
+            t = json.loads(Path(best["meta"]).read_text(encoding="utf-8")).get("title", "")
+        except (OSError, ValueError):
+            t = Path(best["video"]).name
+        log(f"    próximo a postar (mais viral da fila): \"{t}\" -- nota {rank_key(best):.0f}")
+    return done
 
 
 def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optional[int] = None) -> int:
@@ -503,14 +556,17 @@ def run_forever(upload: bool = True):
                     produce(state, source, out_root, log)
                     failures = 0
                     continue
-                _sleep_until(time.time() + getattr(config, "AUTOPILOT_IDLE_MINUTES", 30) * 60, log,
-                             "nada novo agora, procuro de novo depois")
+                wake = time.time() + getattr(config, "AUTOPILOT_IDLE_MINUTES", 30) * 60
+                score_idle(state, log, wake)
+                _sleep_until(wake, log, "nada novo agora, procuro de novo depois")
                 continue
 
             # 3) fila cheia: espera a próxima janela de postagem
             if service is not None and state.data["queue"]:
                 _, nxt = can_post_now(state)
-                _sleep_until(min(nxt, time.time() + 3600), log,
+                wake = min(nxt, time.time() + 3600)
+                score_idle(state, log, wake)
+                _sleep_until(wake, log,
                              f"fila com {len(state.data['queue'])} clipe(s), esperando a hora de postar")
             else:
                 _sleep_until(time.time() + 1800, log,

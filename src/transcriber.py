@@ -89,6 +89,207 @@ def _attach_symbols(words: List[Word]) -> List[Word]:
     return out
 
 
+# contexto do vídeo (título, canal) usado como "dica" pro Whisper -- acerta
+# mais nomes próprios e gírias. main.py define antes de transcrever.
+_PROMPT = {"text": None}
+
+
+def set_context(*parts) -> None:
+    txt = ". ".join(p.strip() for p in parts if p and p.strip())
+    _PROMPT["text"] = txt or None
+
+
+def _speech_mask(audio_path: str):
+    """Fala/silêncio a cada 10 ms (energia do áudio, limiar adaptativo)."""
+    import subprocess
+    import numpy as np
+    cmd = ["ffmpeg", "-v", "error", "-i", str(audio_path), "-ac", "1", "-ar", "16000",
+           "-f", "s16le", "-"]
+    raw = subprocess.run(cmd, capture_output=True).stdout
+    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    hop = 160
+    n = len(x) // hop
+    if n < 50:
+        return None
+    rms = np.sqrt(np.mean(x[:n * hop].reshape(n, hop) ** 2, axis=1) + 1e-10)
+    db = 20 * np.log10(rms)
+    floor, loud = np.percentile(db, 10), np.percentile(db, 90)
+    thr = max(floor + 0.35 * (loud - floor), floor + 6.0)
+    mask = db > thr
+    # fecha buracos curtos (< 60 ms) e tira estalos (< 40 ms)
+    m = mask.copy()
+    i = 0
+    while i < n:
+        if not m[i]:
+            j = i
+            while j < n and not m[j]:
+                j += 1
+            if 0 < i and j < n and j - i < 6:
+                m[i:j] = True
+            i = j
+        else:
+            i += 1
+    i = 0
+    while i < n:
+        if m[i]:
+            j = i
+            while j < n and m[j]:
+                j += 1
+            if j - i < 4:
+                m[i:j] = False
+            i = j
+        else:
+            i += 1
+    return m
+
+
+def _onset_strength(audio_path: str):
+    """Força de "começo de som" a cada 10 ms (subida de energia), suavizada."""
+    import subprocess
+    import numpy as np
+    cmd = ["ffmpeg", "-v", "error", "-i", str(audio_path), "-ac", "1", "-ar", "16000",
+           "-f", "s16le", "-"]
+    x = np.frombuffer(subprocess.run(cmd, capture_output=True).stdout, dtype=np.int16).astype(np.float32)
+    hop = 160
+    n = len(x) // hop
+    if n < 100:
+        return None
+    db = 10 * np.log10(np.mean((x[:n * hop] / 32768.0).reshape(n, hop) ** 2, axis=1) + 1e-10)
+    db = np.convolve(db, np.ones(3) / 3, mode="same")
+    rise = np.clip(np.diff(db, prepend=db[0]), 0, None)
+    return np.convolve(rise, np.ones(5), mode="same")  # +-20 ms
+
+
+def fix_offsets(words: List[Word], audio_path: str, window_s: float = 20.0,
+                max_shift: float = 0.6) -> List[Word]:
+    """Corrige atraso/adiantamento CONSTANTE dos tempos do Whisper, trecho a
+    trecho (~20 s): testa deslocamentos de -0,6 a +0,6 s e fica com o que
+    melhor encaixa os começos e fins de FRASE (palavra depois/antes de uma
+    pausa) nos começos e fins de fala do áudio -- e, de desempate, os
+    começos de palavra nos ataques de sílaba. O whisper.cpp erra assim (a
+    legenda inteira de um trecho vinha uns décimos atrasada) e ajuste
+    palavra por palavra não pega esse caso. Só usa ataque de sílaba sozinho
+    não dá: as sílabas se repetem a cada ~0,2 s e um deslocamento errado
+    também "encaixa"."""
+    import numpy as np
+    if len(words) < 8:
+        return words
+    try:
+        env = _onset_strength(audio_path)
+        m = _speech_mask(audio_path)
+    except Exception:
+        return words
+    if env is None or m is None:
+        return words
+    n = min(len(env), len(m))
+    mf = m[:n].astype(np.float32)
+    env = env[:n] / (np.percentile(env[:n], 99) + 1e-9)
+    shifts = np.arange(-int(max_shift * 100), int(max_shift * 100) + 1, 2)
+    starts = np.array([w.start for w in words])
+    ends = np.array([w.end for w in words])
+    gap_before = np.r_[10.0, starts[1:] - ends[:-1]]
+    gap_after = np.r_[starts[1:] - ends[:-1], 10.0]
+    out = [Word(w.start, w.end, w.text) for w in words]
+
+    def frac(idx, a, b):
+        """fração de fala entre idx+a e idx+b (quadros de 10 ms)"""
+        vals = []
+        for k in range(a, b):
+            j = np.clip(idx + k, 0, n - 1)
+            vals.append(mf[j])
+        return np.mean(vals, axis=0)
+
+    centers, offs = [], []
+    t = starts[0]
+    while t <= starts[-1]:
+        sel = np.nonzero((starts >= t) & (starts < t + window_s))[0]
+        ph_s = sel[gap_before[sel] > 0.25]   # começos de frase
+        ph_e = sel[gap_after[sel] > 0.25]    # fins de frase
+        off = 0.0
+        if len(sel) >= 8 and len(ph_s) + len(ph_e) >= 3:
+            fs = np.round(starts[sel] * 100).astype(int)
+            fps_ = np.round(starts[ph_s] * 100).astype(int)
+            fpe = np.round(ends[ph_e] * 100).astype(int)
+            scores = []
+            for sh in shifts:
+                sc = 0.0
+                if len(fps_):
+                    sc += float(np.mean(frac(fps_ + sh, 0, 10) - frac(fps_ + sh, -15, -3)))
+                if len(fpe):
+                    sc += float(np.mean(frac(fpe + sh, -10, 0) - frac(fpe + sh, 5, 15)))
+                idx = np.clip(fs + sh, 0, n - 1)
+                sc += 0.3 * float(np.mean(env[idx]))
+                scores.append(sc)
+            scores = np.array(scores)
+            best = int(np.argmax(scores))
+            zero = scores[len(shifts) // 2]
+            if scores[best] - zero > 0.08:  # só mexe com ganho claro
+                off = shifts[best] / 100.0
+        centers.append(t + window_s / 2)
+        offs.append(off)
+        t += window_s / 2  # janelas com metade sobreposta
+    if not any(offs):
+        return out
+    o = np.array(offs)
+    if len(o) >= 3:  # mediana de 3 janelas vizinhas: um trecho estranho não puxa sozinho
+        o = np.r_[o[0], np.median(np.stack([o[:-2], o[1:-1], o[2:]]), axis=0), o[-1]]
+    per_word = np.interp(starts, centers, o)
+    for w, d in zip(out, per_word):
+        w.start += float(d)
+        w.end += float(d)
+    for a, b in zip(out, out[1:]):
+        if a.end > b.start:
+            a.end = max(b.start, a.start + 0.05)
+    return out
+
+
+def snap_to_speech(words: List[Word], audio_path: str) -> List[Word]:
+    """Acerta o começo de cada palavra no começo REAL da fala (energia do
+    áudio). Os tempos do Whisper (principalmente do whisper.cpp) chegam
+    adiantados ou atrasados em uns décimos de segundo, e a legenda aparecia
+    antes de a pessoa falar ou depois dela já ter falado. Mexe só onde o
+    áudio é claro: palavra que começa no silêncio vai pro próximo começo de
+    fala (até 0,5 s depois); palavra depois de uma pausa recua pro começo da
+    fala (até 0,3 s antes). Ninguém passa da palavra vizinha."""
+    if not words:
+        return words
+    try:
+        m = _speech_mask(audio_path)
+    except Exception:
+        return words
+    if m is None:
+        return words
+    import numpy as np
+    n = len(m)
+    onsets = np.nonzero(m & ~np.r_[False, m[:-1]])[0]
+    out = [Word(w.start, w.end, w.text) for w in words]
+    for i, w in enumerate(out):
+        f = int(round(w.start * 100))
+        if f >= n:
+            break
+        prev_end = out[i - 1].end if i else 0.0
+        next_start = out[i + 1].start if i + 1 < len(out) else float("inf")
+        new = None
+        if not m[max(f, 0)]:
+            k = np.searchsorted(onsets, f)
+            if k < len(onsets) and onsets[k] - f <= 50:
+                new = onsets[k] / 100.0
+        elif i == 0 or w.start - prev_end > 0.12:
+            k = np.searchsorted(onsets, f, side="right") - 1
+            if k >= 0 and f - onsets[k] <= 30:
+                new = onsets[k] / 100.0
+        if new is not None:
+            new = min(max(new, prev_end), next_start - 0.02)
+            if new > w.start - 0.5 and new < next_start:
+                shift = new - w.start
+                w.start = new
+                if shift > 0:
+                    w.end = min(max(w.end, w.start + 0.08), max(next_start, w.start + 0.08))
+        if w.end <= w.start:
+            w.end = w.start + 0.08
+    return out
+
+
 def _clean_transcript(t: "Transcript") -> "Transcript":
     # o filtro roda na sequência de palavras do vídeo INTEIRO (um loop
     # costuma atravessar vários segmentos do Whisper) e depois devolve cada
@@ -125,8 +326,8 @@ def transcribe(audio_path: str, model_size: str = "small",
         if problem:
             print(f"    [aviso] whisper.cpp indisponível ({problem}) — usando "
                   "faster-whisper. Confira WHISPERCPP_BIN/WHISPERCPP_MODEL em config.py.")
-            return _clean_transcript(_transcribe_faster_whisper(audio_path, model_size, device, compute_type))
-        return _clean_transcript(transcribe_whispercpp(
+            return _finish(_transcribe_faster_whisper(audio_path, model_size, device, compute_type), audio_path)
+        return _finish(transcribe_whispercpp(
             audio_path,
             model_path=config.WHISPERCPP_MODEL,
             bin_path=config.WHISPERCPP_BIN,
@@ -134,8 +335,30 @@ def transcribe(audio_path: str, model_size: str = "small",
             threads=getattr(config, "WHISPERCPP_THREADS", 0),
             use_gpu=getattr(config, "WHISPERCPP_USE_GPU", True),
             gpu_device=getattr(config, "WHISPERCPP_GPU_DEVICE", 0),
-        ))
-    return _clean_transcript(_transcribe_faster_whisper(audio_path, model_size, device, compute_type))
+            prompt=_PROMPT["text"],
+            beam_size=getattr(config, "WHISPERCPP_BEAM_SIZE", 5),
+            use_dtw=getattr(config, "WHISPERCPP_DTW", True),
+        ), audio_path)
+    return _finish(_transcribe_faster_whisper(audio_path, model_size, device, compute_type), audio_path)
+
+
+def _finish(t: "Transcript", audio_path: str) -> "Transcript":
+    from . import config
+    t = _clean_transcript(t)
+    if getattr(config, "CAPTION_SNAP_TO_SPEECH", True):
+        # 1) atraso constante por trecho, no vídeo inteiro; 2) palavra por palavra
+        all_words = t.words
+        fixed = fix_offsets(all_words, audio_path) if all_words else all_words
+        remap = {id(w): f for w, f in zip(all_words, fixed)}
+        segments = []
+        for seg in t.segments:
+            words = [remap.get(id(w), w) for w in seg.words]
+            words = snap_to_speech(words, audio_path) if words else words
+            segments.append(Segment(start=words[0].start if words else seg.start,
+                                    end=words[-1].end if words else seg.end,
+                                    text=seg.text, words=words))
+        t = Transcript(language=t.language, segments=segments)
+    return t
 
 
 def _transcribe_faster_whisper(audio_path: str, model_size: str = "small",
@@ -191,6 +414,8 @@ def _transcribe_faster_whisper(audio_path: str, model_size: str = "small",
     )
 
     transcribe_kwargs = dict(word_timestamps=True, vad_filter=True, beam_size=beam_size)
+    if _PROMPT["text"]:
+        transcribe_kwargs["initial_prompt"] = _PROMPT["text"][:220]
     if use_batched:
         try:
             pipeline = BatchedInferencePipeline(model=model)

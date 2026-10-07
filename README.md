@@ -214,6 +214,24 @@ não é postado. O que pesa:
 O log mostra a nota e o motivo de cada clipe; `python autopilot.py --status`
 lista a fila com as notas e os últimos descartados.
 
+### Nota de viralidade: no tempo livre, ele escolhe o que postar
+
+Enquanto espera a hora da próxima postagem, o piloto analisa os clipes da
+fila com mais calma (`src/virality.py`, ~10 s por clipe) e dá uma nota de
+viralidade de 0 a 100:
+- **gancho:** os 3 primeiros segundos. A fala começa logo? A frase é forte? A voz tem energia?
+- **picos de voz:** risada, grito, ênfase.
+- **ritmo:** fala densa e variada.
+- **conteúdo:** emoção, dinheiro, conflito, história.
+- **fechamento:** termina numa frase completa?
+- **imagem:** rosto em quadro e movimento na medida.
+- **duração e título.**
+
+Na hora de postar, vai sempre o clipe com a maior nota final (60%
+viralidade + 40% qualidade). O log mostra a nota de cada clipe, o que pesou
+e qual é o próximo da fila. Os pesos são regras de editor, não aprendidos
+de views; dá pra ajustar em `VIRAL_WEIGHTS` (`src/config.py`).
+
 ### Enquanto a auditoria não sai: vídeos privados que se liberam sozinhos
 
 Pode deixar o piloto postando normalmente: os vídeos sobem privados e ficam
@@ -334,6 +352,33 @@ cd whisper.cpp
 Isso baixa `models\ggml-small.bin` (multilingue, funciona pra portugues;
 modelos com sufixo `.en`, tipo `small.en`, sao so ingles). Use `medium` se
 quiser mais precisao e a GPU aguentar; `base` se quiser mais velocidade.
+
+**Recomendado (legenda erra bem menos palavra): `large-v3-turbo`.** Baixe o
+arquivo pra MESMA pasta do modelo que está em `WHISPERCPP_MODEL`; o programa
+usa sozinho o melhor modelo que achar lá (`WHISPERCPP_AUTO_BEST_MODEL`), sem
+mexer no config:
+
+```powershell
+$models = "C:\Users\igo\Desktop\opus2\opus-clip-clone\whisper.cpp\models"
+Invoke-WebRequest "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin" -OutFile "$models\ggml-large-v3-turbo-q5_0.bin"
+```
+
+(~550 MB.) Fica uns 2-3x mais lento que o `small` na transcrição, o que
+cabe folgado no ritmo do piloto automático. Junto, o programa usa busca em
+feixe (`WHISPERCPP_BEAM_SIZE = 5`), o título do vídeo como dica de
+vocabulário (nomes próprios) e o alinhamento DTW pro tempo de cada palavra
+(`WHISPERCPP_DTW`). Se o seu `whisper-cli` for antigo e não conhecer alguma
+dessas opções, ele tenta de novo sem elas.
+
+**Sincronia da legenda.** Duas correções, valem pra qualquer modelo:
+- vídeo com quadros por segundo variável (VFR, aparece como "29.6fps" no
+  log): a imagem escorregava ~1 s por minuto em relação ao áudio e à legenda
+  (medido: quase 3 s de atraso no fim de um clipe de 28 s). Agora os quadros
+  são lidos numa taxa constante;
+- o tempo de cada palavra é conferido com o áudio (`CAPTION_SNAP_TO_SPEECH`):
+  atraso/adiantamento constante de um trecho é corrigido pelos começos e
+  fins de frase (testado: tempos deslocados de -0,4 a +0,3 s voltam com erro
+  mediano de 0,05 s), e palavra que começava no silêncio vai pro começo da fala.
 
 ### 3. Configurar em `src/config.py`
 
@@ -640,6 +685,7 @@ opus-clip-clone/
 │   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
 │   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
 │   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta
+│   ├── virality.py            # nota de viralidade (tempo ocioso): o que postar primeiro
 │   ├── autopilot.py           # loop do piloto automático (fila, agenda, cota)
 │   ├── discovery.py           # acha o vídeo que mais está bombando
 │   ├── youtube_uploader.py    # upload pela API oficial do YouTube (OAuth)

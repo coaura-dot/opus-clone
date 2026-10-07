@@ -140,8 +140,8 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     an_h = max(int(round(src_h * an_w / src_w / 2.0)) * 2, 2)
     sx, sy = src_w / an_w, src_h / an_h
     cmd = ["ffmpeg", "-v", "error", "-ss", str(max(start, 0.0)), "-i", str(source_path),
-           "-t", str(max(duration, 0.05)), "-f", "rawvideo", "-pix_fmt", "bgr24",
-           "-s", f"{an_w}x{an_h}", "-"]
+           "-t", str(max(duration, 0.05)), "-vf", f"fps={fps:.6f}",  # mesma grade de quadros do render
+           "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{an_w}x{an_h}", "-"]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:

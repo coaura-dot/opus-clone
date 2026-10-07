@@ -194,6 +194,9 @@ def main():
                 source_title = get_video_title(url)
             except Exception:
                 source_title = None
+        # dica de vocabulário pro Whisper: nomes próprios do título
+        from src import transcriber as _tr
+        _tr.set_context(source_title)
         info = video_info(source_path)
         print(f"    Duração: {info['duration']/60:.1f} min | "
               f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")

@@ -86,6 +86,41 @@ def _group_into_segments(words: list) -> list:
     ]
 
 
+# melhores modelos primeiro: se algum destes estiver na MESMA pasta do
+# modelo configurado, ele é usado no lugar (só baixar o arquivo -- ver
+# README). O "small" erra muita palavra em português (pedido do usuário:
+# "tá errando muito palavras"); o large-v3-turbo erra bem menos e, com só 4
+# camadas no decodificador, roda em tempo razoável na RX 580.
+_BETTER_MODELS = [
+    "ggml-large-v3-turbo.bin", "ggml-large-v3-turbo-q8_0.bin", "ggml-large-v3-turbo-q5_0.bin",
+    "ggml-large-v3.bin", "ggml-large-v3-q5_0.bin", "ggml-medium.bin", "ggml-medium-q5_0.bin",
+]
+
+
+def best_model(model_path: str) -> str:
+    """O melhor modelo disponível na pasta do modelo configurado."""
+    from . import config
+    if not getattr(config, "WHISPERCPP_AUTO_BEST_MODEL", True):
+        return model_path
+    folder = Path(model_path).parent
+    for name in _BETTER_MODELS:
+        cand = folder / name
+        if cand.exists():
+            return str(cand)
+    return model_path
+
+
+def _dtw_preset(model_path: str) -> Optional[str]:
+    """Nome do preset de alinhamento DTW do whisper.cpp pro modelo
+    (ggml-large-v3-turbo-q5_0.bin -> large.v3.turbo)."""
+    import re
+    m = re.match(r"ggml-(tiny|base|small|medium|large-v1|large-v2|large-v3-turbo|large-v3)(\.en)?",
+                 Path(model_path).name)
+    if not m:
+        return None
+    return m.group(1).replace("-", ".") + (m.group(2) or "")
+
+
 def missing_setup(model_path: str, bin_path: str = "whisper-cli") -> Optional[str]:
     """Retorna None se o binário e o modelo do whisper.cpp existem, ou uma
     descrição curta do que está faltando. Usado por transcriber.transcribe
@@ -101,11 +136,18 @@ def missing_setup(model_path: str, bin_path: str = "whisper-cli") -> Optional[st
 def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
                language: str = "auto", threads: int = 0,
                use_gpu: bool = True, gpu_device: int = 0,
-               extra_args: Optional[list] = None) -> Transcript:
+               extra_args: Optional[list] = None, prompt: Optional[str] = None,
+               beam_size: int = 5, use_dtw: bool = True) -> Transcript:
     """Transcreve via whisper.cpp. `bin_path` pode ser só o nome do
     executável (se estiver no PATH) ou o caminho completo pro
     whisper-cli.exe. `model_path` precisa apontar pra um arquivo .bin no
-    formato ggml (baixado manualmente — veja README.md)."""
+    formato ggml (baixado manualmente — veja README.md).
+
+    `prompt`: texto de contexto (título do vídeo, nome do canal) -- o Whisper
+    acerta mais nomes próprios e gírias que aparecem nele.
+    `use_dtw`: tempo de cada palavra pelo alinhamento DTW (bem mais preciso
+    que o padrão do whisper.cpp, que deixava a legenda adiantada/atrasada)."""
+    model_path = best_model(model_path)
     print(f"[2/6] Transcrevendo áudio (whisper.cpp — modelo '{Path(model_path).name}')...")
 
     resolved_bin = shutil.which(bin_path) or (bin_path if Path(bin_path).exists() else None)
@@ -132,16 +174,30 @@ def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
         # silenciosamente 0 por 8, contrariando o próprio comentário do
         # config.py.
         n_threads = threads if threads else (os.cpu_count() or 8)
-        cmd = [
+        base = [
             resolved_bin, "-m", str(model_path), "-f", wav16k,
             "-l", language, "-t", str(n_threads),
             "-ml", "1", "-sow",         # 1 "segmento" por palavra -> timestamp por palavra
             "-ojf", "-of", out_prefix,  # JSON completo, com offsets em ms
         ]
         if not use_gpu:
-            cmd.append("-ng")           # força CPU mesmo se o binário tiver Vulkan/CUDA
+            base.append("-ng")          # força CPU mesmo se o binário tiver Vulkan/CUDA
         if extra_args:
-            cmd += extra_args
+            base += extra_args
+        quality = []
+        if beam_size and beam_size > 1:
+            quality += ["-bs", str(beam_size)]
+        if prompt:
+            quality += ["--prompt", prompt[:220]]
+        dtw = _dtw_preset(model_path) if use_dtw else None
+        # tentativas: um whisper-cli mais antigo pode não conhecer algum
+        # parâmetro (sai com erro na hora) -- tira os opcionais aos poucos
+        # em vez de falhar a transcrição. DTW não funciona junto com flash
+        # attention, daí o -nfa.
+        attempts = []
+        if dtw:
+            attempts += [base + quality + ["-dtw", dtw, "-nfa"], base + quality + ["-dtw", dtw]]
+        attempts += [base + quality, base]
 
         # seleção de GPU no backend Vulkan do whisper.cpp é feita por
         # variável de ambiente, não por flag de linha de comando (o
@@ -151,8 +207,17 @@ def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
         if use_gpu and gpu_device:
             env["GGML_VK_VISIBLE_DEVICES"] = str(gpu_device)
 
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
         json_path = Path(out_prefix + ".json")
+        for cmd in attempts:
+            if json_path.exists():
+                json_path.unlink()
+            proc = subprocess.run(cmd, capture_output=True, text=True, env=env,
+                                  encoding="utf-8", errors="replace")
+            if proc.returncode == 0 and json_path.exists():
+                break
+            if cmd is not attempts[-1]:
+                print("    [aviso] whisper.cpp recusou parâmetros extras (versão antiga?) -- "
+                      "tentando de novo com menos opções")
         if proc.returncode != 0 or not json_path.exists():
             raise RuntimeError(
                 f"whisper.cpp falhou (código {proc.returncode}). Saída:\n"
@@ -169,7 +234,25 @@ def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
         off = item.get("offsets", {})
         start = off.get("from", 0) / 1000.0
         end = max(off.get("to", 0) / 1000.0, start + 0.05)
+        # DTW: tempo do 1º token de texto da palavra (t_dtw em centésimos
+        # de segundo; -1 = sem DTW)
+        for tok in item.get("tokens") or []:
+            ttext = (tok.get("text") or "").strip()
+            if not ttext or ttext.startswith("[_") or ttext.startswith("<|"):
+                continue
+            t_dtw = tok.get("t_dtw", -1)
+            if isinstance(t_dtw, (int, float)) and t_dtw >= 0:
+                dstart = t_dtw / 100.0
+                if abs(dstart - start) < 1.5:  # proteção contra valor absurdo
+                    start = dstart
+                    end = max(end, start + 0.05)
+            break
         words.append(Word(start=start, end=end, text=text))
+    # ordem e sem sobreposição (o DTW mexe só no começo de cada palavra)
+    words.sort(key=lambda w: w.start)
+    for a, b in zip(words, words[1:]):
+        if a.end > b.start:
+            a.end = max(b.start, a.start + 0.05)
 
     segments = _group_into_segments(words)
     detected_lang = data.get("result", {}).get("language", language)

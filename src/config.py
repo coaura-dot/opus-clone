@@ -18,6 +18,13 @@ TARGET_HEIGHT = 1920
 MIN_CLIP_DURATION = 40
 MAX_CLIP_DURATION = 180
 IDEAL_CLIP_DURATION = 40             # não usado pela seleção por gancho (só pelo teste)
+# seleção de cortes: recado do canal/patrocínio/abertura perde nota (por
+# padrão encontrado), e clipe mais longo que SELECT_PREFER_MAX_SECONDS perde
+# um pouco por segundo -- continua podendo ir até MAX_CLIP_DURATION quando o
+# assunto pede, mas entre dois cortes bons o mais enxuto ganha
+SELECT_PROMO_PENALTY = 8.0
+SELECT_PREFER_MAX_SECONDS = 90.0
+SELECT_LONG_PENALTY_PER_SECOND = 0.06
 HOOK_MIN_SCORE = 2.0                 # pontuação mínima de uma frase pra contar como gancho
 HOOK_CONTEXT_MAX_SECONDS = 30.0      # até quanto antes do gancho o clipe pode começar (contexto)
 HOOK_PAYOFF_MIN_SECONDS = 12.0       # mínimo de "resposta" depois do gancho antes de poder fechar
@@ -61,6 +68,13 @@ WHISPERCPP_THREADS = 0              # 0 = deixa o whisper.cpp decidir (usa os n�
                                      # nas partes que não rodam na GPU, ex: carregar áudio)
 WHISPERCPP_USE_GPU = True           # False força CPU mesmo com um build com Vulkan/CUDA
 WHISPERCPP_GPU_DEVICE = 0           # índice da GPU, se você tiver mais de uma
+# Precisão da legenda (pedido do usuário: "tá errando muito palavras" e
+# "muito dessincronizada"):
+WHISPERCPP_AUTO_BEST_MODEL = True   # usa sozinho o melhor modelo que estiver na pasta do
+                                    # WHISPERCPP_MODEL (ex.: ggml-large-v3-turbo-q5_0.bin) -- ver README
+WHISPERCPP_BEAM_SIZE = 5            # busca em feixe: erra menos palavra (1 = mais rápido)
+WHISPERCPP_DTW = True               # tempo de cada palavra por alinhamento DTW (mais preciso)
+CAPTION_SNAP_TO_SPEECH = True       # acerta o tempo das palavras pelo áudio (começo/fim de fala)
 
 # --- Encode de vídeo (GPU/CPU) ---
 # "auto"  = detecta e testa sozinho o melhor disponível (recomendado)
@@ -1001,6 +1015,11 @@ AUTOPILOT_QUEUE_TARGET = 30             # mantém até N clipes prontos esperand
 # postado -- propaganda/recado do canal, abertura do episódio, fala
 # arrastada, vídeo escuro/congelado. A fila posta sempre a maior nota primeiro.
 AUTOPILOT_MIN_QUALITY = 45
+# nota de viralidade (src/virality.py), medida no tempo ocioso; a fila posta
+# a maior nota final (60% viralidade + 40% qualidade). Pesos de cada item
+# (vazio = padrão: gancho 22, picos 12, ritmo 12, conteudo 16, fechamento 8,
+# imagem 12, duracao 10, titulo 8). Ex.: {"gancho": 30} dá mais peso ao começo.
+VIRAL_WEIGHTS = {}
 AUTOPILOT_POSTS_PER_DAY = 24            # meta: 1 por hora. O limite real sai da cota (YOUTUBE_DAILY_QUOTA)
 AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # o intervalo real espalha o limite do dia pela janela toda
 AUTOPILOT_POST_HOURS = (0, 24)          # posta o dia todo (ex.: (9, 23) = só das 9h às 23h)

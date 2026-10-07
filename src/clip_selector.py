@@ -857,9 +857,18 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         hooks = ranked_hooks  # vídeo sem gancho claro: usa os melhores que houver
     hooks = hooks[:max(n_clips * 8, 24)]
 
+    from .quality import _PROMO, _OPENING, _hits
+    promo_w = getattr(config, "SELECT_PROMO_PENALTY", 8.0)
+    long_after = getattr(config, "SELECT_PREFER_MAX_SECONDS", 90.0)
+    long_w = getattr(config, "SELECT_LONG_PENALTY_PER_SECOND", 0.06)
+
     candidates: List[ClipCandidate] = []
     for h_score, h in hooks:
         hook_t = sentences[h]["start"]
+        # gancho que é recado do canal ("segue a gente no Spotify") não é gancho
+        # -- achado real: virou clipe e foi postado
+        if _hits(_PROMO, sentences[h]["text"]):
+            continue
 
         # ETAPA 1: contexto — começo do assunto em que o gancho está
         start_idx, clean_start = h, clean_start_at(h)
@@ -916,7 +925,11 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
                 if weak_best is None or strength(k) > weak_best[0]:
                     weak_best = (strength(k), k)
                 continue
-            sig = (sentences[k + 1]["start"] - end_t if has_next else 0.0) + lexical_scores[k]
+            # lexical_scores tem uma posição a menos (fronteira ENTRE frases):
+            # a última frase do bloco não tem -- achado real: "list index out
+            # of range" derrubava o bloco inteiro do vídeo longo
+            gap = (sentences[k + 1]["start"] - end_t) if has_next else 0.0
+            sig = gap + (lexical_scores[k] if k < len(lexical_scores) else 0.0)
             if fallback is None or sig > fallback[0]:
                 fallback = (sig, k)
         if end_idx is None and weak_best is not None:
@@ -954,6 +967,14 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
             score += config.TOPIC_BOUNDARY_BONUS * 0.5
         if end_is_boundary:
             score += config.TOPIC_BOUNDARY_BONUS * 0.5
+        # recado do canal / patrocínio / abertura do episódio dentro do trecho
+        head = " ".join(text.split()[:45])
+        score -= min(len(_hits(_PROMO, text)), 3) * promo_w
+        if _hits(_OPENING, head):
+            score -= promo_w
+        # Shorts curtos seguram mais gente até o fim: dentro da faixa
+        # permitida, cada segundo além de SELECT_PREFER_MAX_SECONDS custa um pouco
+        score -= max(dur - long_after, 0.0) * long_w
 
         candidates.append(ClipCandidate(start=start_t, end=end_t, text=text,
                                          score=score, title="",

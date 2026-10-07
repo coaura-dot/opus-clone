@@ -969,7 +969,7 @@ class _FaceActivityTracker:
 
 
 def _open_ffmpeg_reader(source_path: str, start: float, duration: float,
-                         src_w: int, src_h: int) -> subprocess.Popen:
+                         src_w: int, src_h: int, fps: Optional[float] = None) -> subprocess.Popen:
     """Processo ffmpeg que decodifica (não recodifica) apenas o trecho
     [start, start+duration] do vídeo original e envia os frames crus (BGR)
     via pipe. -ss antes de -i faz o ffmpeg buscar rapidamente a keyframe
@@ -979,10 +979,15 @@ def _open_ffmpeg_reader(source_path: str, start: float, duration: float,
         "ffmpeg", "-v", "error",
         "-ss", str(max(start, 0.0)), "-i", str(source_path),
         "-t", str(max(duration, 0.05)),
-        "-f", "rawvideo", "-pix_fmt", "bgr24",
-        "-s", f"{src_w}x{src_h}",
-        "-",
     ]
+    if fps:
+        # taxa CONSTANTE igual à do vídeo final. Achado real: fonte com
+        # quadros por segundo variável (VFR, "29.6fps") saía em 30 quadros/s
+        # da fonte enquanto o vídeo final era montado a 29.6 -- a imagem
+        # escorregava ~1s a cada minuto em relação ao áudio e à legenda
+        # (medido: quase 3s de atraso no fim de um clipe de 28s).
+        cmd += ["-vf", f"fps={fps:.6f}"]
+    cmd += ["-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{src_w}x{src_h}", "-"]
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
@@ -1389,7 +1394,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             plan = None
     full_bounds = (0, 0, src_w, src_h)
 
-    reader = _open_ffmpeg_reader(source_path, start, duration, src_w, src_h)
+    reader = _open_ffmpeg_reader(source_path, start, duration, src_w, src_h, fps)
     writer = _open_ffmpeg_writer(output_path, out_w, out_h, fps, audio_path,
                                   ass_path, fonts_dir, force_cpu=force_cpu)
 
