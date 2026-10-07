@@ -212,21 +212,22 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah | canais acompanhados |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, PrimoCast | canais acompanhados |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
-| `AUTOPILOT_MAX_AGE_DAYS` | 7 | só vídeos publicados há até N dias |
+| `AUTOPILOT_MIN_VIEWS` | 100000 | só vídeos com pelo menos N views |
+| `AUTOPILOT_MAX_AGE_DAYS` | 0 | 0 = qualquer idade; N = só vídeos de até N dias |
 | `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
-| `AUTOPILOT_POSTS_PER_DAY` | 6 | limitado pela cota da API |
-| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 120 | espaço entre postagens |
-| `AUTOPILOT_POST_HOURS` | (9, 23) | horário em que posta (fora dele só produz) |
-| `AUTOPILOT_QUEUE_TARGET` | 8 | clipes prontos esperando na fila |
+| `AUTOPILOT_POSTS_PER_DAY` | 24 | meta; o limite real sai da cota (`YOUTUBE_DAILY_QUOTA`: 10.000 = 6/dia, 40.000 = 24/dia) |
+| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha o limite do dia pela janela (6/dia em 24h = 1 a cada 4h) |
+| `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
+| `AUTOPILOT_QUEUE_TARGET` | 30 | clipes prontos esperando na fila |
 | `YOUTUBE_PRIVACY` | "public" | "public", "unlisted" ou "private" |
 | `AUTOPILOT_UPLOAD` | True | False = só gera os clipes (teste) |
 
-Como escolhe o vídeo: entre os últimos vídeos de cada canal, o que está
-ganhando **mais views por hora** desde que saiu (vídeos de até 7 dias, de 8
-min a 4 h, que não sejam live acontecendo nem já usados), variando o canal
-quando um foi usado nas últimas 24 h. A fila posta primeiro os cortes com
+Como escolhe o vídeo: entre os últimos 30 vídeos de cada canal, o de **mais
+views** (novo ou antigo, com uma leve preferência pelos mais recentes), de 8
+min a 4 h, que não seja live nem já usado, variando o canal quando um foi
+usado nas últimas 24 h. A fila posta primeiro os cortes com
 melhor pontuação.
 
 Robustez: cada vídeo é editado num processo separado com tempo máximo

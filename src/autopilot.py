@@ -234,8 +234,28 @@ def _in_post_window() -> bool:
 
 
 def daily_limit() -> int:
-    by_quota = getattr(config, "YOUTUBE_DAILY_QUOTA", 10000) // 1600
+    """Uploads por dia: o menor entre o pedido (AUTOPILOT_POSTS_PER_DAY) e o
+    que a cota da API comporta (1.600 por upload, reservando um pouco pra
+    liberação dos vídeos privados -- src/release.py)."""
+    reserve = getattr(config, "AUTOPILOT_RELEASE_PER_DAY", 3) * 50 + 100
+    by_quota = max(getattr(config, "YOUTUBE_DAILY_QUOTA", 10000) - reserve, 0) // 1600
     return max(min(getattr(config, "AUTOPILOT_POSTS_PER_DAY", 6), by_quota), 0)
+
+
+def _window_hours() -> float:
+    start, end = getattr(config, "AUTOPILOT_POST_HOURS", (0, 24))
+    return float((end - start) % 24 or 24)
+
+
+def post_gap_seconds() -> float:
+    """Intervalo entre posts: espalha o limite do dia pela janela de
+    postagem inteira (com 6/dia em 24h: 1 a cada 4h; com 24/dia: 1 por
+    hora), nunca menos que AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS. Sem isso,
+    "1 por hora" com cota de 6 postava tudo de madrugada e parava."""
+    minimum = getattr(config, "AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS", 60) * 60
+    limit = daily_limit()
+    spread = _window_hours() * 3600 / limit if limit else minimum
+    return max(minimum, spread)
 
 
 def can_post_now(state: State, ignore_schedule: bool = False) -> tuple:
@@ -247,8 +267,7 @@ def can_post_now(state: State, ignore_schedule: bool = False) -> tuple:
         return False, _next_pacific_midnight()
     if ignore_schedule:
         return True, now
-    gap = getattr(config, "AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS", 90) * 60
-    nxt = state.data.get("last_post_at", 0) + gap
+    nxt = state.data.get("last_post_at", 0) + post_gap_seconds()
     if now < nxt:
         return False, nxt
     if not _in_post_window():
@@ -383,7 +402,7 @@ def run_forever(upload: bool = True):
     log(f"  canais: {', '.join(getattr(config, 'AUTOPILOT_CHANNELS', [])) or '(nenhum)'}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
     log(f"  postagem: {'LIGADA' if upload else 'DESLIGADA (só gera os clipes)'} -- até "
-        f"{daily_limit()}/dia, 1 a cada {getattr(config, 'AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS', 90)} min, "
+        f"{daily_limit()}/dia, 1 a cada {post_gap_seconds() / 60:.0f} min, "
         f"das {getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[0]}h às "
         f"{getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[1]}h")
     log(f"  fila atual: {len(state.data['queue'])} clipe(s) | já postados: {len(state.data['posted'])}")

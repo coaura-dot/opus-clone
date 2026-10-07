@@ -981,10 +981,10 @@ AUTOPILOT_MIN_VIEWS = 100000
 AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
 AUTOPILOT_MAX_SOURCE_MINUTES = 240
 AUTOPILOT_CLIPS_PER_VIDEO = 3
-AUTOPILOT_QUEUE_TARGET = 8              # mantém até N clipes prontos esperando postagem
-AUTOPILOT_POSTS_PER_DAY = 6             # a cota grátis da API permite 6 uploads/dia
-AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 120
-AUTOPILOT_POST_HOURS = (9, 23)          # só posta entre 9h e 23h (horário do PC)
+AUTOPILOT_QUEUE_TARGET = 30             # mantém até N clipes prontos esperando postagem
+AUTOPILOT_POSTS_PER_DAY = 24            # meta: 1 por hora. O limite real sai da cota (YOUTUBE_DAILY_QUOTA)
+AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # o intervalo real espalha o limite do dia pela janela toda
+AUTOPILOT_POST_HOURS = (0, 24)          # posta o dia todo (ex.: (9, 23) = só das 9h às 23h)
 AUTOPILOT_WORKER_TIMEOUT_MINUTES = 150  # vídeo que trava na edição é abandonado
 AUTOPILOT_IDLE_MINUTES = 30             # sem vídeo novo: procura de novo depois de N min
 AUTOPILOT_MIN_FREE_GB = 5               # disco abaixo disso: apaga clipes já postados
@@ -1004,5 +1004,6 @@ YOUTUBE_PRIVACY = "public"              # "public", "unlisted" ou "private"
 YOUTUBE_CATEGORY_ID = "24"              # 24 = Entretenimento (22 = Pessoas e blogs)
 YOUTUBE_LANGUAGE = "pt-BR"
 YOUTUBE_NOTIFY_SUBSCRIBERS = True
-YOUTUBE_DAILY_QUOTA = 10000             # cota do seu projeto no Google Cloud (padrão 10.000)
+YOUTUBE_DAILY_QUOTA = 10000             # cota do seu projeto (padrão 10.000 = 6 uploads/dia).
+                                        # Liberaram mais? Ponha o valor novo: 40000 = 24/dia
 YOUTUBE_CREDENTIALS_DIR = "credentials"
