@@ -964,17 +964,20 @@ AUTOPILOT_UPLOAD = True                 # False = só gera os clipes, não posta
 # reivindicação/strike no seu canal. Aceita @nome ou o link do canal.
 AUTOPILOT_CHANNELS = [
     "@flowpodcast",
-    "@inteligencialtda",
+    "@InteligenciaLtda",
     "@podpah",
+    "@ticaracaticast",
+    "@PrimoCast",
 ]
 # Buscas no YouTube ("esta semana, mais vistos", só títulos em português)
 # pra achar vídeo bombando fora da lista acima. Vazio = só os canais.
 # Atenção: a busca traz canais que você não conhece -- confira se liberam corte.
 AUTOPILOT_SEARCHES = []
-AUTOPILOT_VIDEOS_PER_CHANNEL = 10       # últimos N vídeos de cada canal
-AUTOPILOT_CHECK_TOP = 8                 # quantos candidatos conferir a fundo por rodada
-AUTOPILOT_MAX_AGE_DAYS = 7              # só vídeos publicados há até N dias
-AUTOPILOT_MIN_VIEWS = 5000
+AUTOPILOT_VIDEOS_PER_CHANNEL = 30       # últimos N vídeos de cada canal
+AUTOPILOT_CHECK_TOP = 6                 # quantos candidatos conferir a fundo por rodada
+AUTOPILOT_MAX_AGE_DAYS = 0              # 0 = qualquer idade (só importa ter muitas views)
+AUTOPILOT_RECENCY_DECAY = 0.97          # leve preferência pelos mais novos do canal (1.0 = nenhuma)
+AUTOPILOT_MIN_VIEWS = 100000
 AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
 AUTOPILOT_MAX_SOURCE_MINUTES = 240
 AUTOPILOT_CLIPS_PER_VIDEO = 3

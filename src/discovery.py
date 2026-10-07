@@ -2,18 +2,22 @@
 Modo automático: acha o próximo vídeo pra cortar.
 
 De onde vêm os candidatos (config.py, seção "Postagem automática"):
-  - AUTOPILOT_CHANNELS: canais que você acompanha (os últimos vídeos de
-    cada um). É a fonte principal: use canais que LIBERAM cortes.
-  - AUTOPILOT_SEARCHES: buscas no YouTube filtradas por "esta semana,
-    mais vistos" -- acha vídeos bombando fora da sua lista.
+  - AUTOPILOT_CHANNELS: podcasts/youtubers famosos que você acompanha (os
+    últimos AUTOPILOT_VIDEOS_PER_CHANNEL vídeos de cada um).
+  - AUTOPILOT_SEARCHES: buscas extras no YouTube ("esta semana, mais
+    vistos").
 
-Como escolhe: o vídeo que está ganhando views MAIS RÁPIDO agora
-(views por hora desde a publicação), entre os publicados há no máximo
-AUTOPILOT_MAX_AGE_DAYS dias, com duração boa pra render cortes, que não
-seja live acontecendo, e que ainda não foi usado.
+Como escolhe: o vídeo com MAIS VIEWS (não precisa ser lançamento: um
+podcast de 2 meses atrás com 2 milhões de views rende ótimos cortes), com
+uma leve preferência pelos mais recentes do canal, variando o canal, com
+duração boa pra render cortes, que não seja live e que ainda não foi usado.
 
-Tudo pelo yt-dlp, sem chave de API e sem gastar a cota do YouTube (que
-fica toda pros uploads).
+Detalhe que importa: a listagem é pedida em inglês. Em português o YouTube
+escreve "91 mil visualizações" e o número saía 91 (achado real: nada
+passava no filtro de views). O título em português vem depois, só do
+vídeo escolhido.
+
+Tudo pelo yt-dlp, sem chave de API e sem gastar a cota do YouTube.
 """
 import re
 import time
@@ -33,12 +37,13 @@ _PT_WORDS = {"de", "do", "da", "dos", "das", "que", "não", "nao", "com", "para"
 _ES_MARKERS = re.compile(r"[ñ¿¡]|\b(el|los|las|con|una|del|muy|pero|cómo|qué)\b")
 
 
-def _ydl(flat: bool):
+def _ydl(flat: bool, lang: Optional[str] = None):
     import yt_dlp
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
-            "extractor_args": {"youtube": {"lang": ["pt"]}},
-            "ignore_no_formats_error": True, "http_headers": _HEADERS,
-            "socket_timeout": 30}
+            "ignore_no_formats_error": True, "socket_timeout": 30}
+    if lang:
+        opts["extractor_args"] = {"youtube": {"lang": [lang]}}
+        opts["http_headers"] = _HEADERS
     if flat:
         opts["extract_flat"] = "in_playlist"
     cookies = getattr(config, "YTDLP_COOKIES_FROM_BROWSER", None)
@@ -71,11 +76,11 @@ def list_channel(channel: str, n: int = 10) -> List[dict]:
         y.params["playlistend"] = n
         info = y.extract_info(_channel_videos_url(channel), download=False)
     out = []
-    for e in (info or {}).get("entries") or []:
+    for rank, e in enumerate((info or {}).get("entries") or []):
         if e and e.get("id"):
             out.append({"id": e["id"], "title": e.get("title") or "", "duration": e.get("duration"),
                         "view_count": e.get("view_count"), "channel": info.get("channel") or channel,
-                        "origin": "canal"})
+                        "origin": "canal", "rank": rank})
     return out
 
 
@@ -111,7 +116,7 @@ def full_info(video_id: str) -> Optional[dict]:
 
 def _full_info(video_id: str) -> Optional[dict]:
     try:
-        with _ydl(flat=False) as y:
+        with _ydl(flat=False, lang="pt") as y:
             v = y.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
     except Exception:
         return None
@@ -145,69 +150,56 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
     cands, fails = [], 0
     for ch in getattr(config, "AUTOPILOT_CHANNELS", []):
         try:
-            cands += list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 10))
+            cands += list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 30))
         except Exception as e:
             fails += 1
             log(f"    [busca] canal {ch}: {str(e).splitlines()[0][:120]}")
     for q in getattr(config, "AUTOPILOT_SEARCHES", []):
         try:
-            cands += [c for c in search(q) if looks_portuguese(c["title"])]
+            cands += [dict(c, rank=i) for i, c in enumerate(search(q))]
         except Exception as e:
             fails += 1
             log(f"    [busca] '{q}': {str(e).splitlines()[0][:120]}")
 
+    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 100000)
+    decay = getattr(config, "AUTOPILOT_RECENCY_DECAY", 0.97)
     uniq = {}
     for c in cands:
-        if c["id"] in seen or c["id"] in uniq or not _duration_ok(c.get("duration")):
+        views = c.get("view_count")
+        if c["id"] in seen or c["id"] in uniq or not views or views < min_views:
+            continue  # sem número de views = estreia/membros/live: pula
+        if not _duration_ok(c.get("duration")):
             continue
+        # muitas views primeiro; leve preferência pelos mais novos do canal;
+        # canal já usado nas últimas 24h perde prioridade (varia a fonte)
+        c["score"] = views * (decay ** c.get("rank", 0)) * (0.6 ** recent_channels.get(c.get("channel"), 0))
         uniq[c["id"]] = c
     if not uniq:
-        if cands or not fails:
-            log("    [busca] nenhum vídeo novo nos canais/buscas configurados.")
+        if not fails or cands:
+            log(f"    [busca] nenhum vídeo ainda não usado com {min_views:,} views ou mais "
+                f"nos canais configurados.".replace(",", "."))
         return None
 
-    # pré-seleção pelas views (a listagem rápida não traz a data) e depois
-    # confere a data de cada um pra medir a velocidade de views
-    pre = sorted(uniq.values(), key=lambda c: c.get("view_count") or 0, reverse=True)
-    max_age_h = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 7) * 24
-    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 5000)
-    best, best_score = None, -1.0
-    for c in pre[:getattr(config, "AUTOPILOT_CHECK_TOP", 8)]:
+    max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 0) or 0
+    for c in sorted(uniq.values(), key=lambda c: -c["score"])[:getattr(config, "AUTOPILOT_CHECK_TOP", 6)]:
         info = full_info(c["id"])
-        if not info:
-            continue
-        if info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
-            continue
-        if info.get("availability") not in (None, "public"):
-            continue
-        if info.get("age_limit", 0) >= 18:
-            continue
-        dur = info.get("duration") or c.get("duration")
-        if dur and not _duration_ok(dur):
-            continue
-        views = info.get("view_count") or c.get("view_count") or 0
-        ts = info.get("timestamp")
-        age_h = max((time.time() - ts) / 3600.0, 1.0) if ts else None
-        if age_h is None or age_h > max_age_h or views < min_views:
-            continue
-        lang = (info.get("language") or "")[:2]
-        if lang and lang != "pt" and c["origin"] != "canal":
-            continue
-        velocity = views / max(age_h, 2.0)
-        channel = info.get("channel") or c.get("channel") or ""
-        # varia a fonte: canal já usado nas últimas 24h perde prioridade
-        score = velocity * (0.6 ** recent_channels.get(channel, 0))
-        c.update(info, title=info.get("title") or c["title"], channel=channel,
-                 view_count=views, age_hours=round(age_h, 1), velocity=round(velocity),
-                 score=score, duration=dur)
-        if score > best_score:
-            best, best_score = c, score
-    if best:
-        best["url"] = f"https://www.youtube.com/watch?v={best['id']}"
-        n = lambda v: f"{v:,}".replace(",", ".")
-        log(f"    [busca] escolhido: \"{best['title']}\" ({best['channel']}) -- "
-            f"{n(best['view_count'])} views em {best['age_hours']:.0f}h "
-            f"(~{n(best['velocity'])}/h, via {best['origin']})")
-    else:
-        log("    [busca] nenhum candidato passou nos filtros (recente/views/duração).")
-    return best
+        if info:
+            if info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
+                continue
+            if info.get("availability") not in (None, "public") or info.get("age_limit", 0) >= 18:
+                continue
+            if info.get("duration") and not _duration_ok(info["duration"]):
+                continue
+            ts = info.get("timestamp")
+            if max_age_d and ts and time.time() - ts > max_age_d * 86400:
+                continue
+            c.update(title=info.get("title") or c["title"], channel=info.get("channel") or c["channel"],
+                     timestamp=ts, view_count=info.get("view_count") or c["view_count"])
+        c["url"] = f"https://www.youtube.com/watch?v={c['id']}"
+        age = f", publicado há {(time.time() - c['timestamp']) / 86400:.0f} dias" if c.get("timestamp") else ""
+        log(f"    [busca] escolhido: \"{c['title']}\" ({c['channel']}) -- "
+            f"{c['view_count']:,} views{age}".replace(",", "."))
+        return c
+    log("    [busca] os candidatos com mais views não passaram nos filtros (live/idade/duração); "
+        "tento de novo depois.")
+    return None
