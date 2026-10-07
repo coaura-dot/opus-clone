@@ -156,6 +156,10 @@ crédito do vídeo original e da música.
   lista (`AUTOPILOT_CHANNELS` em `src/config.py`), corta, posta espaçado e
   repete até você fechar a janela ou desligar o PC. Mantém o PC acordado
   enquanto roda. Se desligar no meio, ao abrir de novo continua de onde parou.
+  Se o programa cair por algum erro, o `.bat` religa sozinho em 60 s. Ctrl+C
+  na janela para na hora (inclusive no meio de uma edição): **não aperte
+  Ctrl+C pra copiar o log** sem ter selecionado o texto antes. O log inteiro
+  também fica em `autopilot_data/autopilot.log`.
 - **`AUTO_CLIPPER_MENU.bat`** -- menu: colar um link (ou arquivo do PC) e
   postar os cortes na hora, conectar o canal, ver a fila e o que já foi postado.
 
@@ -192,6 +196,24 @@ crédito do vídeo original e da música.
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.
 
+### Nota de qualidade: o que posta e o que não posta
+
+Cada clipe pronto ganha uma nota de 0 a 100 (`src/quality.py`). A fila
+posta sempre a maior nota primeiro, e clipe abaixo de `AUTOPILOT_MIN_QUALITY`
+não é postado. O que pesa:
+
+- **descarta**: recado do próprio canal ou patrocínio ("segue a gente no
+  Spotify", "se inscreve", "cupom", "link na descrição") e vídeo escuro ou
+  congelado;
+- **tira nota**: abertura/encerramento do episódio, fala arrastada, clipe
+  longo demais (mais de 2,5 min), pouco rosto em quadro;
+- **dá nota**: gancho forte no começo (pergunta, "nunca", "ninguém",
+  "dinheiro", "polícia"...), ritmo de fala bom, duração de 25-75 s, trecho
+  que se destacou no episódio, rosto em quadro.
+
+O log mostra a nota e o motivo de cada clipe; `python autopilot.py --status`
+lista a fila com as notas e os últimos descartados.
+
 ### Enquanto a auditoria não sai: vídeos privados que se liberam sozinhos
 
 Pode deixar o piloto postando normalmente: os vídeos sobem privados e ficam
@@ -221,6 +243,7 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha o limite do dia pela janela (6/dia em 24h = 1 a cada 4h) |
 | `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
 | `AUTOPILOT_QUEUE_TARGET` | 30 | clipes prontos esperando na fila |
+| `AUTOPILOT_MIN_QUALITY` | 45 | nota mínima (0-100) pra um clipe ser postado; ver "Nota de qualidade" abaixo |
 | `YOUTUBE_PRIVACY` | "public" | "public", "unlisted" ou "private" |
 | `AUTOPILOT_UPLOAD` | True | False = só gera os clipes (teste) |
 
@@ -616,6 +639,7 @@ opus-clip-clone/
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
 │   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
+│   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta
 │   ├── autopilot.py           # loop do piloto automático (fila, agenda, cota)
 │   ├── discovery.py           # acha o vídeo que mais está bombando
 │   ├── youtube_uploader.py    # upload pela API oficial do YouTube (OAuth)

@@ -131,7 +131,12 @@ def _transcribe_and_score_chunk(
 
         return _ChunkResult(chunk_index, start, end, candidates=local_candidates)
     except Exception as e:
-        return _ChunkResult(chunk_index, start, end, candidates=[], error=str(e))
+        # onde quebrou (arquivo:linha), pra dar pra corrigir pelo log
+        import traceback
+        tb = traceback.extract_tb(e.__traceback__)
+        where = f" [{Path(tb[-1].filename).name}:{tb[-1].lineno} {tb[-1].name}]" if tb else ""
+        return _ChunkResult(chunk_index, start, end, candidates=[],
+                            error=f"{e.__class__.__name__}: {e}{where}")
     finally:
         try:
             if chunk_audio.exists():

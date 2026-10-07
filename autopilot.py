@@ -47,12 +47,18 @@ def _status():
     st = autopilot.State(autopilot.DATA_DIR / "state.json")
     q, posted = st.data["queue"], st.data["posted"]
     print(f"\nFila pra postar: {len(q)} clipe(s)")
-    for c in sorted(q, key=lambda c: -c.get("score", 0))[:10]:
+    for c in sorted(q, key=lambda c: (-c.get("quality", 50), -c.get("score", 0)))[:10]:
         try:
             title = json.loads(Path(c["meta"]).read_text(encoding="utf-8"))["title"]
         except (OSError, ValueError, KeyError):
             title = Path(c["video"]).name
-        print(f"  • [{c.get('score', 0):.1f}] {title}")
+        nota = f"nota {c['quality']}" if "quality" in c else "sem nota ainda"
+        print(f"  • [{nota}] {title}")
+    rej = st.data.get("rejected", [])
+    if rej:
+        print(f"\nDescartados pela nota de qualidade: {len(rej)} (últimos 5)")
+        for r in rej[-5:]:
+            print(f"  • [nota {r['quality']}] {r['title']} -- {', '.join(r.get('reasons', []))}")
     print(f"\nPostados: {len(posted)} (hoje: {st.uploads_today()}/{autopilot.daily_limit()})")
     for p in posted[-10:]:
         print(f"  • {datetime.fromtimestamp(p['at']):%d/%m %H:%M}  https://youtube.com/shorts/{p['youtube_id']}"

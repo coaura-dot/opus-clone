@@ -168,11 +168,21 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log) -> list:
     reader = threading.Thread(target=_pump, daemon=True)
     reader.start()
     timeout = getattr(config, "AUTOPILOT_WORKER_TIMEOUT_MINUTES", 150) * 60
+    deadline = time.time() + timeout
     try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        log(f"    [!] edição passou de {timeout // 60:.0f} min -- encerrando esse vídeo e seguindo.")
+        # espera em passos curtos: no Windows um wait() longo segura o Ctrl+C
+        # até a edição acabar (achado real: o piloto "desligou sozinho" logo
+        # depois de terminar um vídeo -- era um Ctrl+C apertado bem antes)
+        while proc.poll() is None:
+            if time.time() > deadline:
+                log(f"    [!] edição passou de {timeout // 60:.0f} min -- encerrando esse vídeo e seguindo.")
+                _kill_tree(proc)
+                break
+            time.sleep(1)
+    except KeyboardInterrupt:
+        log("    Ctrl+C: parando a edição em andamento...")
         _kill_tree(proc)
+        raise
     reader.join(timeout=10)
     if not results.exists():
         log(f"    [!] a edição terminou sem gerar clipes (código {proc.returncode}).")
@@ -281,8 +291,15 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
     queue = state.data["queue"]
     if not queue:
         return False
-    # melhor pontuação primeiro; entre parecidos, o mais antigo na fila
-    queue.sort(key=lambda c: (-round(c.get("score", 0)), c.get("added", 0)))
+    # clipes da fila antiga (antes da nota de qualidade): avalia agora
+    for it in list(queue):
+        if "quality" not in it and not judge(state, it, log):
+            queue.remove(it)
+    state.save()
+    if not queue:
+        return False
+    # melhor nota primeiro; entre parecidos, o mais antigo na fila
+    queue.sort(key=lambda c: (-round(c.get("quality", 50) / 5), -round(c.get("score", 0)), c.get("added", 0)))
     item = queue[0]
     if not Path(item["video"]).exists():
         log(f"    arquivo sumiu, tirando da fila: {item['video']}")
@@ -336,6 +353,34 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
 
 
 # ------------------------------------------------------------ produzir ---
+def judge(state: State, item: dict, log: Log) -> bool:
+    """Dá a nota de qualidade (src/quality.py). False = não vale postar."""
+    from . import quality
+    if "quality" in item:
+        return item["quality"] >= quality.min_quality() and not item.get("reject")
+    try:
+        q, reasons, reject = quality.assess_file(item["video"], item["meta"])
+    except Exception as e:  # avaliação nunca derruba o piloto
+        log(f"    [!] não consegui avaliar o clipe ({e.__class__.__name__}: {e}) -- fica na fila")
+        item["quality"] = 50
+        return True
+    item["quality"], item["quality_reasons"] = q, reasons
+    item["reject"] = reject
+    ok = not reject and q >= quality.min_quality()
+    try:
+        title = json.loads(Path(item["meta"]).read_text(encoding="utf-8")).get("title", "")
+    except (OSError, ValueError):
+        title = Path(item["video"]).name
+    why = f" ({', '.join(reasons)})" if reasons else ""
+    log(f"    {'✓' if ok else '✗ descartado'} nota {q}/100: \"{title}\"{why}")
+    if not ok:
+        state.data.setdefault("rejected", []).append(
+            {"video": item["video"], "title": title, "quality": q, "reasons": reasons,
+             "source_id": item.get("source_id"), "at": time.time()})
+        state.data["rejected"] = state.data["rejected"][-200:]
+    return ok
+
+
 def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optional[int] = None) -> int:
     vid = source["id"]
     n_clips = n_clips or getattr(config, "AUTOPILOT_CLIPS_PER_VIDEO", 3)
@@ -345,16 +390,20 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
     if not clips:
         state.mark_source(vid, "failed", title=source.get("title"), channel=source.get("channel"))
         return 0
+    kept = 0
     for c in clips:
         no_music = Path(c["video"]).with_name(Path(c["video"]).stem + "_sem_musica.mp4")
-        state.data["queue"].append({"video": c["video"], "meta": c["meta"], "score": c.get("score", 0),
-                                    "source_id": vid, "added": time.time(),
-                                    "video_sem_musica": str(no_music) if no_music.exists() else None})
+        item = {"video": c["video"], "meta": c["meta"], "score": c.get("score", 0),
+                "source_id": vid, "added": time.time(),
+                "video_sem_musica": str(no_music) if no_music.exists() else None}
+        if judge(state, item, log):
+            state.data["queue"].append(item)
+            kept += 1
     state.mark_source(vid, "done", title=source.get("title"), channel=source.get("channel"),
-                      clips=len(clips))
-    log(f"    {len(clips)} clipe(s) prontos em {(time.time() - t0) / 60:.0f} min -- "
+                      clips=kept)
+    log(f"    {kept} de {len(clips)} clipe(s) aprovados pra postar em {(time.time() - t0) / 60:.0f} min -- "
         f"fila: {len(state.data['queue'])}")
-    return len(clips)
+    return kept
 
 
 # ------------------------------------------------------------ loop ---
@@ -467,7 +516,7 @@ def run_forever(upload: bool = True):
                 _sleep_until(time.time() + 1800, log,
                              "fila cheia e postagem indisponível (confira o login do YouTube)")
         except KeyboardInterrupt:
-            log("  Piloto automático desligado.")
+            log("  Piloto automático desligado (Ctrl+C).")
             keep_awake(False)
             return
         except Exception as e:  # nada derruba o loop

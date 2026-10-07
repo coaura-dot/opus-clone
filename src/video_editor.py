@@ -203,7 +203,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     write_post_meta(str(final_path.with_suffix(".meta.json")), candidate.text,
                     load_track_credit(music_track), source_title, source_url, title=title,
                     extra={"start": round(candidate.start, 2), "end": round(candidate.end, 2),
-                           "score": round(float(getattr(candidate, "score", 0.0)), 2)})
+                           "score": round(float(getattr(candidate, "score", 0.0)), 2),
+                           # pra nota de qualidade do piloto (src/quality.py)
+                           "text": candidate.text, "hook": getattr(candidate, "hook_text", "") or ""})
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")

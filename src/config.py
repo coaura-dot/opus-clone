@@ -997,6 +997,10 @@ AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes 
 AUTOPILOT_MAX_SOURCE_MINUTES = 240
 AUTOPILOT_CLIPS_PER_VIDEO = 3
 AUTOPILOT_QUEUE_TARGET = 30             # mantém até N clipes prontos esperando postagem
+# nota de qualidade (src/quality.py, 0-100): abaixo disso o clipe NÃO é
+# postado -- propaganda/recado do canal, abertura do episódio, fala
+# arrastada, vídeo escuro/congelado. A fila posta sempre a maior nota primeiro.
+AUTOPILOT_MIN_QUALITY = 45
 AUTOPILOT_POSTS_PER_DAY = 24            # meta: 1 por hora. O limite real sai da cota (YOUTUBE_DAILY_QUOTA)
 AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # o intervalo real espalha o limite do dia pela janela toda
 AUTOPILOT_POST_HOURS = (0, 24)          # posta o dia todo (ex.: (9, 23) = só das 9h às 23h)
