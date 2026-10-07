@@ -1073,7 +1073,7 @@ def _open_ffmpeg_writer(output_path: str, width: int, height: int, fps: float,
     return subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def _blurred_cover(img, out_w: int, out_h: int) -> np.ndarray:
+def _blurred_cover(img, out_w: int, out_h: int, soft: bool = False) -> np.ndarray:
     """Fundo desfocado/escurecido que cobre o quadro inteiro (escala "cover"),
     usado atrás do vídeo quando ele não preenche o 9:16 (layout fit e close
     afastado)."""
@@ -1093,31 +1093,44 @@ def _blurred_cover(img, out_w: int, out_h: int) -> np.ndarray:
     # ~50x mais rápido.
     sigma = getattr(config, "FALLBACK_BG_BLUR_SIGMA", 25.0)
     down = 6
+    if soft:
+        # cartela de texto: letra grande ainda dá pra ler num borrão normal e
+        # aparecia "fantasma" atrás do texto de verdade
+        sigma, down = sigma * 3.0, 12
     small_w, small_h = max(out_w // down, 8), max(out_h // down, 8)
     small = cv2.resize(bg, (small_w, small_h), interpolation=cv2.INTER_AREA)
     small = cv2.GaussianBlur(small, (0, 0), sigmaX=max(sigma / down, 1.0))
     bg = cv2.resize(small, (out_w, out_h), interpolation=cv2.INTER_LINEAR)
     darken = float(np.clip(getattr(config, "FALLBACK_BG_DARKEN", 0.55), 0.0, 1.0))
+    if soft:
+        darken *= 0.6
     return (bg.astype(np.float32) * darken).astype(np.uint8)
 
 
 def _compose_tracked_frame(frame, smoothed_x: float, smoothed_y: float,
                             crop_w: int, crop_h: int, src_w: int, src_h: int,
-                            out_w: int, out_h: int, zoom_factor: float) -> np.ndarray:
+                            out_w: int, out_h: int, zoom_factor: float,
+                            bounds: Optional[tuple] = None) -> np.ndarray:
     """Modo "seguindo o rosto": recorta uma janela 9:16 centrada no rosto
     rastreado (com headroom configurável) e reamostra para a resolução de
     saída. `zoom_factor` > 1 aperta ainda mais o crop (usado nos "zoom
-    punches" de ênfase)."""
-    cur_crop_w = max(min(int(crop_w / zoom_factor), src_w), 2)
-    cur_crop_h = max(min(int(crop_h / zoom_factor), src_h), 2)
+    punches" de ênfase). `bounds` (x0, y0, x1, y1): área útil do quadro (sem
+    as barras pretas de cinema, ver src/shot_plan.py) -- o recorte não sai dela."""
+    bx0, by0, bx1, by1 = bounds if bounds is not None else (0, 0, src_w, src_h)
+    bw, bh = bx1 - bx0, by1 - by0
+    if crop_h > bh or crop_w > bw:  # área útil menor que o recorte: encolhe mantendo 9:16
+        k = min(bh / max(crop_h, 1), bw / max(crop_w, 1))
+        crop_w, crop_h = crop_w * k, crop_h * k
+    cur_crop_w = max(min(int(crop_w / zoom_factor), bw), 2)
+    cur_crop_h = max(min(int(crop_h / zoom_factor), bh), 2)
 
-    x0 = int(np.clip(smoothed_x - cur_crop_w / 2, 0, max(src_w - cur_crop_w, 0)))
+    x0 = int(np.clip(smoothed_x - cur_crop_w / 2, bx0, max(bx1 - cur_crop_w, bx0)))
     # posiciona verticalmente para que o rosto rastreado (smoothed_y) caia
     # em HEADROOM_RATIO da altura do crop, em vez de sempre exibir a altura
     # inteira da fonte (o que antes tornava HEADROOM_RATIO inofensivo: com
     # crop_h == src_h, y0 era sempre 0 e a config nunca fazia diferença).
     y0 = int(np.clip(smoothed_y - cur_crop_h * config.HEADROOM_RATIO,
-                      0, max(src_h - cur_crop_h, 0)))
+                      by0, max(by1 - cur_crop_h, by0)))
 
     cropped = frame[y0:y0 + cur_crop_h, x0:x0 + cur_crop_w]
     if cropped.shape[0] == 0 or cropped.shape[1] == 0:
@@ -1199,6 +1212,19 @@ def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int,
     src_fy1 = fy1 - fy0
     if src_fy1 > 0:
         canvas[fy0:fy1, :] = fg[0:src_fy1, :]
+    return canvas
+
+
+def _compose_card_frame(card, out_w: int, out_h: int) -> np.ndarray:
+    """Cartela de texto/print: a imagem INTEIRA, o maior possível sem cortar
+    (cabe na largura ou na altura), sobre um fundo bem borrado e escuro."""
+    h, w = card.shape[:2]
+    canvas = _blurred_cover(card, out_w, out_h, soft=True)
+    scale = min(out_w / max(w, 1), out_h / max(h, 1))
+    fw, fh = max(int(round(w * scale)), 1), max(int(round(h * scale)), 1)
+    fg = cv2.resize(card, (fw, fh), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
+    x0, y0 = (out_w - fw) // 2, (out_h - fh) // 2
+    canvas[y0:y0 + fh, x0:x0 + fw] = fg
     return canvas
 
 
@@ -1348,6 +1374,21 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     cut_jump_threshold = getattr(config, "CUT_JUMP_RATIO", 0.35) * crop_w
     cut_confirm_tolerance = getattr(config, "CUT_CONFIRM_RATIO", 0.15) * crop_w
 
+    # plano por cena (src/shot_plan.py): cortes, barras pretas e o layout de
+    # cada plano do vídeo original decididos ANTES de renderizar. Só os planos
+    # de conversa (2+ pessoas) usam o rastreamento quadro a quadro abaixo.
+    plan = None
+    if getattr(config, "SHOT_PLAN_ENABLED", True):
+        from . import shot_plan
+        try:
+            plan = shot_plan.build_plan(source_path, start, duration, src_w, src_h, fps,
+                                        cascades.get("yunet"))
+        except Exception as e:  # nunca derruba o clipe: volta pro modo quadro a quadro
+            print(f"    [aviso] análise das cenas falhou ({e.__class__.__name__}: {e}); "
+                  "usando o rastreamento quadro a quadro")
+            plan = None
+    full_bounds = (0, 0, src_w, src_h)
+
     reader = _open_ffmpeg_reader(source_path, start, duration, src_w, src_h)
     writer = _open_ffmpeg_writer(output_path, out_w, out_h, fps, audio_path,
                                   ass_path, fonts_dir, force_cpu=force_cpu)
@@ -1434,39 +1475,43 @@ def render_vertical_clip(source_path: str, start: float, end: float,
             frame = np.frombuffer(raw, dtype=np.uint8).reshape(src_h, src_w, 3)
             t = out_idx / fps  # tempo no vídeo FINAL (= tempo do áudio final)
             frames_since_cut += 1
+            shot = plan.shot_at(frame_idx) if plan is not None else None
+            legacy = shot is None or shot.kind == "multi"  # rastreamento quadro a quadro
+            bounds = shot.bounds if shot is not None else full_bounds
             tracker.sample_motion(frame, t)
             if screen_tracker is not None:
                 screen_tracker.sample_activity(frame)
 
             # --- detecção de corte de câmera ---
             _cut_this_frame = False
-            if _cut_detect_enabled:
+            if plan is not None:
+                _cut_this_frame = plan.is_cut(frame_idx)  # já achado na pré-análise
+            elif _cut_detect_enabled:
                 _dw = _cut_detect_w
                 _dh = max(int(src_h * _dw / src_w), 1)
                 _small = cv2.resize(frame, (_dw, _dh), interpolation=cv2.INTER_AREA)
                 _gray = cv2.cvtColor(_small, cv2.COLOR_BGR2GRAY).astype(np.float32)
                 if _prev_cut_gray is not None:
-                    _diff = float(np.mean(np.abs(_gray - _prev_cut_gray)))
-                    if _diff > _cut_threshold:
-                        _cut_this_frame = True
-                        _burst_remaining = max(_burst_remaining, _cut_burst_total)
-                        mode_hold_remaining = 0  # permite mudar de modo imediatamente
-                        # descarta todos os slots do tracker — as posições
-                        # acumuladas são do enquadramento anterior e fariam
-                        # choose_active() retornar a posição errada (ex: mão)
-                        # no novo enquadramento.
-                        tracker.on_scene_cut()
-                        face_in_shot = False
-                        need_snap = True
-                        face_confidence = 0.0
-                        frames_since_cut = 0
-                        subject_face_frac = None
-                        group_shot = False
-                        target_x = float(src_w / 2)
-                        target_y = float(src_h / 2)
+                    _cut_this_frame = float(np.mean(np.abs(_gray - _prev_cut_gray))) > _cut_threshold
                 _prev_cut_gray = _gray
+            if _cut_this_frame:
+                _burst_remaining = max(_burst_remaining, _cut_burst_total)
+                mode_hold_remaining = 0  # permite mudar de modo imediatamente
+                # descarta todos os slots do tracker — as posições
+                # acumuladas são do enquadramento anterior e fariam
+                # choose_active() retornar a posição errada (ex: mão)
+                # no novo enquadramento.
+                tracker.on_scene_cut()
+                face_in_shot = False
+                need_snap = True
+                face_confidence = 0.0
+                frames_since_cut = 0
+                subject_face_frac = None
+                group_shot = False
+                target_x = float(src_w / 2)
+                target_y = float(src_h / 2)
 
-            _should_detect = (
+            _should_detect = legacy and (
                 frame_idx % config.FACE_DETECT_EVERY_N_FRAMES == 0
                 or _cut_this_frame
                 or _burst_remaining > 0
@@ -1646,7 +1691,10 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     reference_forced = screen_region is not None
 
             prev_mode = mode
-            if reference_forced:
+            if not legacy:
+                # plano decidido na pré-análise: um layout só do começo ao fim
+                mode = "face" if shot.kind == "single" else "wide"
+            elif reference_forced:
                 mode = "screen"
             elif screen_tracker is not None:
                 # MODO REACT (item 17, pedido do usuário): decide entre focar
@@ -1764,7 +1812,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 if m == "face":
                     return _compose_tracked_frame(
                         frame, smoothed_x, smoothed_y, dyn_crop_w, dyn_crop_h, src_w, src_h,
-                        out_w, out_h, zoom_factor,
+                        out_w, out_h, zoom_factor, bounds=bounds,
                     )
                 # modo "wide": se já detectamos algum rosto neste clipe, mantém
                 # o crop NORMAL de rosto ancorado na última posição conhecida
@@ -1777,7 +1825,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                         and last_detected_xy is not None and face_in_shot):
                     return _compose_tracked_frame(
                         frame, smoothed_x, smoothed_y, dyn_crop_w, dyn_crop_h, src_w, src_h,
-                        out_w, out_h, 1.0,
+                        out_w, out_h, 1.0, bounds=bounds,
                     )
                 if not face_in_shot:
                     # plano SEM rosto (cartão de texto, print, gráfico): mostra
@@ -1785,12 +1833,16 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     # Ken Burns (até +35%) somado ao WIDE_FIT_ZOOM cortava o
                     # texto dos dois lados (achado num vídeo real de
                     # comentário com cartões de texto entre as falas)
-                    return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
+                    return _compose_wide_frame(content, cw, ch, out_w, out_h,
                                                fit_zoom=1.0)
                 push = min(1.0 + push_rate * wide_frames, push_max)
                 push *= 1.0 + (fx_zoom - 1.0) * 0.6  # momentos-chave também no plano aberto
-                return _compose_wide_frame(frame, src_w, src_h, out_w, out_h,
-                                           push=push, focus_x=smoothed_x)
+                return _compose_wide_frame(content, cw, ch, out_w, out_h,
+                                           push=push, focus_x=smoothed_x - bounds[0])
+
+            # área útil (sem as barras pretas de cinema) pro layout de quadro inteiro
+            content = frame[bounds[1]:bounds[3], bounds[0]:bounds[2]]
+            ch, cw = content.shape[:2]
 
             # Ken Burns: conta o tempo no plano aberto atual; zera ao sair
             # dele ou num corte de câmera (plano novo começa sem zoom)
@@ -1807,6 +1859,22 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 rz = min(rz * fx_zoom, getattr(config, "FX_ZOOM_TOTAL_MAX", 1.28))
                 rz = 1.0 + (rz - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
                 out_frame = react_plan.compose(frame, frame_idx / fps, out_w, out_h, rz)
+            elif not legacy:
+                if shot.kind == "text":
+                    # cartela/print: o texto inteiro (ampliado até a largura
+                    # dele, quando dá), sem cortar nada
+                    card = content
+                    if shot.text_x is not None:
+                        card = frame[bounds[1]:bounds[3], shot.text_x[0]:shot.text_x[1]]
+                    out_frame = _compose_card_frame(card, out_w, out_h)
+                else:
+                    px, py = shot.pos(frame_idx)
+                    pch = shot.crop_h
+                    out_frame = _compose_tracked_frame(
+                        frame, px, py, pch * out_w / out_h, pch, src_w, src_h, out_w, out_h,
+                        zoom_factor if shot.kind == "single" else 1.0, bounds=bounds,
+                    )
+                blend_remaining = 0
             elif blend_remaining > 0:
                 # transição suave (crossfade) entre os dois modos envolvidos
                 # na troca, pra não dar um "pulo" visual — generaliza o

@@ -96,6 +96,21 @@ SCENE_CUT_THRESHOLD = 28.0        # diff médio de pixel (0-255) para considerar
 SCENE_CUT_DETECT_WIDTH = 160      # largura do frame downscalado para a comparação (barato)
 SCENE_CUT_BURST_FRAMES = 20       # frames em modo "detecta todo frame" após corte detectado
 
+# --- Plano por cena (src/shot_plan.py) ---
+# Antes de renderizar, o programa analisa o trecho do clipe, acha os cortes
+# do vídeo original e decide UM layout por plano: rosto (recorte de tamanho
+# fixo, câmera parada ou com caminho suave), conversa (rastreia quem fala),
+# sem rosto (tela cheia) ou cartela de texto (quadro inteiro). Feito pra
+# vídeos com muito corte, zoom e câmera na mão (vlog, documentário, cortes
+# editados). Também tira as barras pretas de cinema do recorte.
+SHOT_PLAN_ENABLED = True
+SHOT_MIN_SECONDS = 0.4            # plano mais curto que isso (flash, chicote) junta com o seguinte
+SHOT_PATH_SMOOTH_SECONDS = 0.5    # suavização do caminho quando o rosto anda no plano
+SHOT_LOCK_X = 0.15                # rosto anda menos que isso (fração da largura do recorte): câmera parada
+SHOT_LOCK_Y = 0.10
+LETTERBOX_CROP_ENABLED = True     # tira as barras pretas (e a legenda do vídeo original dentro delas)
+LETTERBOX_DARK_LEVEL = 12         # brilho (0-255) até onde uma linha conta como barra preta (preto de verdade)
+
 # --- Reenquadramento (crop 9:16 seguindo o rosto) ---
 FACE_DETECT_EVERY_N_FRAMES = 4
 # Segundo passe de detecção (menos downscale), só tentado quando o passe

@@ -473,6 +473,28 @@ arquitetura já foi pensada para isso.
 - **troca de câmera** da fonte: o enquadramento muda junto, em corte seco
   (sem fade).
 
+**Plano por cena** (`src/shot_plan.py`): antes de renderizar, o programa
+analisa o trecho do clipe, acha os cortes do vídeo original e decide **um
+layout por plano**, do começo ao fim dele. Feito pra vídeos com muito corte,
+zoom e câmera na mão (vlog, documentário, cortes já editados):
+
+- **um rosto**: o recorte tem tamanho fixo no plano inteiro, então o zoom que
+  a câmera original faz aparece como está, sem "zoom duplo". A câmera do
+  programa fica parada se a pessoa mexe pouco. Se a pessoa anda pelo quadro,
+  ela segue um caminho suave, sem atraso;
+- **conversa** (2+ pessoas que não cabem num recorte): rastreia quem está
+  falando, como antes;
+- **sem rosto** (b-roll: paisagem, carro, aeroporto): tela cheia, parado, no
+  ponto com mais detalhe. Antes saía como uma faixa fina sobre fundo borrado;
+- **cartela de texto/título**: a cartela inteira, ampliada até a largura do
+  texto, sem cortar nada;
+- **barras pretas de cinema** (e a legenda do vídeo original dentro delas)
+  ficam de fora do recorte;
+- **flash e chicote** (planos de menos de 0,4 s) não contam como corte.
+
+Ajustes em `SHOT_*` e `LETTERBOX_*` (`src/config.py`). `SHOT_PLAN_ENABLED =
+False` volta pro rastreamento quadro a quadro.
+
 **Vídeo de react** (streamer com facecam sobreposta ao vídeo que está
 reagindo): o programa detecta a facecam uma vez por vídeo — um rosto que
 fica sempre no mesmo lugar, numa caixa que não muda enquanto o resto da
@@ -593,6 +615,7 @@ opus-clip-clone/
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
+│   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
 │   ├── autopilot.py           # loop do piloto automático (fila, agenda, cota)
 │   ├── discovery.py           # acha o vídeo que mais está bombando
 │   ├── youtube_uploader.py    # upload pela API oficial do YouTube (OAuth)
