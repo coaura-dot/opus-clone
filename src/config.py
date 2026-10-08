@@ -122,6 +122,7 @@ SHOT_MIN_SECONDS = 0.4            # plano mais curto que isso (flash, chicote) j
 SHOT_PATH_SMOOTH_SECONDS = 0.5    # suavização do caminho quando o rosto anda no plano
 SHOT_LOCK_X = 0.15                # rosto anda menos que isso (fração da largura do recorte): câmera parada
 SHOT_LOCK_Y = 0.10
+SHOT_FACE_TOO_WIDE = 0.8           # rosto mais largo que isso (fração do recorte 9:16): mostra o rosto inteiro
 LETTERBOX_CROP_ENABLED = True     # tira as barras pretas (e a legenda do vídeo original dentro delas)
 LETTERBOX_DARK_LEVEL = 12         # brilho (0-255) até onde uma linha conta como barra preta (preto de verdade)
 

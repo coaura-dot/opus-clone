@@ -79,7 +79,8 @@ class ShotPlan:
         kinds = {}
         for s in self.shots:
             kinds[s.kind] = kinds.get(s.kind, 0) + 1
-        names = {"single": "rosto", "multi": "conversa", "broll": "sem rosto", "text": "texto"}
+        names = {"single": "rosto", "multi": "conversa", "broll": "sem rosto", "text": "texto",
+                 "facefit": "close gigante"}
         parts = ", ".join(f"{names.get(k, k)} {n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         bars = sum(1 for s in self.shots if s.bounds != self.full)
         txt = f"{len(self.shots)} cena(s): {parts}"
@@ -353,6 +354,20 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
     min_crop_h = min(config.TARGET_HEIGHT / max(getattr(config, "SUBJECT_MAX_UPSCALE", 3.0), 1.0), full_crop_h)
     target_frac = getattr(config, "SUBJECT_TARGET_FACE_FRAC", 0.12)
 
+    # close gigante em que o detector perde o rosto em boa parte das amostras
+    # (rosto cortado pela borda, borrão de movimento): poucas detecções
+    # enormes já bastam -- senão o plano virava "sem rosto" e o recorte caía
+    # no meio do rosto do mesmo jeito
+    crop_w_full = full_crop_h * aspect
+    big = [(k, max(g, key=lambda f: f[2])) for k, g in with_face
+           if max(f[2] for f in g) * sx > getattr(config, "SHOT_FACE_TOO_WIDE", 0.8) * crop_w_full]
+    if 0 < presence < 0.4 and len(big) >= max(1, 0.15 * len(fs)) and not is_big_text:
+        cx = float(np.median([f[0] for _, f in big])) * sx
+        fw = float(np.median([f[2] for _, f in big])) * sx
+        w = float(np.clip(fw * 1.25, crop_w_full, content_w))
+        x0 = float(np.clip(cx - w / 2, bounds[0], bounds[2] - w))
+        return Shot(a, b, "facefit", bounds, text_x=(int(round(x0)), int(round(x0 + w))))
+
     if presence >= 0.4 and not is_big_text:
         counts, spans = [], []
         for _, g in with_face:
@@ -383,7 +398,18 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
             f = max(g, key=lambda f: f[3]) if prev is None else \
                 min(g, key=lambda f: abs(f[0] - prev[0]) + abs(f[1] - prev[1]) - 0.5 * f[3])
             prev = f
-            track.append((k, f[0], f[1], f[3]))
+            track.append((k, f[0], f[1], f[3], f[2]))
+        # CLOSE GIGANTE: rosto mais largo que o recorte 9:16 (achado real,
+        # Podpah: zoom de edição no rosto ocupando a tela) -- recortar só
+        # mostrava nariz e boca por 12 s. Mostra o rosto INTEIRO, com folga,
+        # ampliado até onde cabe, sobre fundo borrado.
+        face_w = float(np.median([t[4] for t in track])) * sx
+        crop_w_full = full_crop_h * aspect
+        if face_w > getattr(config, "SHOT_FACE_TOO_WIDE", 0.8) * crop_w_full:
+            cx = float(np.median([t[1] for t in track])) * sx
+            w = float(np.clip(face_w * 1.25, crop_w_full, content_w))
+            x0 = float(np.clip(cx - w / 2, bounds[0], bounds[2] - w))
+            return Shot(a, b, "facefit", bounds, text_x=(int(round(x0)), int(round(x0 + w))))
         return _single(a, b, frames, track, bounds, sx, sy, None, full_crop_h, fps, min_crop_h, target_frac)
 
     if is_text or is_big_text:

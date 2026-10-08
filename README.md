@@ -556,6 +556,9 @@ zoom e câmera na mão (vlog, documentário, cortes já editados):
   ponto com mais detalhe. Antes saía como uma faixa fina sobre fundo borrado;
 - **cartela de texto/título**: a cartela inteira, ampliada até a largura do
   texto, sem cortar nada;
+- **close gigante** (rosto mais largo que o recorte vertical, tipo o zoom de
+  edição do Podpah): o rosto inteiro, ampliado até onde cabe, sobre fundo
+  borrado. Antes, o recorte mostrava só nariz e boca;
 - **barras pretas de cinema** (e a legenda do vídeo original dentro delas)
   ficam de fora do recorte;
 - **flash e chicote** (planos de menos de 0,4 s) não contam como corte.

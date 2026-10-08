@@ -1220,11 +1220,11 @@ def _compose_wide_frame(frame, src_w: int, src_h: int, out_w: int, out_h: int,
     return canvas
 
 
-def _compose_card_frame(card, out_w: int, out_h: int) -> np.ndarray:
+def _compose_card_frame(card, out_w: int, out_h: int, soft: bool = True) -> np.ndarray:
     """Cartela de texto/print: a imagem INTEIRA, o maior possível sem cortar
     (cabe na largura ou na altura), sobre um fundo bem borrado e escuro."""
     h, w = card.shape[:2]
-    canvas = _blurred_cover(card, out_w, out_h, soft=True)
+    canvas = _blurred_cover(card, out_w, out_h, soft=soft)
     scale = min(out_w / max(w, 1), out_h / max(h, 1))
     fw, fh = max(int(round(w * scale)), 1), max(int(round(h * scale)), 1)
     fg = cv2.resize(card, (fw, fh), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR)
@@ -1865,13 +1865,14 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 rz = 1.0 + (rz - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
                 out_frame = react_plan.compose(frame, frame_idx / fps, out_w, out_h, rz)
             elif not legacy:
-                if shot.kind == "text":
+                if shot.kind in ("text", "facefit"):
                     # cartela/print: o texto inteiro (ampliado até a largura
-                    # dele, quando dá), sem cortar nada
+                    # dele, quando dá), sem cortar nada; close gigante: o
+                    # rosto inteiro (ver shot_plan.py)
                     card = content
                     if shot.text_x is not None:
                         card = frame[bounds[1]:bounds[3], shot.text_x[0]:shot.text_x[1]]
-                    out_frame = _compose_card_frame(card, out_w, out_h)
+                    out_frame = _compose_card_frame(card, out_w, out_h, soft=shot.kind == "text")
                 else:
                     px, py = shot.pos(frame_idx)
                     pch = shot.crop_h
