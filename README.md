@@ -200,7 +200,7 @@ crédito do vídeo original e da música.
 
 O YouTube bloqueia download anônimo de quem baixa muito. Quando isso
 acontece, o piloto pausa os downloads, sem marcar os vídeos como falhos:
-30 min, depois 1 h, 2 h, até 6 h. A postagem continua normalmente.
+15 min, depois 30 min, 1 h, 2 h, até 6 h. A postagem continua normalmente.
 
 A solução de verdade são os cookies de uma conta do Google logada:
 1. **Use uma conta secundária, não a do canal.** O YouTube pode restringir a

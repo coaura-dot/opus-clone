@@ -625,7 +625,8 @@ def run_forever(upload: bool = True):
                         state.save()
                     except YoutubeBlocked as e:
                         n = state.data.get("download_blocks", 0) + 1
-                        wait = min(30 * 60 * 2 ** (n - 1), 6 * 3600)
+                        # 1ª pausa curta: no PC do usuário o bloqueio passou em ~10 min
+                        wait = min(15 * 60 * 2 ** (n - 1), 6 * 3600)
                         state.data["download_blocks"] = n
                         state.data["download_blocked_until"] = time.time() + wait
                         state.save()
