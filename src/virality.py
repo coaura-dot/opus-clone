@@ -131,9 +131,11 @@ def analyze(video: str, meta: dict) -> Tuple[int, Dict[str, float]]:
         try:
             from .reframer import _new_yunet, _detect_yunet
             det = _new_yunet()
-            if det is not None:
+            if det is not None and not meta.get("react"):  # react: rosto pequeno é o normal
                 idx = np.linspace(0, len(fr) - 1, min(len(fr), 20)).astype(int)
                 face = sum(1 for i in idx if _detect_yunet(det, fr[i], 180, 0.6)) / len(idx)
+            elif meta.get("react"):
+                face = 0.7
         except Exception:
             pass
         parts["imagem"] = float(np.clip(0.6 * face + 0.4 * motion_ok, 0, 1))

@@ -77,6 +77,23 @@ class _ChunkResult:
     error: Optional[str] = None
 
 
+def _good_enough(c) -> bool:
+    """Bloco bom o bastante pra entregar já? Com o juiz de IA (src/ai_judge.py)
+    vale a nota dele (0-100) -- a nota das regras está noutra escala e quase
+    tudo passava de CHUNK_VIRAL_SCORE_MIN quando a IA reescrevia o score."""
+    ai = getattr(c, "ai_score", None)
+    if ai is not None:
+        return ai >= getattr(config, "AI_CHUNK_MIN_SCORE", 60)
+    return c.score >= config.CHUNK_VIRAL_SCORE_MIN
+
+
+def _rank_key(c) -> float:
+    """Ordena candidatos de blocos diferentes numa escala só: nota da IA
+    quando houver; a das regras (~10-25) levada pra perto da mesma faixa."""
+    ai = getattr(c, "ai_score", None)
+    return float(ai) if ai is not None else 3.0 * c.score
+
+
 def _transcribe_and_score_chunk(
     source_path: str,
     chunk_index: int,
@@ -198,6 +215,7 @@ def iter_long_video_clip_batches(
     delivered = 0
     leftover: List[ClipCandidate] = []  # candidatos vistos mas não entregues ainda
     chunks_seen = 0
+    chunks_ok = 0  # blocos transcritos/avaliados sem erro
 
     try:
         while True:
@@ -209,10 +227,11 @@ def iter_long_video_clip_batches(
                 print(f"    [aviso] bloco {res.chunk_index} "
                       f"({res.start/60:.1f}-{res.end/60:.1f}min) falhou ao processar: {res.error}")
                 continue
+            chunks_ok += 1
 
-            good = [c for c in res.candidates if c.score >= config.CHUNK_VIRAL_SCORE_MIN]
+            good = [c for c in res.candidates if _good_enough(c)]
             if good:
-                good.sort(key=lambda c: c.score, reverse=True)
+                good.sort(key=_rank_key, reverse=True)
                 take = good[: max(n_clips - delivered, 0)]
                 if take:
                     delivered += len(take)
@@ -225,7 +244,7 @@ def iter_long_video_clip_batches(
                 leftover.extend(res.candidates)
 
         if delivered < n_clips and leftover:
-            leftover.sort(key=lambda c: c.score, reverse=True)
+            leftover.sort(key=_rank_key, reverse=True)
             fallback = leftover[: n_clips - delivered]
             if fallback:
                 print(f"    [aviso] só {delivered} clipe(s) atingiram o viral score mínimo "
@@ -235,6 +254,11 @@ def iter_long_video_clip_batches(
                 delivered += len(fallback)
                 yield fallback
 
+        if delivered == 0 and chunks_ok > 0:
+            # os blocos foram avaliados, só não tinha trecho bom (ex.: o juiz
+            # de IA reprovou tudo): termina sem clipes, não é erro
+            print(f"    [aviso] nenhum trecho bom o bastante em {chunks_ok} bloco(s) -- sem clipes deste vídeo.")
+            return
         if delivered == 0:
             raise RuntimeError(
                 f"Nenhum candidato de corte foi encontrado em {chunks_seen} bloco(s) "

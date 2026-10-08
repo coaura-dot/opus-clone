@@ -142,9 +142,10 @@ def keep_awake(on: bool = True):
 
 
 # -------------------------------------------------------- operário ---
-def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None) -> list:
+def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None) -> Optional[list]:
     """Roda main.py num processo separado pra editar um vídeo. Devolve a
-    lista de clipes gerados ([] se falhou)."""
+    lista de clipes gerados: None se a edição falhou, [] se terminou bem mas
+    nenhum trecho prestou (ex.: o juiz de IA reprovou todos)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     results = out_dir / "resultado.json"
     if results.exists():
@@ -188,11 +189,11 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
     reader.join(timeout=10)
     if not results.exists():
         log(f"    [!] a edição terminou sem gerar clipes (código {proc.returncode}).")
-        return []
+        return None
     try:
         clips = json.loads(results.read_text(encoding="utf-8")).get("clips", [])
     except ValueError:
-        return []
+        return None
     return [c for c in clips if Path(c["video"]).exists() and Path(c["meta"]).exists()]
 
 
@@ -451,14 +452,40 @@ def score_idle(state: State, log: Log, until: float) -> int:
     return done
 
 
+def prune_blocked(state: State, log: Log) -> int:
+    """Tira da fila os clipes de vídeos com palavra bloqueada
+    (AUTOPILOT_BLOCK_WORDS) -- inclusive os feitos antes do bloqueio existir."""
+    from .discovery import blocked
+    keep, gone = [], []
+    for c in state.data["queue"]:
+        src = state.data["sources"].get(c.get("source_id") or "", {})
+        try:
+            title = json.loads(Path(c["meta"]).read_text(encoding="utf-8")).get("source_title")
+        except (OSError, ValueError):
+            title = None
+        word = None if _prio(c) else blocked(src.get("title"), src.get("channel"), title)
+        (gone if word else keep).append((c, word))
+    if gone:
+        state.data["queue"] = [c for c, _ in keep]
+        state.save()
+        log(f"  Fila: {len(gone)} clipe(s) de vídeo bloqueado removido(s) "
+            f"({', '.join(sorted({w for _, w in gone}))}).")
+    return len(gone)
+
+
 def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optional[int] = None) -> int:
     vid = source["id"]
     n_clips = n_clips or getattr(config, "AUTOPILOT_CLIPS_PER_VIDEO", 3)
     log(f"  >> Editando: \"{source.get('title', vid)}\" -- {source['url']}")
     t0 = time.time()
     clips = run_worker(source["url"], n_clips, out_root / vid, log, lang=source.get("lang"))
-    if not clips:
+    if clips is None:
         state.mark_source(vid, "failed", title=source.get("title"), channel=source.get("channel"))
+        return 0
+    if not clips:
+        # editou certo, mas nenhum trecho valia a pena: não tenta de novo
+        log("    nenhum trecho deste vídeo valeu um corte -- próximo vídeo.")
+        state.mark_source(vid, "done", title=source.get("title"), channel=source.get("channel"), clips=0)
         return 0
     kept = 0
     for c in clips:
@@ -527,6 +554,7 @@ def run_forever(upload: bool = True):
     log(f"  fila atual: {len(state.data['queue'])} clipe(s) | já postados: {len(state.data['posted'])}")
     log("=" * 60)
 
+    prune_blocked(state, log)
     service = _get_service(log, upload)
     next_auth_try = time.time() + 3600
     failures = 0

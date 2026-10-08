@@ -37,6 +37,7 @@ AI_JUDGE_MODEL = "claude-opus-5-5"
 AI_JUDGE_EFFORT = "medium"
 AI_JUDGE_MAX_CANDIDATES = 12          # quantos trechos de cada vídeo vão pra avaliação
 AI_REJECT_BELOW = 35                  # nota da IA abaixo disso: o piloto não posta
+AI_CHUNK_MIN_SCORE = 60               # vídeo longo: bloco com trecho de nota >= isso já vira clipe (senão segue procurando)
 SELECT_PREFER_MAX_SECONDS = 90.0
 SELECT_LONG_PENALTY_PER_SECOND = 0.06
 HOOK_MIN_SCORE = 2.0                 # pontuação mínima de uma frase pra contar como gancho
@@ -1034,8 +1035,8 @@ AUTOPILOT_SEARCHES = []
 AUTOPILOT_VIDEOS_PER_CHANNEL = 12       # últimos N vídeos de cada canal
 AUTOPILOT_CHECK_TOP = 10                # quantos candidatos conferir a fundo (data, live, duração) por rodada
 AUTOPILOT_MAX_AGE_DAYS = 30             # só vídeo publicado nos últimos N dias (0 = qualquer idade)
-AUTOPILOT_RECENCY_DECAY = 0.90          # preferência pelos mais novos do canal (1.0 = nenhuma)
 AUTOPILOT_MIN_VIEWS = 20000
+AUTOPILOT_EST_DAYS_PER_VIDEO = 2.0      # sem data do vídeo: estima a idade como (posição no canal) x isso
 AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
 AUTOPILOT_MAX_SOURCE_MINUTES = 240
 AUTOPILOT_CLIPS_PER_VIDEO = 3

@@ -404,7 +404,7 @@ class ClipCandidate:
 # conta por minuto e entra na nota de cada candidato (pedido do usuário:
 # conteúdo mais inteligente, menos zoeira)
 _SUBSTANCE_RE = re.compile(
-    r"\b(porque|ou seja|por exemplo|a quest[ãa]o [ée]|o problema [ée]|significa|na verdade|"
+    r"\b(ou seja|por exemplo|a quest[ãa]o [ée]|o problema [ée]|significa|"
     r"estudo|pesquisa|dados|ci[êe]ncia|cientista|hist[óo]ria|economia|mercado|empresa|neg[óo]cio|"
     r"investi\w*|psicolog\w*|c[ée]rebro|tecnologia|intelig[êe]ncia artificial|filosofia|pol[íi]tica|"
     r"lei|direito|sa[úu]de|doen[çc]a|m[ée]dico|universo|evolu[çc][ãa]o|percent|milh[õo]es|bilh[õo]es)\b",
@@ -1034,6 +1034,13 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         pool.sort(key=lambda c: c.score, reverse=True)
         for c in pool:
             print(f"    [IA] {c.ai_score:3d}/100  {c.start:6.1f}s  \"{c.ai_title}\" -- {c.ai_reason}")
+        # trecho que a IA reprovou nem é renderizado (antes era editado e só
+        # descartado depois, no filtro de qualidade do piloto)
+        floor = getattr(config, "AI_REJECT_BELOW", 35)
+        pool = [c for c in pool if c.ai_score >= floor]
+        if not pool:
+            print(f"    [IA] nenhum trecho chegou a {floor}/100 -- nada pra cortar aqui")
+            return []
 
     chosen: List[ClipCandidate] = pool[:n_clips]
     for c in chosen:

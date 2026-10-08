@@ -155,7 +155,7 @@ def assess(video: str, meta: dict) -> Tuple[int, List[str], bool]:
         if change is not None and change < 1.0:
             reject = True
             reasons.append("imagem congelada")
-        if face_frac is not None:
+        if face_frac is not None and not meta.get("react"):  # react: rosto pequeno é o normal
             if face_frac >= 0.6:
                 score += 6
             elif face_frac < 0.25:

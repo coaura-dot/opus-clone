@@ -256,7 +256,7 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
 | `AUTOPILOT_MIN_VIEWS` | 20000 | só vídeos com pelo menos N views |
-| `AUTOPILOT_MAX_AGE_DAYS` | 30 | só vídeos de até N dias (entre eles, o que ganha mais views por dia); 0 = qualquer idade |
+| `AUTOPILOT_MAX_AGE_DAYS` | 30 | só vídeos de até N dias; entre eles vence o que está indo **melhor que o normal do próprio canal** (views por dia), no máximo 2 por canal na disputa; 0 = qualquer idade |
 | `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
 | `AUTOPILOT_POSTS_PER_DAY` | 24 | meta; o limite real sai da cota (`YOUTUBE_DAILY_QUOTA`: 10.000 = 6/dia, 40.000 = 24/dia) |
 | `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha o limite do dia pela janela (6/dia em 24h = 1 a cada 4h) |
@@ -505,8 +505,11 @@ entra na nota:
 - **desce:** zoeira sem conteúdo, piada interna, recado do canal, trecho que
   depende do resto do episódio.
 
-Os clipes são escolhidos pela nota da IA, e quem tirar menos de 35 não é
-postado (`AI_REJECT_BELOW`).
+Os clipes são escolhidos pela nota da IA. Trecho abaixo de 35
+(`AI_REJECT_BELOW`) nem é editado, e vídeo sem nenhum trecho bom é pulado
+sem nova tentativa. No vídeo longo, um bloco só vira clipe na hora com nota
+≥ 60 (`AI_CHUNK_MIN_SCORE`); senão o programa segue procurando nos outros
+blocos.
 
 Como ligar:
 1. Crie a chave em https://console.anthropic.com (Settings → API keys) e

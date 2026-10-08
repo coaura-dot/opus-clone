@@ -209,6 +209,8 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                            # pra nota de qualidade do piloto (src/quality.py)
                            "text": candidate.text, "hook": getattr(candidate, "hook_text", "") or "",
                            "ai_score": getattr(candidate, "ai_score", None),
+                           # react em tela dividida: rosto pequeno é normal (não penaliza)
+                           "react": bool(react_plan is not None and react_plan.active_fraction >= 0.5),
                            "ai_reason": getattr(candidate, "ai_reason", "")})
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "

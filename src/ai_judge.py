@@ -165,6 +165,9 @@ def rank(candidates: list) -> Optional[List[dict]]:
     except anthropic.APIConnectionError:
         print("    [IA] sem conexão com a API; usando só as regras neste vídeo")
         return None
+    except Exception as e:  # ex.: biblioteca antiga sem algum parâmetro -- nunca derruba o corte
+        _disable(f"{e.__class__.__name__}: {str(e)[:150]} (atualize: pip install -U anthropic)")
+        return None
 
     if response.stop_reason == "refusal":
         print("    [IA] a IA recusou avaliar estes trechos; usando só as regras neste vídeo")

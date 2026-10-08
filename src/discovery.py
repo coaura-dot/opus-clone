@@ -182,7 +182,31 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
             log(f"    [busca] '{q}': {str(e).splitlines()[0][:120]}")
 
     min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 20000)
-    decay = getattr(config, "AUTOPILOT_RECENCY_DECAY", 0.90)
+    est_days = getattr(config, "AUTOPILOT_EST_DAYS_PER_VIDEO", 2.0)
+    max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 30) or 0
+
+    def velocity(views, age_d):
+        return views / (age_d + 2.0) ** 0.6  # views por dia, suavizado
+
+    # o "normal" de cada canal: mediana das views/dia dos vídeos recentes da
+    # listagem (idade estimada pela posição -- a lista vem do mais novo pro
+    # mais velho). Achado na revisão: comparando views absolutas, canal
+    # gigante de entretenimento (milhões) ganhava sempre e os podcasts de
+    # conteúdo nunca nem eram conferidos.
+    per_channel = {}
+    for c in cands:
+        if c.get("view_count"):
+            v = velocity(c["view_count"], (c.get("rank", 0) + 1) * est_days)
+            per_channel.setdefault(c.get("channel"), []).append(v)
+    channel_norm = {ch: float(sorted(vs)[len(vs) // 2]) for ch, vs in per_channel.items() if vs}
+
+    def score(c, age_d):
+        v = velocity(c["view_count"], age_d)
+        rel = v / max(channel_norm.get(c.get("channel"), v), 1.0)  # >1 = acima do normal do canal
+        # bombando pro canal dele (rel) pesa mais que o tamanho do canal (v);
+        # canal usado nas últimas 24h perde prioridade (varia a fonte)
+        return (rel ** 0.75) * (v ** 0.25) * (0.6 ** recent_channels.get(c.get("channel"), 0))
+
     uniq = {}
     for c in cands:
         views = c.get("view_count")
@@ -192,9 +216,10 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
             continue
         if blocked(c.get("title"), c.get("channel")):
             continue
-        # muitas views primeiro; leve preferência pelos mais novos do canal;
-        # canal já usado nas últimas 24h perde prioridade (varia a fonte)
-        c["score"] = views * (decay ** c.get("rank", 0)) * (0.6 ** recent_channels.get(c.get("channel"), 0))
+        est_age = (c.get("rank", 0) + 1) * est_days
+        if max_age_d and est_age > max_age_d * 1.5:
+            continue  # bem fundo na lista do canal: com certeza velho
+        c["score"] = score(c, est_age)
         uniq[c["id"]] = c
     if not uniq:
         if not fails or cands:
@@ -202,9 +227,19 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
                 f"nos canais configurados.".replace(",", "."))
         return None
 
-    max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 30) or 0
+    # os melhores pra conferir a fundo, no máximo 2 por canal (senão um canal
+    # grande ocupava todas as vagas)
+    shortlist, per = [], {}
+    for c in sorted(uniq.values(), key=lambda c: -c["score"]):
+        if per.get(c.get("channel"), 0) >= 2:
+            continue
+        per[c.get("channel")] = per.get(c.get("channel"), 0) + 1
+        shortlist.append(c)
+        if len(shortlist) >= getattr(config, "AUTOPILOT_CHECK_TOP", 10):
+            break
+
     checked = []
-    for c in sorted(uniq.values(), key=lambda c: -c["score"])[:getattr(config, "AUTOPILOT_CHECK_TOP", 10)]:
+    for c in shortlist:
         info = full_info(c["id"])
         if info:
             if info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
@@ -220,14 +255,18 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
                 continue
             c.update(title=info.get("title") or c["title"], channel=info.get("channel") or c["channel"],
                      timestamp=ts, view_count=info.get("view_count") or c["view_count"])
-        # views por dia (o que está bombando AGORA), com o mesmo desconto pra
-        # canal usado nas últimas 24h; sem data, fica a nota da listagem
+        # idade: a data real; sem ela (consulta falhou/bloqueada), estima pela
+        # posição na lista do canal (vem do mais novo pro mais velho) -- antes,
+        # vídeo sem data escapava do limite de idade e ainda ganhava na nota
         if c.get("timestamp"):
             age_d = max((time.time() - c["timestamp"]) / 86400.0, 0.0)
-            c["final"] = c["view_count"] / (age_d + 2.0) ** 0.6 * \
-                (0.6 ** recent_channels.get(c.get("channel"), 0))
         else:
-            c["final"] = c["score"] * 0.5
+            age_d = (c.get("rank", 0) + 1) * est_days
+            c["age_estimated"] = True
+            if max_age_d and age_d > max_age_d:
+                continue
+        c["age_days"] = age_d
+        c["final"] = score(c, age_d)  # agora com a idade real
         checked.append(c)
     if not checked:
         log(f"    [busca] nenhum vídeo dos últimos {max_age_d} dias passou nos filtros "
@@ -235,7 +274,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
         return None
     c = max(checked, key=lambda c: c["final"])
     c["url"] = f"https://www.youtube.com/watch?v={c['id']}"
-    age = f", publicado há {(time.time() - c['timestamp']) / 86400:.0f} dias" if c.get("timestamp") else ""
+    age = (f", publicado há ~{c['age_days']:.0f} dias (estimado)" if c.get("age_estimated")
+           else f", publicado há {c['age_days']:.0f} dias")
     lang = f" [{c['lang']}]" if c.get("lang") else ""
     log(f"    [busca] escolhido: \"{c['title']}\" ({c['channel']}){lang} -- "
         f"{c['view_count']:,} views{age}".replace(",", "."))
