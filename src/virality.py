@@ -20,7 +20,6 @@ dados de views -- dá pra ajustar em VIRAL_WEIGHTS (config.py).
 """
 import re
 import subprocess
-from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import numpy as np

@@ -34,7 +34,7 @@ _PROMO = [  # só chamada do PRÓPRIO canal; falar "sobre" publi/redes é conte�
     r"link na descri", r"link (aqui )?embaixo", r"na descri[çc][ãa]o (do v[ií]deo|do epis)", r"cupom",
     r"c[óo]digo (de desconto|promocional)", r"use o c[óo]digo", r"nosso patroc", r"patroc[ií]nio d[oe] (epis|podcast|canal)",
     r"oferecimento", r"seja membro", r"membros do canal", r"apoia\.?se", r"lojinha", r"nossa loja",
-    r"segu\w* a gente", r"segue o podcast", r"siga o podcast", r"chave pix", r"super ?chat",
+    r"segu\w* a gente (l[áa] )?(no|nas|na|em) (spotify|instagram|insta|tiktok|youtube|redes|canal|twitter|x\b)", r"segue o podcast", r"siga o podcast", r"chave pix", r"super ?chat",
 ]
 _OPENING = [
     r"^(e a[ií],? )?(fala|salve),? (galera|pessoal|rapaziada|família)", r"sejam bem[- ]vindos?",

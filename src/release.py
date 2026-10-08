@@ -190,7 +190,7 @@ def _handle_locked(state, r, p, log):
     if getattr(config, "AUTOPILOT_REUPLOAD_LOCKED", True) and video and Path(video).exists():
         meta = Path(video).with_suffix(".meta.json")
         if meta.exists():
-            state.data["queue"].insert(0, {"video": video, "meta": str(meta), "score": 10 ** 5,
+            state.data["queue"].insert(0, {"video": video, "meta": str(meta), "score": 10 ** 5, "priority": 1,
                                            "source_id": p.get("source_id"), "added": time.time(),
                                            "video_sem_musica": p.get("video_sem_musica"),
                                            "replaces": p["youtube_id"]})

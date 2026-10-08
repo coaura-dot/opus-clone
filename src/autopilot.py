@@ -285,15 +285,26 @@ def can_post_now(state: State, ignore_schedule: bool = False) -> tuple:
     return True, now
 
 
+def _prio(c: dict) -> int:
+    """Prioridade de postagem: 2 = link colado na mão, 1 = repostagem de vídeo
+    travado (filas antigas marcavam isso só com score 10**5/10**6)."""
+    if c.get("priority"):
+        return int(c["priority"])
+    sc = c.get("score", 0) or 0
+    return 2 if sc >= 10 ** 6 else 1 if sc >= 10 ** 5 else 0
+
+
 def post_next(state: State, service, log: Log, ignore_schedule: bool = False) -> bool:
     """Posta o melhor clipe da fila. True se postou."""
     from . import youtube_uploader as yt
     queue = state.data["queue"]
     if not queue:
         return False
-    # clipes da fila antiga (antes da nota de qualidade): avalia agora
+    # clipes da fila antiga (antes da nota de qualidade): avalia agora. Os
+    # com prioridade (repostagem de vídeo travado, link colado na mão) não
+    # passam pelo filtro: já foram escolhidos.
     for it in list(queue):
-        if "quality" not in it and not judge(state, it, log):
+        if "quality" not in it and not _prio(it) and not judge(state, it, log):
             queue.remove(it)
     state.save()
     if not queue:
@@ -302,11 +313,13 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
     # máximo 3, pra não atrasar a postagem -- o normal é já terem sido
     # analisados no tempo ocioso, ver score_idle)
     from .virality import rank_key
-    pending = sorted((c for c in queue if "viral" not in c), key=lambda c: -c.get("quality", 50))[:3]
+    pending = sorted((c for c in queue if "viral" not in c and not _prio(c)),
+                     key=lambda c: -c.get("quality", 50))[:3]
     for c in pending:
         score_viral(state, c, log)
-    # maior nota combinada (viralidade + qualidade) primeiro
-    queue.sort(key=lambda c: (-rank_key(c), c.get("added", 0)))
+    # prioridade primeiro (repostagem / link colado na mão); depois a maior
+    # nota combinada (viralidade + qualidade)
+    queue.sort(key=lambda c: (-_prio(c), -rank_key(c), c.get("added", 0)))
     item = queue[0]
     if not Path(item["video"]).exists():
         log(f"    arquivo sumiu, tirando da fila: {item['video']}")
@@ -410,7 +423,7 @@ def score_idle(state: State, log: Log, until: float) -> int:
     """Tempo ocioso (esperando a hora de postar): analisa a viralidade dos
     clipes da fila que ainda não têm nota, os de melhor qualidade primeiro,
     até `until`. Devolve quantos analisou."""
-    todo = sorted((c for c in state.data["queue"] if "viral" not in c),
+    todo = sorted((c for c in state.data["queue"] if "viral" not in c and not _prio(c)),
                   key=lambda c: -c.get("quality", 50))
     if not todo:
         return 0
@@ -420,6 +433,8 @@ def score_idle(state: State, log: Log, until: float) -> int:
         if time.time() > until - 90:
             break
         if not Path(c["video"]).exists():
+            c["viral"] = 0  # sumiu: não tenta de novo a cada pausa (sai da fila na hora de postar)
+            state.save()
             continue
         score_viral(state, c, log)
         done += 1
@@ -618,7 +633,7 @@ def run_once(url: str, n_clips: int, upload: bool = True):
                 f"(o modo automático posta depois de {datetime.fromtimestamp(nxt):%d/%m %H:%M}).")
             break
         state.data["queue"].remove(c)
-        state.data["queue"].insert(0, dict(c, score=10 ** 6))  # este primeiro
+        state.data["queue"].insert(0, dict(c, priority=2))  # este primeiro
         post_next(state, service, log, ignore_schedule=True)
     keep_awake(False)
 

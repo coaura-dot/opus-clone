@@ -99,68 +99,51 @@ def set_context(*parts) -> None:
     _PROMPT["text"] = txt or None
 
 
-def _speech_mask(audio_path: str):
-    """Fala/silêncio a cada 10 ms (energia do áudio, limiar adaptativo)."""
-    import subprocess
+class _AudioInfo:
+    """Fala/silêncio e "começo de som" a cada 10 ms -- calculados UMA vez por
+    arquivo (antes era um ffmpeg + varredura por frase: com as ~380 frases
+    de um bloco do whisper.cpp, minutos à toa)."""
+
+    def __init__(self, audio_path: str):
+        import subprocess
+        import numpy as np
+        cmd = ["ffmpeg", "-v", "error", "-i", str(audio_path), "-ac", "1", "-ar", "16000",
+               "-f", "s16le", "-"]
+        x = np.frombuffer(subprocess.run(cmd, capture_output=True).stdout, dtype=np.int16)
+        hop = 160
+        n = len(x) // hop
+        self.ok = n >= 100
+        if not self.ok:
+            self.mask = self.env = None
+            return
+        x = x[:n * hop].astype(np.float32) / 32768.0
+        db = 10 * np.log10(np.mean(x.reshape(n, hop) ** 2, axis=1) + 1e-10)
+        floor, loud = np.percentile(db, 10), np.percentile(db, 90)
+        thr = max(floor + 0.35 * (loud - floor), floor + 6.0)
+        m = db > thr
+        m = _fill_runs(m, False, 6)   # buracos de silêncio < 60 ms viram fala
+        m = _fill_runs(m, True, 4)    # estalos < 40 ms viram silêncio
+        self.mask = m
+        sm = np.convolve(db, np.ones(3) / 3, mode="same")
+        rise = np.clip(np.diff(sm, prepend=sm[0]), 0, None)
+        self.env = np.convolve(rise, np.ones(5), mode="same")  # +-20 ms
+
+
+def _fill_runs(m, value: bool, max_len: int):
+    """Troca por `not value` as sequências internas de `value` mais curtas
+    que `max_len` quadros (vetorizado)."""
     import numpy as np
-    cmd = ["ffmpeg", "-v", "error", "-i", str(audio_path), "-ac", "1", "-ar", "16000",
-           "-f", "s16le", "-"]
-    raw = subprocess.run(cmd, capture_output=True).stdout
-    x = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    hop = 160
-    n = len(x) // hop
-    if n < 50:
-        return None
-    rms = np.sqrt(np.mean(x[:n * hop].reshape(n, hop) ** 2, axis=1) + 1e-10)
-    db = 20 * np.log10(rms)
-    floor, loud = np.percentile(db, 10), np.percentile(db, 90)
-    thr = max(floor + 0.35 * (loud - floor), floor + 6.0)
-    mask = db > thr
-    # fecha buracos curtos (< 60 ms) e tira estalos (< 40 ms)
-    m = mask.copy()
-    i = 0
-    while i < n:
-        if not m[i]:
-            j = i
-            while j < n and not m[j]:
-                j += 1
-            if 0 < i and j < n and j - i < 6:
-                m[i:j] = True
-            i = j
-        else:
-            i += 1
-    i = 0
-    while i < n:
-        if m[i]:
-            j = i
-            while j < n and m[j]:
-                j += 1
-            if j - i < 4:
-                m[i:j] = False
-            i = j
-        else:
-            i += 1
-    return m
+    v = (m == value).astype(np.int8)
+    d = np.diff(np.r_[0, v, 0])
+    starts, ends = np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]
+    out = m.copy()
+    for a, b in zip(starts, ends):
+        if b - a < max_len and a > 0 and b < len(m):
+            out[a:b] = not value
+    return out
 
 
-def _onset_strength(audio_path: str):
-    """Força de "começo de som" a cada 10 ms (subida de energia), suavizada."""
-    import subprocess
-    import numpy as np
-    cmd = ["ffmpeg", "-v", "error", "-i", str(audio_path), "-ac", "1", "-ar", "16000",
-           "-f", "s16le", "-"]
-    x = np.frombuffer(subprocess.run(cmd, capture_output=True).stdout, dtype=np.int16).astype(np.float32)
-    hop = 160
-    n = len(x) // hop
-    if n < 100:
-        return None
-    db = 10 * np.log10(np.mean((x[:n * hop] / 32768.0).reshape(n, hop) ** 2, axis=1) + 1e-10)
-    db = np.convolve(db, np.ones(3) / 3, mode="same")
-    rise = np.clip(np.diff(db, prepend=db[0]), 0, None)
-    return np.convolve(rise, np.ones(5), mode="same")  # +-20 ms
-
-
-def fix_offsets(words: List[Word], audio_path: str, window_s: float = 20.0,
+def fix_offsets(words: List[Word], audio, window_s: float = 20.0,
                 max_shift: float = 0.6) -> List[Word]:
     """Corrige atraso/adiantamento CONSTANTE dos tempos do Whisper, trecho a
     trecho (~20 s): testa deslocamentos de -0,6 a +0,6 s e fica com o que
@@ -174,13 +157,10 @@ def fix_offsets(words: List[Word], audio_path: str, window_s: float = 20.0,
     import numpy as np
     if len(words) < 8:
         return words
-    try:
-        env = _onset_strength(audio_path)
-        m = _speech_mask(audio_path)
-    except Exception:
+    info = audio if isinstance(audio, _AudioInfo) else _AudioInfo(audio)
+    if not info.ok:
         return words
-    if env is None or m is None:
-        return words
+    env, m = info.env, info.mask
     n = min(len(env), len(m))
     mf = m[:n].astype(np.float32)
     env = env[:n] / (np.percentile(env[:n], 99) + 1e-9)
@@ -243,7 +223,7 @@ def fix_offsets(words: List[Word], audio_path: str, window_s: float = 20.0,
     return out
 
 
-def snap_to_speech(words: List[Word], audio_path: str) -> List[Word]:
+def snap_to_speech(words: List[Word], audio) -> List[Word]:
     """Acerta o começo de cada palavra no começo REAL da fala (energia do
     áudio). Os tempos do Whisper (principalmente do whisper.cpp) chegam
     adiantados ou atrasados em uns décimos de segundo, e a legenda aparecia
@@ -253,12 +233,10 @@ def snap_to_speech(words: List[Word], audio_path: str) -> List[Word]:
     fala (até 0,3 s antes). Ninguém passa da palavra vizinha."""
     if not words:
         return words
-    try:
-        m = _speech_mask(audio_path)
-    except Exception:
+    info = audio if isinstance(audio, _AudioInfo) else _AudioInfo(audio)
+    if not info.ok:
         return words
-    if m is None:
-        return words
+    m = info.mask
     import numpy as np
     n = len(m)
     onsets = np.nonzero(m & ~np.r_[False, m[:-1]])[0]
@@ -287,6 +265,13 @@ def snap_to_speech(words: List[Word], audio_path: str) -> List[Word]:
                     w.end = min(max(w.end, w.start + 0.08), max(next_start, w.start + 0.08))
         if w.end <= w.start:
             w.end = w.start + 0.08
+    # passada final: nenhuma palavra termina depois da seguinte começar
+    for a, b in zip(out, out[1:]):
+        if b.start < a.start + 0.02:
+            b.start = a.start + 0.02
+            b.end = max(b.end, b.start + 0.02)
+        if a.end > b.start:
+            a.end = b.start
     return out
 
 
@@ -347,13 +332,21 @@ def _finish(t: "Transcript", audio_path: str) -> "Transcript":
     t = _clean_transcript(t)
     if getattr(config, "CAPTION_SNAP_TO_SPEECH", True):
         # 1) atraso constante por trecho, no vídeo inteiro; 2) palavra por palavra
+        try:
+            info = _AudioInfo(audio_path)
+        except Exception:
+            return t
+        if not info.ok:
+            return t
+        # a sequência INTEIRA de uma vez: palavra vizinha de outra frase
+        # também limita o ajuste (senão a 1ª palavra da frase podia recuar por
+        # cima da última da frase anterior)
         all_words = t.words
-        fixed = fix_offsets(all_words, audio_path) if all_words else all_words
+        fixed = snap_to_speech(fix_offsets(all_words, info), info) if all_words else all_words
         remap = {id(w): f for w, f in zip(all_words, fixed)}
         segments = []
         for seg in t.segments:
             words = [remap.get(id(w), w) for w in seg.words]
-            words = snap_to_speech(words, audio_path) if words else words
             segments.append(Segment(start=words[0].start if words else seg.start,
                                     end=words[-1].end if words else seg.end,
                                     text=seg.text, words=words))
