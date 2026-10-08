@@ -4,6 +4,7 @@ Download de vídeos do YouTube via yt-dlp.
 import shutil
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 from .utils import run, ensure_dir
 
 
@@ -23,6 +24,29 @@ def _js_runtime_args() -> tuple:
           "download do YouTube pode falhar ou vir em qualidade menor. "
           "Instale o Deno: winget install DenoLand.Deno")
     return ()
+
+
+def cookies_file() -> Optional[Path]:
+    """credentials/youtube_cookies.txt (exportado do navegador, formato
+    Netscape) -- a pasta credentials não é apagada nas atualizações."""
+    from . import config
+    d = Path(getattr(config, "YOUTUBE_CREDENTIALS_DIR", "credentials"))
+    if not d.is_absolute():
+        d = Path(__file__).resolve().parent.parent / d
+    f = d / "youtube_cookies.txt"
+    return f if f.exists() and f.stat().st_size > 0 else None
+
+
+def cookie_args() -> tuple:
+    """Cookies de uma conta logada: o YouTube passou a bloquear download
+    anônimo de quem baixa muito ("Sign in to confirm you're not a bot",
+    HTTP 429). Arquivo em credentials/ > YTDLP_COOKIES_FROM_BROWSER."""
+    from . import config
+    f = cookies_file()
+    if f:
+        return ("--cookies", str(f))
+    browser = getattr(config, "YTDLP_COOKIES_FROM_BROWSER", None)
+    return ("--cookies-from-browser", browser) if browser else ()
 
 
 def download_youtube_video(url: str, work_dir: str) -> Path:
@@ -47,6 +71,7 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
         "--merge-output-format", "mp4",
         "--no-playlist",
         *_js_runtime_args(),
+        *cookie_args(),
         "-o", out_template,
         url,
     ]
@@ -62,6 +87,6 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
 
 
 def get_video_title(url: str) -> str:
-    cmd = ["yt-dlp", "--get-title", "--no-playlist", *_js_runtime_args(), url]
+    cmd = ["yt-dlp", "--get-title", "--no-playlist", *_js_runtime_args(), *cookie_args(), url]
     out = run(cmd).stdout.decode(errors="ignore").strip()
     return out or "video"

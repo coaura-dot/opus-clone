@@ -142,6 +142,14 @@ def keep_awake(on: bool = True):
 
 
 # -------------------------------------------------------- operário ---
+class YoutubeBlocked(Exception):
+    """O YouTube recusou o download (anti-robô / excesso de pedidos). Não é
+    culpa do vídeo: o piloto pausa os downloads em vez de queimar a lista."""
+
+
+_BLOCK_MARKERS = ("Sign in to confirm you", "HTTP Error 429", "Too Many Requests")
+
+
 def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None) -> Optional[list]:
     """Roda main.py num processo separado pra editar um vídeo. Devolve a
     lista de clipes gerados: None se a edição falhou, [] se terminou bem mas
@@ -163,10 +171,18 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
     proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, env=env, **kw)
 
+    seen_block = []
+
     def _pump():
+        repeated = 0
         for raw in proc.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip()
-            if line.strip():
+            if any(m in line for m in _BLOCK_MARKERS):
+                seen_block.append(line)
+                repeated += 1
+                if repeated > 3:
+                    continue  # não enche o log com o mesmo erro repetido
+            if line.strip() and not line.lstrip().startswith(("File \"", "~~~", "^^^", "...<", "raise ", "run(cmd)")):
                 log(f"    | {line}")
     reader = threading.Thread(target=_pump, daemon=True)
     reader.start()
@@ -188,6 +204,8 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
         raise
     reader.join(timeout=10)
     if not results.exists():
+        if seen_block:
+            raise YoutubeBlocked(seen_block[0].strip()[:200])
         log(f"    [!] a edição terminou sem gerar clipes (código {proc.returncode}).")
         return None
     try:
@@ -592,13 +610,31 @@ def run_forever(upload: bool = True):
                         service = None
                     continue
 
-            # 2) produzir, se a fila estiver curta
+            # 2) produzir, se a fila estiver curta (e o YouTube não estiver
+            # bloqueando downloads -- ver YoutubeBlocked)
             target = getattr(config, "AUTOPILOT_QUEUE_TARGET", 8)
-            if len(state.data["queue"]) < target and make_room(state, out_root, log):
+            blocked_until = state.data.get("download_blocked_until", 0)
+            if (len(state.data["queue"]) < target and time.time() >= blocked_until
+                    and make_room(state, out_root, log)):
                 log("  >> Procurando vídeo bombando pra cortar...")
                 source = discovery.pick_source(state.seen_ids(), state.recent_channels(), log=log)
                 if source:
-                    produce(state, source, out_root, log)
+                    try:
+                        produce(state, source, out_root, log)
+                        state.data["download_blocks"] = 0
+                        state.save()
+                    except YoutubeBlocked as e:
+                        n = state.data.get("download_blocks", 0) + 1
+                        wait = min(30 * 60 * 2 ** (n - 1), 6 * 3600)
+                        state.data["download_blocks"] = n
+                        state.data["download_blocked_until"] = time.time() + wait
+                        state.save()
+                        from .downloader import cookies_file
+                        log(f"  [!] O YouTube bloqueou o download ({e}).")
+                        log(f"      Pausando downloads por {wait // 60:.0f} min (a postagem continua). "
+                            + ("Os cookies em credentials/youtube_cookies.txt podem ter vencido -- exporte de novo."
+                               if cookies_file() else
+                               "Resolve de vez com cookies de uma conta logada: veja 'Bloqueio do YouTube' no README."))
                     failures = 0
                     continue
                 wake = time.time() + getattr(config, "AUTOPILOT_IDLE_MINUTES", 30) * 60
@@ -606,10 +642,14 @@ def run_forever(upload: bool = True):
                 _sleep_until(wake, log, "nada novo agora, procuro de novo depois")
                 continue
 
-            # 3) fila cheia: espera a próxima janela de postagem
-            if service is not None and state.data["queue"]:
+            # 3) fila cheia (ou downloads pausados): espera a próxima postagem
+            if time.time() < blocked_until and not (service is not None and state.data["queue"]):
+                _sleep_until(blocked_until, log, "downloads pausados pelo bloqueio do YouTube")
+            elif service is not None and state.data["queue"]:
                 _, nxt = can_post_now(state)
                 wake = min(nxt, time.time() + 3600)
+                if time.time() < blocked_until:
+                    wake = min(wake, blocked_until)  # volta a baixar assim que a pausa acabar
                 score_idle(state, log, wake)
                 _sleep_until(wake, log,
                              f"fila com {len(state.data['queue'])} clipe(s), esperando a hora de postar")

@@ -196,6 +196,25 @@ crédito do vídeo original e da música.
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.
 
+### Bloqueio do YouTube ("Sign in to confirm you're not a bot" / HTTP 429)
+
+O YouTube bloqueia download anônimo de quem baixa muito. Quando isso
+acontece, o piloto pausa os downloads, sem marcar os vídeos como falhos:
+30 min, depois 1 h, 2 h, até 6 h. A postagem continua normalmente.
+
+A solução de verdade são os cookies de uma conta do Google logada:
+1. **Use uma conta secundária, não a do canal.** O YouTube pode restringir a
+   conta que baixa demais.
+2. Logado nela, no Chrome ou Edge, instale a extensão "Get cookies.txt
+   LOCALLY" e abra youtube.com.
+3. Clique na extensão → **Export** e salve como
+   `credentials\youtube_cookies.txt`, dentro da pasta do programa.
+4. Pronto: o download e a busca passam a usar esses cookies. Se o bloqueio
+   voltar semanas depois, os cookies venceram, e é só exportar de novo.
+
+(Se você usa o Firefox, dá pra pôr `YTDLP_COOKIES_FROM_BROWSER = "firefox"`
+no `config.py` em vez do arquivo.)
+
 ### Nota de qualidade: o que posta e o que não posta
 
 Cada clipe pronto ganha uma nota de 0 a 100 (`src/quality.py`). A fila

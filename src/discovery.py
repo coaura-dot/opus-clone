@@ -51,8 +51,12 @@ def _ydl(flat: bool, lang: Optional[str] = None):
         opts["http_headers"] = _HEADERS
     if flat:
         opts["extract_flat"] = "in_playlist"
+    from .downloader import cookies_file
+    cookie_txt = cookies_file()
     cookies = getattr(config, "YTDLP_COOKIES_FROM_BROWSER", None)
-    if cookies:
+    if cookie_txt:
+        opts["cookiefile"] = str(cookie_txt)
+    elif cookies:
         opts["cookiesfrombrowser"] = (cookies,)
     return yt_dlp.YoutubeDL(opts)
 
