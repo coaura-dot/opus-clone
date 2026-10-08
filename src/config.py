@@ -1057,6 +1057,10 @@ AUTOPILOT_WORKER_TIMEOUT_MINUTES = 150  # vídeo que trava na edição é abando
 AUTOPILOT_IDLE_MINUTES = 30             # sem vídeo novo: procura de novo depois de N min
 AUTOPILOT_MIN_FREE_GB = 5               # disco abaixo disso: apaga clipes já postados
 AUTOPILOT_DELETE_POSTED_FILES = False   # True = apaga o .mp4 logo depois de postar
+# faxina automática da pasta de cortes (src/housekeeping.py)
+AUTOPILOT_OUTPUT_MAX_GB = 1.0           # a pasta output/autopiloto não passa disso
+AUTOPILOT_KEEP_POSTED_DAYS = 2          # clipe postado (público) fica N dias na pasta pra você ver, depois sai
+AUTOPILOT_KEEP_NO_MUSIC = False         # True = guarda a versão _sem_musica.mp4 (pra postar à mão com som do app)
 AUTOPILOT_OUTPUT_DIR = "output/autopiloto"
 YTDLP_COOKIES_FROM_BROWSER = None       # ex.: "chrome" se o YouTube pedir login pra listar
 

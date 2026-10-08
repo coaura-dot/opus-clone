@@ -196,6 +196,23 @@ crédito do vídeo original e da música.
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.
 
+### Faxina automática: a pasta de cortes não passa de 1 GB
+
+O piloto limpa `output\autopiloto` sozinho (`src/housekeeping.py`): ao
+ligar, antes de cada vídeo novo, depois de cada edição e depois de cada
+postagem.
+- **Sai na hora:** pastas vazias (downloads que falharam), clipes
+  reprovados, sobras de edição e a versão `_sem_musica.mp4`. O piloto posta
+  a versão com música; `AUTOPILOT_KEEP_NO_MUSIC = True` guarda as duas.
+- **Sai depois de 2 dias:** clipe já postado e público
+  (`AUTOPILOT_KEEP_POSTED_DAYS`).
+- **Acima de 1 GB** (`AUTOPILOT_OUTPUT_MAX_GB`): apaga primeiro os postados
+  mais antigos. Clipe da fila, que ainda vai ser postado, nunca é apagado:
+  com a pasta cheia, o piloto só para de produzir até postar e liberar
+  espaço.
+- **Pasta de trabalho** (`.autoclip_work`): o vídeo baixado, que pode ter
+  vários GB, e os temporários saem depois de cada edição.
+
 ### Bloqueio do YouTube ("Sign in to confirm you're not a bot" / HTTP 429)
 
 O YouTube bloqueia download anônimo de quem baixa muito. Quando isso
@@ -744,6 +761,7 @@ opus-clip-clone/
 │   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta
 │   ├── virality.py            # nota de viralidade (tempo ocioso): o que postar primeiro
 │   ├── ai_judge.py            # juiz de cortes com IA (Claude, opcional): nota + título por trecho
+│   ├── housekeeping.py        # faxina: pasta de cortes até 1 GB, sem pastas vazias nem sobras
 │   ├── autopilot.py           # loop do piloto automático (fila, agenda, cota)
 │   ├── discovery.py           # acha o vídeo que mais está bombando
 │   ├── youtube_uploader.py    # upload pela API oficial do YouTube (OAuth)

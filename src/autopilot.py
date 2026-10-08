@@ -573,6 +573,9 @@ def run_forever(upload: bool = True):
     log("=" * 60)
 
     prune_blocked(state, log)
+    from . import housekeeping
+    housekeeping.clean_work_dir(log)
+    housekeeping.cleanup(state, out_root, log)
     service = _get_service(log, upload)
     next_auth_try = time.time() + 3600
     failures = 0
@@ -608,6 +611,7 @@ def run_forever(upload: bool = True):
                     except yt.AuthError as e:
                         log(f"  [!] {e}")
                         service = None
+                    housekeeping.cleanup(state, out_root, log)
                     continue
 
             # 2) produzir, se a fila estiver curta (e o YouTube não estiver
@@ -615,7 +619,7 @@ def run_forever(upload: bool = True):
             target = getattr(config, "AUTOPILOT_QUEUE_TARGET", 8)
             blocked_until = state.data.get("download_blocked_until", 0)
             if (len(state.data["queue"]) < target and time.time() >= blocked_until
-                    and make_room(state, out_root, log)):
+                    and make_room(state, out_root, log) and housekeeping.has_room(state, out_root, log)):
                 log("  >> Procurando vídeo bombando pra cortar...")
                 source = discovery.pick_source(state.seen_ids(), state.recent_channels(), log=log)
                 if source:
@@ -623,6 +627,8 @@ def run_forever(upload: bool = True):
                         produce(state, source, out_root, log)
                         state.data["download_blocks"] = 0
                         state.save()
+                        housekeeping.clean_work_dir(log)
+                        housekeeping.cleanup(state, out_root, log)
                     except YoutubeBlocked as e:
                         n = state.data.get("download_blocks", 0) + 1
                         # 1ª pausa curta: no PC do usuário o bloqueio passou em ~10 min
