@@ -136,7 +136,17 @@ def assess(video: str, meta: dict) -> Tuple[int, List[str], bool]:
     sel = float(meta.get("score") or 0.0)
     score += float(np.clip((sel - 12.0) * 2.0, -10, 14))
 
-    # 6) imagem
+    # 6) nota do juiz de IA (src/ai_judge.py), quando ligado: é a que mais entende de conteúdo
+    ai = meta.get("ai_score")
+    if isinstance(ai, (int, float)):
+        score += (ai - 50) * 0.6
+        if ai < getattr(config, "AI_REJECT_BELOW", 35):
+            reject = True
+            reasons.append(f"IA: {ai}/100" + (f" ({meta.get('ai_reason')})" if meta.get("ai_reason") else ""))
+        elif ai >= 75:
+            reasons.append(f"IA: {ai}/100")
+
+    # 7) imagem
     if Path(video).exists():
         bright, change, face_frac = _visual(video)
         if bright is not None and bright < 18:

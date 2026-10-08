@@ -252,10 +252,11 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, PrimoCast | canais acompanhados |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, PrimoCast, Ciência Sem Fim, PodPeople, Os Sócios, Market Makers, Roda Viva, orochidois, Maicon Küster, Cortes do Casimito, DrDonut Clips (inglês) | canais acompanhados (`"link\|en"` = canal em inglês) |
+| `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
-| `AUTOPILOT_MIN_VIEWS` | 100000 | só vídeos com pelo menos N views |
-| `AUTOPILOT_MAX_AGE_DAYS` | 0 | 0 = qualquer idade; N = só vídeos de até N dias |
+| `AUTOPILOT_MIN_VIEWS` | 20000 | só vídeos com pelo menos N views |
+| `AUTOPILOT_MAX_AGE_DAYS` | 30 | só vídeos de até N dias (entre eles, o que ganha mais views por dia); 0 = qualquer idade |
 | `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
 | `AUTOPILOT_POSTS_PER_DAY` | 24 | meta; o limite real sai da cota (`YOUTUBE_DAILY_QUOTA`: 10.000 = 6/dia, 40.000 = 24/dia) |
 | `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha o limite do dia pela janela (6/dia em 24h = 1 a cada 4h) |
@@ -490,6 +491,36 @@ contra vídeos longos reais — se blocos bons estiverem sendo descartados com
 frequência (muitos avisos de "completando com candidato abaixo do limiar"),
 baixe esse valor em `config.py`.
 
+## Juiz de cortes com IA (opcional, recomendado)
+
+As regras de seleção acham bons *candidatos* (gancho, assunto que começa e
+termina, energia da voz), mas não entendem se o assunto é interessante ou se
+a fala é inteligente. Com uma chave da API da Anthropic, os até 12 melhores
+trechos de cada vídeo vão pro Claude (`src/ai_judge.py`). Ele dá uma nota de
+0 a 100 pelo conteúdo e escreve um título melhor pra cada trecho. O que
+entra na nota:
+
+- **sobe:** insight, dado ou história que se sustenta sozinho; curiosidade
+  nos primeiros segundos; um desfecho.
+- **desce:** zoeira sem conteúdo, piada interna, recado do canal, trecho que
+  depende do resto do episódio.
+
+Os clipes são escolhidos pela nota da IA, e quem tirar menos de 35 não é
+postado (`AI_REJECT_BELOW`).
+
+Como ligar:
+1. Crie a chave em https://console.anthropic.com (Settings → API keys) e
+   coloque créditos na conta.
+2. Salve a chave no arquivo `credentials\claude_api_key.txt`, só a chave,
+   sem mais nada. A pasta `credentials` não é tocada nas atualizações. Também
+   dá pra usar `CLAUDE_API_KEY` no `config.py` ou a variável de ambiente
+   `ANTHROPIC_API_KEY`.
+3. `.venv\Scripts\python.exe -m pip install anthropic`.
+
+Custo: ~US$0,05-0,10 por vídeo com o Claude Opus 5.5 (`AI_JUDGE_MODEL`). O
+log mostra o custo de cada chamada. Sem chave, tudo funciona do mesmo jeito,
+só com as regras.
+
 ## Como funciona a seleção "viral" dos cortes
 
 O `src/clip_selector.py` não usa nenhuma IA de terceiros — é um sistema de
@@ -690,6 +721,7 @@ opus-clip-clone/
 │   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
 │   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta
 │   ├── virality.py            # nota de viralidade (tempo ocioso): o que postar primeiro
+│   ├── ai_judge.py            # juiz de cortes com IA (Claude, opcional): nota + título por trecho
 │   ├── autopilot.py           # loop do piloto automático (fila, agenda, cota)
 │   ├── discovery.py           # acha o vídeo que mais está bombando
 │   ├── youtube_uploader.py    # upload pela API oficial do YouTube (OAuth)

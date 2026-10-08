@@ -387,6 +387,10 @@ class ClipCandidate:
     words: List[Word] = field(default_factory=list)
     # frase-gancho que originou o clipe (vira o título / balão do topo)
     hook_text: str = ""
+    # juiz de cortes com IA (src/ai_judge.py), quando há chave da API
+    ai_score: Optional[int] = None
+    ai_title: str = ""
+    ai_reason: str = ""
 
     @property
     def duration(self):
@@ -396,6 +400,17 @@ class ClipCandidate:
 # palavras de gancho GENÉRICAS demais pra valer como um padrão de gancho
 # inteiro: achado real — "Nunca vi, eu preciso ver, vamos ver!" virava o
 # melhor gancho do vídeo só por ter "nunca"
+# "substância": explicação, argumento, dado, assunto de gente pensando --
+# conta por minuto e entra na nota de cada candidato (pedido do usuário:
+# conteúdo mais inteligente, menos zoeira)
+_SUBSTANCE_RE = re.compile(
+    r"\b(porque|ou seja|por exemplo|a quest[ãa]o [ée]|o problema [ée]|significa|na verdade|"
+    r"estudo|pesquisa|dados|ci[êe]ncia|cientista|hist[óo]ria|economia|mercado|empresa|neg[óo]cio|"
+    r"investi\w*|psicolog\w*|c[ée]rebro|tecnologia|intelig[êe]ncia artificial|filosofia|pol[íi]tica|"
+    r"lei|direito|sa[úu]de|doen[çc]a|m[ée]dico|universo|evolu[çc][ãa]o|percent|milh[õo]es|bilh[õo]es)\b",
+    re.IGNORECASE)
+
+
 WEAK_HOOK_PATTERNS = [
     r"\bnunca\b", r"\bsempre\b", r"\bverdade\b", r"\bimportante\b",
     r"\bna real\b", r"\bé sério\b",
@@ -975,6 +990,9 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         # Shorts curtos seguram mais gente até o fim: dentro da faixa
         # permitida, cada segundo além de SELECT_PREFER_MAX_SECONDS custa um pouco
         score -= max(dur - long_after, 0.0) * long_w
+        # substância (explicação/argumento/dado) por minuto
+        substance = len(_SUBSTANCE_RE.findall(text)) / max(dur / 60.0, 0.5)
+        score += min(substance, 6.0) * getattr(config, "SELECT_SUBSTANCE_WEIGHT", 0.8)
 
         candidates.append(ClipCandidate(start=start_t, end=end_t, text=text,
                                          score=score, title="",
@@ -988,18 +1006,38 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
 
     candidates.sort(key=lambda c: c.score, reverse=True)
 
-    chosen: List[ClipCandidate] = []
+    def overlaps(c, lst):
+        return any(not (c.end + config.MIN_GAP_BETWEEN_CLIPS <= o.start or
+                        c.start >= o.end + config.MIN_GAP_BETWEEN_CLIPS) for o in lst)
+
+    # os melhores candidatos sem sobreposição; com a IA ligada vão mais deles
+    # pro juiz (src/ai_judge.py), que decide entre eles
+    from . import ai_judge
+    use_ai = ai_judge.enabled()
+    pool_size = n_clips
+    if use_ai:
+        pool_size = min(max(n_clips * 3, 8), getattr(config, "AI_JUDGE_MAX_CANDIDATES", 12))
+    pool: List[ClipCandidate] = []
     for c in candidates:
-        if len(chosen) >= n_clips:
+        if len(pool) >= pool_size:
             break
-        overlaps = any(
-            not (c.end + config.MIN_GAP_BETWEEN_CLIPS <= o.start or
-                 c.start >= o.end + config.MIN_GAP_BETWEEN_CLIPS)
-            for o in chosen
-        )
-        if not overlaps:
-            c.title = _make_title(c.hook_text or c.text)
-            chosen.append(c)
+        if not overlaps(c, pool):
+            pool.append(c)
+
+    verdicts = ai_judge.rank(pool) if use_ai else None
+    if verdicts:
+        lo, hi = min(c.score for c in pool), max(c.score for c in pool)
+        for c, v in zip(pool, verdicts):
+            c.ai_score, c.ai_title, c.ai_reason = v["score"], v["title"], v["reason"]
+            # a nota da IA manda; a das regras só desempata
+            c.score = v["score"] + 10.0 * (c.score - lo) / (hi - lo + 1e-9)
+        pool.sort(key=lambda c: c.score, reverse=True)
+        for c in pool:
+            print(f"    [IA] {c.ai_score:3d}/100  {c.start:6.1f}s  \"{c.ai_title}\" -- {c.ai_reason}")
+
+    chosen: List[ClipCandidate] = pool[:n_clips]
+    for c in chosen:
+        c.title = c.ai_title or _make_title(c.hook_text or c.text)
 
     if not chosen:
         raise RuntimeError("Não foi possível selecionar clipes sem sobreposição.")

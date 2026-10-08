@@ -143,7 +143,12 @@ def main():
     # pasta de saída própria e um .json com a lista dos clipes gerados
     parser.add_argument("--out", default=None)
     parser.add_argument("--results", default=None)
+    # idioma da fala (ex.: "en" pra canal gringo); padrão: WHISPERCPP_LANGUAGE
+    parser.add_argument("--lang", default=None)
     cli_args, _ = parser.parse_known_args()
+    if cli_args.lang:
+        config.WHISPERCPP_LANGUAGE = cli_args.lang
+        config.CONTENT_LANGUAGE = cli_args.lang
     if cli_args.out:
         config.OUTPUT_DIR = cli_args.out
 
@@ -196,7 +201,9 @@ def main():
                 source_title = None
         # dica de vocabulário pro Whisper: nomes próprios do título
         from src import transcriber as _tr
+        from src import ai_judge as _aj
         _tr.set_context(source_title)
+        _aj.set_context(source_title)
         info = video_info(source_path)
         print(f"    Duração: {info['duration']/60:.1f} min | "
               f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")

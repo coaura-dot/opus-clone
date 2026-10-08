@@ -24,3 +24,4 @@ google-auth-oauthlib>=1.0
 google-auth-httplib2>=0.2
 # fuso horário no Windows (a cota do YouTube zera no horário do Pacífico)
 tzdata
+anthropic             # juiz de cortes com IA (opcional, src/ai_judge.py)

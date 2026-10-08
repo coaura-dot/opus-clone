@@ -7,10 +7,15 @@ De onde vêm os candidatos (config.py, seção "Postagem automática"):
   - AUTOPILOT_SEARCHES: buscas extras no YouTube ("esta semana, mais
     vistos").
 
-Como escolhe: o vídeo com MAIS VIEWS (não precisa ser lançamento: um
-podcast de 2 meses atrás com 2 milhões de views rende ótimos cortes), com
-uma leve preferência pelos mais recentes do canal, variando o canal, com
-duração boa pra render cortes, que não seja live e que ainda não foi usado.
+Como escolhe: só vídeo RECENTE (publicado nos últimos
+AUTOPILOT_MAX_AGE_DAYS dias -- pedido do usuário: "tá escolhendo vídeo muito
+velho"), e entre eles o que está ganhando views mais rápido (views por dia),
+variando o canal, com duração boa pra render cortes, que não seja live, que
+não tenha palavra bloqueada (AUTOPILOT_BLOCK_WORDS: programa de zoeira) e
+que ainda não foi usado.
+
+Canal em outro idioma: "link_do_canal|en" na lista -- o vídeo escolhido leva
+o idioma junto, pra transcrição e legenda saírem no idioma certo.
 
 Detalhe que importa: a listagem é pedida em inglês. Em português o YouTube
 escreve "91 mil visualizações" e o número saía 91 (achado real: nada
@@ -71,7 +76,22 @@ def _channel_videos_url(channel: str) -> str:
     return c
 
 
+def _split_spec(spec: str):
+    """"@canal" ou "link|en" -> (canal, idioma ou None)."""
+    if "|" in spec:
+        ch, lang = spec.rsplit("|", 1)
+        return ch.strip(), (lang.strip() or None)
+    return spec.strip(), None
+
+
+def blocked(*texts) -> Optional[str]:
+    words = [w.lower() for w in getattr(config, "AUTOPILOT_BLOCK_WORDS", []) if w]
+    joined = " ".join(t or "" for t in texts).lower()
+    return next((w for w in words if w in joined), None)
+
+
 def list_channel(channel: str, n: int = 10) -> List[dict]:
+    channel, lang = _split_spec(channel)
     with _ydl(flat=True) as y:
         y.params["playlistend"] = n
         info = y.extract_info(_channel_videos_url(channel), download=False)
@@ -80,7 +100,7 @@ def list_channel(channel: str, n: int = 10) -> List[dict]:
         if e and e.get("id"):
             out.append({"id": e["id"], "title": e.get("title") or "", "duration": e.get("duration"),
                         "view_count": e.get("view_count"), "channel": info.get("channel") or channel,
-                        "origin": "canal", "rank": rank})
+                        "origin": "canal", "rank": rank, "lang": lang})
     return out
 
 
@@ -161,14 +181,16 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
             fails += 1
             log(f"    [busca] '{q}': {str(e).splitlines()[0][:120]}")
 
-    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 100000)
-    decay = getattr(config, "AUTOPILOT_RECENCY_DECAY", 0.97)
+    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 20000)
+    decay = getattr(config, "AUTOPILOT_RECENCY_DECAY", 0.90)
     uniq = {}
     for c in cands:
         views = c.get("view_count")
         if c["id"] in seen or c["id"] in uniq or not views or views < min_views:
             continue  # sem número de views = estreia/membros/live: pula
         if not _duration_ok(c.get("duration")):
+            continue
+        if blocked(c.get("title"), c.get("channel")):
             continue
         # muitas views primeiro; leve preferência pelos mais novos do canal;
         # canal já usado nas últimas 24h perde prioridade (varia a fonte)
@@ -180,8 +202,9 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
                 f"nos canais configurados.".replace(",", "."))
         return None
 
-    max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 0) or 0
-    for c in sorted(uniq.values(), key=lambda c: -c["score"])[:getattr(config, "AUTOPILOT_CHECK_TOP", 6)]:
+    max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 30) or 0
+    checked = []
+    for c in sorted(uniq.values(), key=lambda c: -c["score"])[:getattr(config, "AUTOPILOT_CHECK_TOP", 10)]:
         info = full_info(c["id"])
         if info:
             if info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
@@ -190,16 +213,30 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
                 continue
             if info.get("duration") and not _duration_ok(info["duration"]):
                 continue
+            if blocked(info.get("title"), info.get("channel")):
+                continue
             ts = info.get("timestamp")
             if max_age_d and ts and time.time() - ts > max_age_d * 86400:
                 continue
             c.update(title=info.get("title") or c["title"], channel=info.get("channel") or c["channel"],
                      timestamp=ts, view_count=info.get("view_count") or c["view_count"])
-        c["url"] = f"https://www.youtube.com/watch?v={c['id']}"
-        age = f", publicado há {(time.time() - c['timestamp']) / 86400:.0f} dias" if c.get("timestamp") else ""
-        log(f"    [busca] escolhido: \"{c['title']}\" ({c['channel']}) -- "
-            f"{c['view_count']:,} views{age}".replace(",", "."))
-        return c
-    log("    [busca] os candidatos com mais views não passaram nos filtros (live/idade/duração); "
-        "tento de novo depois.")
-    return None
+        # views por dia (o que está bombando AGORA), com o mesmo desconto pra
+        # canal usado nas últimas 24h; sem data, fica a nota da listagem
+        if c.get("timestamp"):
+            age_d = max((time.time() - c["timestamp"]) / 86400.0, 0.0)
+            c["final"] = c["view_count"] / (age_d + 2.0) ** 0.6 * \
+                (0.6 ** recent_channels.get(c.get("channel"), 0))
+        else:
+            c["final"] = c["score"] * 0.5
+        checked.append(c)
+    if not checked:
+        log(f"    [busca] nenhum vídeo dos últimos {max_age_d} dias passou nos filtros "
+            "(live/idade/duração/bloqueio); tento de novo depois.")
+        return None
+    c = max(checked, key=lambda c: c["final"])
+    c["url"] = f"https://www.youtube.com/watch?v={c['id']}"
+    age = f", publicado há {(time.time() - c['timestamp']) / 86400:.0f} dias" if c.get("timestamp") else ""
+    lang = f" [{c['lang']}]" if c.get("lang") else ""
+    log(f"    [busca] escolhido: \"{c['title']}\" ({c['channel']}){lang} -- "
+        f"{c['view_count']:,} views{age}".replace(",", "."))
+    return c

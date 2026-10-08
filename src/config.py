@@ -23,6 +23,20 @@ IDEAL_CLIP_DURATION = 40             # não usado pela seleção por gancho (só
 # um pouco por segundo -- continua podendo ir até MAX_CLIP_DURATION quando o
 # assunto pede, mas entre dois cortes bons o mais enxuto ganha
 SELECT_PROMO_PENALTY = 8.0
+SELECT_SUBSTANCE_WEIGHT = 0.8         # peso da "substância" (explicação/argumento/dado por minuto)
+
+# --- Juiz de cortes com IA (src/ai_judge.py) -- opcional ---
+# Com uma chave da API da Anthropic, os melhores trechos de cada vídeo vão pro
+# Claude, que dá nota (0-100) pelo conteúdo -- interessante, inteligente, se
+# sustenta sozinho, tem gancho e desfecho -- e escreve um título melhor. Sem
+# chave, a escolha é só pelas regras. Chave: https://console.anthropic.com
+# (Settings > API keys). Custo: uns US$0,05-0,10 por vídeo.
+CLAUDE_API_KEY = ""                   # melhor: salve a chave em credentials/claude_api_key.txt (atualização não apaga)
+AI_JUDGE_ENABLED = True
+AI_JUDGE_MODEL = "claude-opus-5-5"
+AI_JUDGE_EFFORT = "medium"
+AI_JUDGE_MAX_CANDIDATES = 12          # quantos trechos de cada vídeo vão pra avaliação
+AI_REJECT_BELOW = 35                  # nota da IA abaixo disso: o piloto não posta
 SELECT_PREFER_MAX_SECONDS = 90.0
 SELECT_LONG_PENALTY_PER_SECOND = 0.06
 HOOK_MIN_SCORE = 2.0                 # pontuação mínima de uma frase pra contar como gancho
@@ -993,21 +1007,35 @@ AUTOPILOT_UPLOAD = True                 # False = só gera os clipes, não posta
 # canais que LIBERAM cortes -- clipe de canal que não libera pode render
 # reivindicação/strike no seu canal. Aceita @nome ou o link do canal.
 AUTOPILOT_CHANNELS = [
+    # Podcasts com gente interessante (conferidos: existem e postam com
+    # frequência). Formato: "@canal" ou o link do canal; "|en" no fim marca
+    # canal em inglês (a transcrição/legenda sai em inglês).
     "@flowpodcast",
     "@InteligenciaLtda",
-    "@podpah",
-    "@ticaracaticast",
     "@PrimoCast",
+    "@cienciasemfim",                                            # Ciência Sem Fim
+    "https://www.youtube.com/channel/UC5VvsTwsyKWMZSQtt1MPCEw",  # PodPeople - Ana Beatriz Barbosa
+    "https://www.youtube.com/channel/UCzJPdSTGj7KPZLjaOatWS4A",  # Os Sócios Podcast
+    "https://www.youtube.com/channel/UCwZwvDC6f0WhcVTG-3aBUTQ",  # Market Makers
+    "@rodaviva",                                                 # Roda Viva (TV Cultura)
+    # Reacts
+    "https://www.youtube.com/channel/UCgSAH94ZjV6-w46hPJ0-ffQ",  # orochidois (Orochinho)
+    "@MaiconKuster",
+    "https://www.youtube.com/channel/UC4aiJNDUviw_vMhdCq5Kq1Q",  # Cortes do Casimito
+    "https://www.youtube.com/channel/UCldCI5K_HmwS_iQX7xqIlPg|en",  # DrDonut Clips (gringo, inglês)
 ]
+# vídeo cujo título ou canal tenha alguma destas palavras é ignorado
+# (pedido do usuário: nada de programa de zoeira)
+AUTOPILOT_BLOCK_WORDS = ["defante", "rango brabo", "aqueles caras", "pegadinha", "trollagem"]
 # Buscas no YouTube ("esta semana, mais vistos", só títulos em português)
 # pra achar vídeo bombando fora da lista acima. Vazio = só os canais.
 # Atenção: a busca traz canais que você não conhece -- confira se liberam corte.
 AUTOPILOT_SEARCHES = []
-AUTOPILOT_VIDEOS_PER_CHANNEL = 30       # últimos N vídeos de cada canal
-AUTOPILOT_CHECK_TOP = 6                 # quantos candidatos conferir a fundo por rodada
-AUTOPILOT_MAX_AGE_DAYS = 0              # 0 = qualquer idade (só importa ter muitas views)
-AUTOPILOT_RECENCY_DECAY = 0.97          # leve preferência pelos mais novos do canal (1.0 = nenhuma)
-AUTOPILOT_MIN_VIEWS = 100000
+AUTOPILOT_VIDEOS_PER_CHANNEL = 12       # últimos N vídeos de cada canal
+AUTOPILOT_CHECK_TOP = 10                # quantos candidatos conferir a fundo (data, live, duração) por rodada
+AUTOPILOT_MAX_AGE_DAYS = 30             # só vídeo publicado nos últimos N dias (0 = qualquer idade)
+AUTOPILOT_RECENCY_DECAY = 0.90          # preferência pelos mais novos do canal (1.0 = nenhuma)
+AUTOPILOT_MIN_VIEWS = 20000
 AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
 AUTOPILOT_MAX_SOURCE_MINUTES = 240
 AUTOPILOT_CLIPS_PER_VIDEO = 3

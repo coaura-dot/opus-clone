@@ -142,7 +142,7 @@ def keep_awake(on: bool = True):
 
 
 # -------------------------------------------------------- operário ---
-def run_worker(url: str, n_clips: int, out_dir: Path, log: Log) -> list:
+def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None) -> list:
     """Roda main.py num processo separado pra editar um vídeo. Devolve a
     lista de clipes gerados ([] se falhou)."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +151,8 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log) -> list:
         results.unlink()
     cmd = [sys.executable, "-u", str(ROOT / "main.py"), "--url", url, "--clips", str(n_clips),
            "--out", str(out_dir), "--results", str(results)]
+    if lang:
+        cmd += ["--lang", lang]  # canal em outro idioma (ex.: "...|en" na lista de canais)
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     kw = {}
     if sys.platform == "win32":
@@ -454,7 +456,7 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
     n_clips = n_clips or getattr(config, "AUTOPILOT_CLIPS_PER_VIDEO", 3)
     log(f"  >> Editando: \"{source.get('title', vid)}\" -- {source['url']}")
     t0 = time.time()
-    clips = run_worker(source["url"], n_clips, out_root / vid, log)
+    clips = run_worker(source["url"], n_clips, out_root / vid, log, lang=source.get("lang"))
     if not clips:
         state.mark_source(vid, "failed", title=source.get("title"), channel=source.get("channel"))
         return 0

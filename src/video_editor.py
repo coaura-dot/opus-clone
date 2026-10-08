@@ -164,7 +164,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     ass_path = work / "captions.ass"
     # título = a frase-gancho que originou o clipe (a mesma no balão do topo
     # e no .post.txt)
-    title = make_title(getattr(candidate, "hook_text", "") or candidate.text)
+    # título escrito pela IA (src/ai_judge.py), quando ligada; senão, a frase-gancho
+    title = (getattr(candidate, "ai_title", "") or "").strip() or \
+        make_title(getattr(candidate, "hook_text", "") or candidate.text)
     hook_text = title if getattr(config, "HOOK_ENABLED", True) else None
     generate_ass(clip_words, clip_offset=0.0, output_path=str(ass_path),
                  clip_duration=out_duration, hook_text=hook_text,
@@ -205,7 +207,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                     extra={"start": round(candidate.start, 2), "end": round(candidate.end, 2),
                            "score": round(float(getattr(candidate, "score", 0.0)), 2),
                            # pra nota de qualidade do piloto (src/quality.py)
-                           "text": candidate.text, "hook": getattr(candidate, "hook_text", "") or ""})
+                           "text": candidate.text, "hook": getattr(candidate, "hook_text", "") or "",
+                           "ai_score": getattr(candidate, "ai_score", None),
+                           "ai_reason": getattr(candidate, "ai_reason", "")})
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")
