@@ -360,7 +360,7 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
     # no meio do rosto do mesmo jeito
     crop_w_full = full_crop_h * aspect
     big = [(k, max(g, key=lambda f: f[2])) for k, g in with_face
-           if max(f[2] for f in g) * sx > getattr(config, "SHOT_FACE_TOO_WIDE", 0.8) * crop_w_full]
+           if max(f[2] for f in g) * sx > getattr(config, "SHOT_FACE_TOO_WIDE", 1.2) * crop_w_full]
     if 0 < presence < 0.4 and len(big) >= max(1, 0.15 * len(fs)) and not is_big_text:
         cx = float(np.median([f[0] for _, f in big])) * sx
         fw = float(np.median([f[2] for _, f in big])) * sx
@@ -405,7 +405,7 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
         # ampliado até onde cabe, sobre fundo borrado.
         face_w = float(np.median([t[4] for t in track])) * sx
         crop_w_full = full_crop_h * aspect
-        if face_w > getattr(config, "SHOT_FACE_TOO_WIDE", 0.8) * crop_w_full:
+        if face_w > getattr(config, "SHOT_FACE_TOO_WIDE", 1.2) * crop_w_full:
             cx = float(np.median([t[1] for t in track])) * sx
             w = float(np.clip(face_w * 1.25, crop_w_full, content_w))
             x0 = float(np.clip(cx - w / 2, bounds[0], bounds[2] - w))

@@ -122,7 +122,7 @@ SHOT_MIN_SECONDS = 0.4            # plano mais curto que isso (flash, chicote) j
 SHOT_PATH_SMOOTH_SECONDS = 0.5    # suavização do caminho quando o rosto anda no plano
 SHOT_LOCK_X = 0.15                # rosto anda menos que isso (fração da largura do recorte): câmera parada
 SHOT_LOCK_Y = 0.10
-SHOT_FACE_TOO_WIDE = 0.8           # rosto mais largo que isso (fração do recorte 9:16): mostra o rosto inteiro
+SHOT_FACE_TOO_WIDE = 1.2           # rosto mais largo que o recorte 9:16 x isso (close gigante): mostra o rosto inteiro
 LETTERBOX_CROP_ENABLED = True     # tira as barras pretas (e a legenda do vídeo original dentro delas)
 LETTERBOX_DARK_LEVEL = 12         # brilho (0-255) até onde uma linha conta como barra preta (preto de verdade)
 
@@ -474,10 +474,10 @@ FX_ZOOM_TOTAL_MAX = 1.28             # teto somando todos os zooms (jump cut, mo
 ZOOM_AMOUNT_SCALE = 0.8              # escala todos os zooms acima (0.8 = 20% menos zoom)
 FX_ZOOM_IN_SECONDS = 0.7             # entrada do zoom (suave, sem overshoot)
 FX_ZOOM_OUT_SECONDS = 0.9           # saída do zoom (volta suave)
-FX_INTRO_ENABLED = False             # abertura: zoom out de impacto + flicker (desligado: exagerado)
-FX_INTRO_ZOOM = 1.18
-FX_INTRO_ZOOM_SECONDS = 0.7
-FX_INTRO_FLICKER_SECONDS = 0.45
+FX_INTRO_ENABLED = True              # abertura: zoom out suave (pedido do usuário)
+FX_INTRO_ZOOM = 1.22                 # começa ~12% mais perto (x ZOOM_AMOUNT_SCALE)...
+FX_INTRO_ZOOM_SECONDS = 1.5          # ...e se afasta suave nesse tempo
+FX_INTRO_FLICKER_SECONDS = 0.0       # sem flicker (0 = desligado)
 FX_IMPACT_MIN_WEIGHT = 3.0           # só os momentos mais fortes viram impacto (flash+tremida+RGB+boom)
 FX_IMPACT_MIN_GAP_SECONDS = 8.0
 FX_FLASH_STRENGTH = 0.45
@@ -498,7 +498,7 @@ SFX_IMPACT_DB = -19.0                # volume do "boom" grave nos momentos de im
 # Balão branco com texto preto (visual clássico de TikTok/Reels) com o
 # título do .post.txt, pra quem está rolando o feed entender em 1 segundo
 # do que é o corte. Fica abaixo da faixa de abas do app no topo.
-HOOK_ENABLED = True
+HOOK_ENABLED = False                # desligado a pedido do usuário (o whoosh de entrada sai junto)
 HOOK_SECONDS = 3.2
 HOOK_FONT = "Anton"
 HOOK_FONT_SIZE = 96

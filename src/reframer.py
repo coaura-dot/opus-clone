@@ -1865,6 +1865,11 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 rz = 1.0 + (rz - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
                 out_frame = react_plan.compose(frame, frame_idx / fps, out_w, out_h, rz)
             elif not legacy:
+                # cena sem rosto: só o zoom de abertura (sem zoom de momento-chave)
+                broll_zoom = 1.0
+                if fx is not None and getattr(fx, "intro", False) and \
+                        t < getattr(config, "FX_INTRO_ZOOM_SECONDS", 0.7):
+                    broll_zoom = 1.0 + (fx_zoom - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
                 if shot.kind in ("text", "facefit"):
                     # cartela/print: o texto inteiro (ampliado até a largura
                     # dele, quando dá), sem cortar nada; close gigante: o
@@ -1878,7 +1883,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     pch = shot.crop_h
                     out_frame = _compose_tracked_frame(
                         frame, px, py, pch * out_w / out_h, pch, src_w, src_h, out_w, out_h,
-                        zoom_factor if shot.kind == "single" else 1.0, bounds=bounds,
+                        zoom_factor if shot.kind == "single" else broll_zoom, bounds=bounds,
                     )
                 blend_remaining = 0
             elif blend_remaining > 0:

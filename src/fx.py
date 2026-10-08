@@ -110,7 +110,10 @@ class FxPlan:
             dur = getattr(config, "FX_INTRO_ZOOM_SECONDS", 0.7)
             if t < dur:
                 p = t / dur
-                z *= 1.0 + (getattr(config, "FX_INTRO_ZOOM", 1.18) - 1.0) * intensity() * (1 - p) ** 3
+                # zoom out suave: começa um pouco mais perto e se afasta
+                # acelerando e freando devagar (smootherstep), sem tranco
+                k = 1 - p * p * p * (p * (6 * p - 15) + 10)
+                z *= 1.0 + (getattr(config, "FX_INTRO_ZOOM", 1.18) - 1.0) * intensity() * k
         return z
 
     # ----- efeitos no quadro já composto ---------------------------------
@@ -266,7 +269,8 @@ def plan_effects(words, duration: float, energies: Optional[np.ndarray] = None,
 
     # zoom nos momentos-chave: melhores primeiro, respeitando espaçamento
     min_gap = getattr(config, "FX_ZOOM_MIN_GAP_SECONDS", 3.5)
-    start_after = 1.2 if plan.intro else 0.3  # não briga com o zoom de abertura
+    # não briga com o zoom de abertura
+    start_after = getattr(config, "FX_INTRO_ZOOM_SECONDS", 0.7) + 0.5 if plan.intro else 0.3
     taken: List[float] = []
     for weight, i in scored:
         t0 = max(words[i].start - 0.08, 0.0)

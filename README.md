@@ -605,9 +605,10 @@ máquina com acesso à internet.
 
 Estilo corte viral: grupos de 3 palavras em CAIXA ALTA, cada grupo entra com
 um "pop", a palavra falada acende em amarelo e cresce, e números / dinheiro /
-palavras de impacto ficam em verde (`CAPTION_*` em `config.py`). Nos
-primeiros ~3s aparece o título do clipe num balão branco no topo, com um
-*whoosh* sintetizado (`HOOK_*`, `SFX_*`).
+palavras de impacto ficam em verde (`CAPTION_*` em `config.py`). O clipe
+abre com um zoom out suave (~12%, em 1,5 s; `FX_INTRO_*`). O título num
+balão branco no topo nos primeiros ~3 s, com *whoosh*, vem desligado
+(`HOOK_ENABLED = True` liga de novo).
 
 A fonte usada nas legendas (**Anton**, Google Fonts, licença OFL livre) vem
 embutida em `assets/fonts/` e é carregada diretamente pelo filtro `ass` do
