@@ -53,6 +53,9 @@ _CLOSING = [
     r"obrigad[oa] (pela|por) (presen[çc]a|conversa|participa[çc][ãa]o|vinda|ter vindo|ter aceitado)",
     r"foi um (prazer|privil[ée]gio|honra) (te receber|ter voc[êe]|estar aqui|conversar)",
     r"valeu (demais )?por (ter )?vir", r"volta (mais )?vezes", r"a casa [ée] sua",
+    # achado real: "A gente agradecer a receptividade do Tirando Dúvidas"
+    r"agradecer (a|pela|o) (receptividade|presen[çc]a|participa[çc][ãa]o|audi[êe]ncia|carinho|convite)",
+    r"(quero|queria|vamos|gostaria de) agradecer", r"obrigad[oa] a (todos|voc[êe]s) que (assistiram|ficaram)",
 ]
 _STRONG_HOOK = [
     r"\?$", r"\bnunca\b", r"\bningu[ée]m\b", r"\bverdade\b", r"\bsegredo\b", r"\bmentira\b", r"\bmorr",

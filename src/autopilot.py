@@ -637,11 +637,15 @@ def prune_blocked(state: State, log: Log) -> int:
         except (OSError, ValueError):
             title = None
         word = None if _prio(c) else blocked(src.get("title"), src.get("channel"), title)
+        if not word and not _prio(c):
+            ch = (src.get("channel") or "").lower()
+            word = next((n for n in getattr(config, "AUTOPILOT_DROP_QUEUED_FROM", [])
+                         if n and n.lower() in ch), None)
         (gone if word else keep).append((c, word))
     if gone:
         state.data["queue"] = [c for c, _ in keep]
         state.save()
-        log(f"  Fila: {len(gone)} clipe(s) de vídeo bloqueado removido(s) "
+        log(f"  Fila: {len(gone)} clipe(s) de vídeo bloqueado ou de canal que saiu da lista removido(s) "
             f"({', '.join(sorted({w for _, w in gone}))}).")
     return len(gone)
 

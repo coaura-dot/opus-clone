@@ -1018,23 +1018,28 @@ AUTOPILOT_UPLOAD = True                 # False = só gera os clipes, não posta
 # canais que LIBERAM cortes -- clipe de canal que não libera pode render
 # reivindicação/strike no seu canal. Aceita @nome ou o link do canal.
 AUTOPILOT_CHANNELS = [
-    # Podcasts com gente interessante (conferidos: existem e postam com
-    # frequência). Formato: "@canal" ou o link do canal; "|en" no fim marca
-    # canal em inglês (a transcrição/legenda sai em inglês).
-    "@flowpodcast",
-    "@InteligenciaLtda",
-    "@PrimoCast",
-    "@cienciasemfim",                                            # Ciência Sem Fim
-    "https://www.youtube.com/channel/UC5VvsTwsyKWMZSQtt1MPCEw",  # PodPeople - Ana Beatriz Barbosa
-    "https://www.youtube.com/channel/UCzJPdSTGj7KPZLjaOatWS4A",  # Os Sócios Podcast
-    "https://www.youtube.com/channel/UCwZwvDC6f0WhcVTG-3aBUTQ",  # Market Makers
-    "@rodaviva",                                                 # Roda Viva (TV Cultura)
-    # Reacts
-    "https://www.youtube.com/channel/UCgSAH94ZjV6-w46hPJ0-ffQ",  # orochidois (Orochinho)
-    "@MaiconKuster",
-    "https://www.youtube.com/channel/UC4aiJNDUviw_vMhdCq5Kq1Q",  # Cortes do Casimito
-    "https://www.youtube.com/channel/UCldCI5K_HmwS_iQX7xqIlPg|en",  # DrDonut Clips (gringo, inglês)
+    # Podcasts GRANDES, com convidados famosos (pedido do usuário: "clipar
+    # conteúdo de gente grande na internet"). Conferido em 09/10/2026:
+    # inscritos e views típicas dos vídeos recentes.
+    "@flowpodcast",                                              # Flow -- 6,8 mi inscritos
+    "@InteligenciaLtda",                                         # Inteligência Ltda -- 5,8 mi
+    "@podpah",                                                   # Podpah -- 10,2 mi
+    "@Ticaracaticast",                                           # Ticaracaticast -- 3 mi, episódios de 2 h
+    "@cienciasemfim",                                            # Ciência Sem Fim -- 1,3 mi (ciência)
+    # Reacts grandes
+    "https://www.youtube.com/channel/UCgSAH94ZjV6-w46hPJ0-ffQ",  # orochidois (Orochinho) -- ~780 mil views/vídeo
+    "@MaiconKuster",                                             # Maicon Küster -- ~940 mil views/vídeo
+    "https://www.youtube.com/channel/UC4aiJNDUviw_vMhdCq5Kq1Q",  # Cortes do Casimito -- ~700 mil views/vídeo
+    # Gringos ("|en" = canal em inglês: transcrição/legenda em inglês)
+    "https://www.youtube.com/channel/UCldCI5K_HmwS_iQX7xqIlPg|en",  # DrDonut Clips -- ~420 mil views/vídeo
+    "@TheoVon|en",                                               # Theo Von -- ~1,1 mi views/episódio
+    "@lexfridman|en",                                            # Lex Fridman -- ~950 mil views/episódio
+    # Saíram por serem pequenos demais (views típicas de 4 mil a 20 mil):
+    # PrimoCast, PodPeople, Os Sócios, Market Makers; Roda Viva (sem views na listagem)
 ]
+# clipes JÁ PRONTOS na fila destes canais saem dela quando o piloto liga
+# (canais tirados da lista acima por serem pequenos)
+AUTOPILOT_DROP_QUEUED_FROM = ["PrimoCast", "PodPeople", "Os Sócios", "Market Makers", "Roda Viva"]
 # vídeo cujo título ou canal tenha alguma destas palavras é ignorado
 # (pedido do usuário: nada de programa de zoeira)
 AUTOPILOT_BLOCK_WORDS = ["defante", "rango brabo", "aqueles caras", "pegadinha", "trollagem"]
@@ -1045,7 +1050,16 @@ AUTOPILOT_SEARCHES = []
 AUTOPILOT_VIDEOS_PER_CHANNEL = 12       # últimos N vídeos de cada canal
 AUTOPILOT_CHECK_TOP = 10                # quantos candidatos conferir a fundo (data, live, duração) por rodada
 AUTOPILOT_MAX_AGE_DAYS = 30             # só vídeo publicado nos últimos N dias (0 = qualquer idade)
-AUTOPILOT_MIN_VIEWS = 20000
+AUTOPILOT_MIN_VIEWS = 50000
+# na escolha do vídeo, quanto pesa o TAMANHO (views por dia, absoluto) contra
+# o "bombando pro canal dele" (relativo ao normal do canal). Antes era 0.25 e
+# podcast pequeno com um vídeo acima da média dele ganhava de episódio do
+# Flow/Podpah com convidado famoso (pedido do usuário: "pegue de podcasts
+# maiores, com pessoas mais famosas")
+AUTOPILOT_POPULARITY_WEIGHT = 0.65
+# canal gringo ("|en") entra com este peso na escolha: podcast americano tem
+# muito mais view que brasileiro e tomaria a fila toda; o canal é em português
+AUTOPILOT_FOREIGN_FACTOR = 0.5
 AUTOPILOT_EST_DAYS_PER_VIDEO = 2.0      # sem data do vídeo: estima a idade como (posição no canal) x isso
 AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
 AUTOPILOT_PREFER_EPISODE_MINUTES = 35   # abaixo disso (provável corte, não o episódio) perde até 40% na escolha

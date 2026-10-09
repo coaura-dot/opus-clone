@@ -269,9 +269,12 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
     def score(c, age_d):
         v = velocity(c["view_count"], age_d)
         rel = v / max(channel_norm.get(c.get("channel"), v), 1.0)  # >1 = acima do normal do canal
-        # bombando pro canal dele (rel) pesa mais que o tamanho do canal (v);
-        # canal usado nas últimas 24h perde prioridade (varia a fonte)
-        return ((rel ** 0.75) * (v ** 0.25) * (0.6 ** recent_channels.get(c.get("channel"), 0))
+        # tamanho (v: views por dia) pesa mais que o "bombando pro canal dele"
+        # (rel) -- AUTOPILOT_POPULARITY_WEIGHT; canal usado nas últimas 24h
+        # perde prioridade (varia a fonte)
+        pw = getattr(config, "AUTOPILOT_POPULARITY_WEIGHT", 0.65)
+        foreign = getattr(config, "AUTOPILOT_FOREIGN_FACTOR", 0.5) if c.get("lang") else 1.0
+        return ((rel ** (1 - pw)) * (v ** pw) * foreign * (0.6 ** recent_channels.get(c.get("channel"), 0))
                 * topic_factor(c.get("title")) * length_factor(c.get("duration")))
 
     uniq = {}

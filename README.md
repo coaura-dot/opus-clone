@@ -317,10 +317,13 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, PrimoCast, Ciência Sem Fim, PodPeople, Os Sócios, Market Makers, Roda Viva, orochidois, Maicon Küster, Cortes do Casimito, DrDonut Clips (inglês) | canais acompanhados (`"link\|en"` = canal em inglês) |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês) |
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
-| `AUTOPILOT_MIN_VIEWS` | 20000 | só vídeos com pelo menos N views |
+| `AUTOPILOT_MIN_VIEWS` | 50000 | só vídeos com pelo menos N views |
+| `AUTOPILOT_POPULARITY_WEIGHT` | 0.65 | na escolha, quanto pesa o tamanho do vídeo (views por dia) contra o "bombando pro canal dele"; mais alto = mais conteúdo de gente grande |
+| `AUTOPILOT_FOREIGN_FACTOR` | 0.5 | peso dos canais gringos (`\|en`) na escolha, pra não tomarem a fila |
+| `AUTOPILOT_DROP_QUEUED_FROM` | PrimoCast, PodPeople, Os Sócios, Market Makers, Roda Viva | clipes já prontos desses canais saem da fila ao ligar |
 | `AUTOPILOT_MAX_AGE_DAYS` | 30 | só vídeos de até N dias; entre eles vence o que está indo **melhor que o normal do próprio canal** (views por dia), no máximo 2 por canal na disputa; 0 = qualquer idade |
 | `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
 | `AUTOPILOT_PREFER_EPISODE_MINUTES` | 35 | vídeo mais curto que isso (provável corte, não o episódio inteiro) perde até 40% na escolha |
