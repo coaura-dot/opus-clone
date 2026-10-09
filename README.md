@@ -236,6 +236,22 @@ O piloto também atualiza o yt-dlp do `.venv` uma vez por dia
 (`AUTOPILOT_UPDATE_YTDLP`): o YouTube muda direto, e versão velha falha com
 "HTTP Error 403" ou "unable to extract yt initial data".
 
+### Vídeo bloqueado por direitos autorais
+
+De 20 min a 24 h depois de cada postagem (a cada 15 min), o piloto
+pergunta pra API do YouTube se o vídeo foi rejeitado (reivindicação do
+Content ID, direitos autorais, duplicado) ou se está bloqueado no Brasil
+(`src/rights.py`, 1 unidade de cota a cada 50 vídeos). Se foi:
+- o log avisa;
+- o canal de origem entra na lista de canais que dão bloqueio: o piloto
+  não pega mais vídeo dele e tira da fila os clipes dele;
+- se o post foi nas últimas 6 h, o próximo sai na hora, no lugar do que
+  ninguém vê.
+
+O vídeo bloqueado não é apagado sozinho; dá pra apagar no YouTube Studio.
+Achado real que motivou: o primeiro corte do The Noite (SBT) foi postado,
+mas não aparecia no canal.
+
 ### Nota de qualidade: o que posta e o que não posta
 
 Cada clipe pronto ganha uma nota de 0 a 100 (`src/quality.py`). A fila
@@ -317,7 +333,7 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; humor/TV/assunto do momento: The Noite, Ilha de Barbados, Diva Depressão, Felipe Neto; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês). Programa de TV (The Noite) tem mais chance de reivindicação no Content ID |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; humor e assunto do momento: Ilha de Barbados, Diva Depressão, Felipe Neto; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês). Canal que der bloqueio de direitos autorais sai sozinho (abaixo) |
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
 | `AUTOPILOT_MIN_VIEWS` | 50000 | só vídeos com pelo menos N views |

@@ -874,6 +874,9 @@ def run_forever(upload: bool = True):
                 from . import feedback
                 feedback.refresh_views(state, service, log)
                 feedback.calibrate(state, log)
+                # o vídeo postado está visível ou o Content ID bloqueou? (src/rights.py)
+                from . import rights
+                rights.check_recent_posts(state, service, log)
 
             # 1) postar, se estiver na hora -- e se o banco de clipes já tem
             # opção de podcasts diferentes pra escolher o mais viral
@@ -914,7 +917,8 @@ def run_forever(upload: bool = True):
                     recent = state.recent_channels()
                     for ch in {_channel_of(state, c) for c in state.data["queue"]}:
                         recent[ch] = recent.get(ch, 0) + 1
-                    source = discovery.pick_source(state.seen_ids(), recent, log=log)
+                    source = discovery.pick_source(state.seen_ids(), recent, log=log,
+                                                   avoid_channels=set(state.data.get("bad_channels", {})))
                 state.data.pop("retry_source", None)
                 if source:
                     try:

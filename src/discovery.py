@@ -229,7 +229,8 @@ def _duration_ok(d) -> bool:
     return lo <= d <= hi
 
 
-def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) -> Optional[dict]:
+def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
+                avoid_channels: Optional[set] = None) -> Optional[dict]:
     """O melhor vídeo pra cortar agora (ou None se não achou nada novo).
     `seen`: IDs já usados/descartados. `recent_channels`: canal -> quantas
     vezes foi usado nas últimas 24h (pra variar a fonte)."""
@@ -287,6 +288,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
             continue
         if blocked(c.get("title"), c.get("channel")):
             continue
+        if avoid_channels and c.get("channel") in avoid_channels:
+            continue  # canal que já deu bloqueio de direitos autorais (src/rights.py)
         est_age = (c.get("rank", 0) + 1) * est_days
         if max_age_d and est_age > max_age_d * 1.5:
             continue  # bem fundo na lista do canal: com certeza velho
@@ -320,6 +323,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
             if info.get("duration") and not _duration_ok(info["duration"]):
                 continue
             if blocked(info.get("title"), info.get("channel")):
+                continue
+            if avoid_channels and info.get("channel") in avoid_channels:
                 continue
             ts = info.get("timestamp")
             if max_age_d and ts and time.time() - ts > max_age_d * 86400:

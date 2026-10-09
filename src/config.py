@@ -1029,9 +1029,8 @@ AUTOPILOT_CHANNELS = [
     "@cienciasemfim",                                            # Ciência Sem Fim -- 1,3 mi (ciência)
     # Humor, TV e assunto do momento (pedido do usuário: "vídeos engraçados,
     # momentos engraçados em podcasts, programas de TV recentes, acontecimentos
-    # recentes"). Atenção: programa de TV é de emissora -- mais chance de
-    # reivindicação do Content ID que podcast; se der problema, tire a linha.
-    "@TheNoite",                                                 # The Noite com Danilo Gentili (SBT) -- 13,8 mi, ~140 mil views/episódio
+    # recentes"). The Noite (SBT) saiu: o 1º corte dele foi bloqueado pelo
+    # Content ID da emissora. Canal que der bloqueio sai sozinho (src/rights.py).
     "@IlhadeBarbados",                                           # Ilha de Barbados (humor) -- ~180 mil views/vídeo
     "@DivaDepressao",                                            # Diva Depressão (TV, reality, famosos) -- ~250 mil views/vídeo
     "@felipeneto",                                               # Felipe Neto (react do que está bombando) -- ~880 mil views/vídeo
@@ -1048,7 +1047,7 @@ AUTOPILOT_CHANNELS = [
 ]
 # clipes JÁ PRONTOS na fila destes canais saem dela quando o piloto liga
 # (canais tirados da lista acima por serem pequenos)
-AUTOPILOT_DROP_QUEUED_FROM = ["PrimoCast", "PodPeople", "Os Sócios", "Market Makers", "Roda Viva"]
+AUTOPILOT_DROP_QUEUED_FROM = ["PrimoCast", "PodPeople", "Os Sócios", "Market Makers", "Roda Viva", "The Noite"]
 # vídeo cujo título ou canal tenha alguma destas palavras é ignorado
 # (pedido do usuário: nada de programa de zoeira)
 AUTOPILOT_BLOCK_WORDS = ["defante", "rango brabo", "aqueles caras", "pegadinha", "trollagem"]
