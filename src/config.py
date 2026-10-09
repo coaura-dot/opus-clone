@@ -587,6 +587,13 @@ MUSIC_VOLUME_DB = -20.94  # +50% de ganho linear sobre o valor anterior
 # (Com o valor fixo acima, medido em clipes reais, a música ficava só ~9 dB
 # abaixo da voz — alta demais.) None = usa MUSIC_VOLUME_DB fixo.
 MUSIC_BELOW_VOICE_DB = 22.1          # (era 24: +25% de volume = +1.9 dB)
+# a distância acima vale trecho a trecho: a loudness da fala e da música é
+# medida a cada 0,1 s ao longo do clipe todo, e o volume da música acompanha
+# (convidado que fala baixo -> música desce junto; drop da música -> ela é
+# segurada; parte calma -> sobe um pouco). False = um volume só pro clipe.
+MUSIC_LEVEL_FOLLOW_VOICE = True
+MUSIC_LEVEL_MAX_CUT_DB = 9.0          # quanto o acompanhamento pode abaixar além do volume típico
+MUSIC_LEVEL_MAX_BOOST_DB = 6.0        # ... e subir (trecho calmo da música)
 MUSIC_DUCKING = True
 MUSIC_DUCKING_RATIO = 4              # compressão do ducking (era 8 = quase mutava a música
                                       # inteira enquanto havia qualquer fala)

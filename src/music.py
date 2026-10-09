@@ -283,6 +283,103 @@ def _music_gain_db(voice_audio: str, music_path: str) -> float:
     return config.MUSIC_VOLUME_DB
 
 
+# --- volume da música acompanhando a voz, momento a momento -------------
+# Pedido do usuário: "o volume da música adaptado ao volume do vídeo pra
+# ficar boa de fundo -- pegar várias amostras ao longo da música e do
+# vídeo". Um ganho único (média do clipe inteiro) não basta: a música tem
+# trecho calmo e drop (até ~10 dB de diferença) e o convidado fala mais
+# baixo que o apresentador. Então mede a loudness (EBU R128 "momentânea",
+# janela de 0,4 s) a cada 0,1 s nas DUAS faixas e calcula um ganho que
+# varia devagar: a música fica sempre ~MUSIC_BELOW_VOICE_DB abaixo da fala
+# daquele trecho.
+_LEVEL_STEP = 0.1  # s entre medições (o ebur128 do ffmpeg mede a cada 100 ms)
+
+
+def _loudness_curve(path: str) -> Optional[np.ndarray]:
+    """Loudness momentânea (LUFS, janela de 400 ms) a cada 100 ms."""
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-v", "verbose", "-i", str(path),
+                           "-af", "ebur128", "-f", "null", "-"],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    vals = re.findall(r"\bt:\s*[\d.]+\s+TARGET:.*?M:\s*(-?[\d.]+)", proc.stderr.decode(errors="ignore"))
+    if len(vals) < 10:
+        return None
+    return np.maximum(np.array([float(v) for v in vals]), -70.0)
+
+
+def _rolling_energy_db(db: np.ndarray, seconds: float, mask: Optional[np.ndarray] = None) -> np.ndarray:
+    """Média de energia (não de dB) numa janela móvel; com `mask`, só dos
+    quadros marcados (os outros herdam o valor dos vizinhos)."""
+    n = max(int(round(seconds / _LEVEL_STEP)), 1)
+    e = 10 ** (db / 10.0)
+    w = np.ones(len(db)) if mask is None else mask.astype(float)
+    k = np.ones(n)
+    num = np.convolve(e * w, k, mode="same")
+    den = np.convolve(w, k, mode="same")
+    out = np.full(len(db), np.nan)
+    ok = den > 0.5
+    out[ok] = 10 * np.log10(np.maximum(num[ok] / den[ok], 1e-12))
+    if not ok.any():
+        return out
+    idx = np.arange(len(db))
+    return np.interp(idx, idx[ok], out[ok])  # pausa longa: segura o nível de antes/depois
+
+
+def music_gain_curve(voice_audio: str, music_path: str) -> Optional[np.ndarray]:
+    """Ganho (dB) da música a cada 100 ms, ou None (aí vale o ganho único)."""
+    below = getattr(config, "MUSIC_BELOW_VOICE_DB", None)
+    if below is None:
+        return None
+    v = _loudness_curve(voice_audio)
+    m = _loudness_curve(music_path)
+    if v is None or m is None:
+        return None
+    n = min(len(v), len(m))
+    v, m = v[:n], m[:n]
+    # quadros com FALA: bem acima do piso do clipe (respiração/ruído ficam de fora)
+    speech = v > max(np.percentile(v, 95) - 20.0, -60.0)
+    if speech.sum() < 10:
+        return None
+    voice_ref = 10 * np.log10(np.mean(10 ** (v[speech] / 10.0)))
+    # nível da fala no trecho (janela de 6 s): o convidado que fala baixo puxa a
+    # música junto; limitado a +-6 dB do clipe todo pra não seguir grito/sussurro
+    voice_local = np.clip(_rolling_energy_db(v, 6.0, speech), voice_ref - 6.0, voice_ref + 6.0)
+    # nível da música no trecho (janela de 3 s): calmo x drop
+    music_local = _rolling_energy_db(m, 3.0, m > -60.0)
+    gain = (voice_local - below) - music_local
+    # mantém um pouco da dinâmica da música (sem achatar tudo) e sem saltos
+    mid = float(np.median(gain))
+    gain = np.clip(gain, mid - getattr(config, "MUSIC_LEVEL_MAX_CUT_DB", 9.0),
+                   mid + getattr(config, "MUSIC_LEVEL_MAX_BOOST_DB", 6.0))
+    k = max(int(round(1.5 / _LEVEL_STEP)), 1)
+    gain = np.convolve(np.pad(gain, (k // 2, k - 1 - k // 2), mode="edge"), np.ones(k) / k, mode="valid")
+    return np.clip(gain, -60.0, 12.0)
+
+
+def _apply_gain_curve(music_path: str, gain_db: np.ndarray, out_path: str) -> bool:
+    """Aplica o ganho variável na trilha (wav mono 16 bits)."""
+    import wave
+    try:
+        with wave.open(str(music_path), "rb") as w:
+            sr, ch, sw = w.getframerate(), w.getnchannels(), w.getsampwidth()
+            raw = w.readframes(w.getnframes())
+    except (OSError, wave.Error):
+        return False
+    if sw != 2:
+        return False
+    x = np.frombuffer(raw, np.int16).astype(np.float32).reshape(-1, ch)
+    # ganho do quadro i vale no CENTRO da janela de 400 ms que termina em (i+1)*0,1 s
+    t_gain = (np.arange(len(gain_db)) + 1) * _LEVEL_STEP - 0.2
+    t = np.arange(len(x)) / float(sr)
+    g = 10 ** (np.interp(t, t_gain, gain_db) / 20.0)
+    y = np.clip(x * g[:, None], -32768, 32767).astype(np.int16)
+    with wave.open(str(out_path), "wb") as w:
+        w.setnchannels(ch)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(y.tobytes())
+    return True
+
+
 def load_track_credit(track: Optional[MusicTrack]) -> Optional[str]:
     """Linha de crédito da trilha, lida de assets/music/track_credits.txt
     (formato "Título | crédito" por linha, casado com o nome do arquivo do
@@ -346,7 +443,15 @@ def mix_with_music(voice_audio: str, duration: float, output_path: str,
     ]
     run(cmd)
 
-    music_vol = _db_to_factor(_music_gain_db(voice_audio, str(music_path)))
+    # volume da música acompanhando a voz trecho a trecho (várias medições ao
+    # longo das duas faixas); se não der pra medir, cai no ganho único
+    music_vol = 1.0
+    curve = music_gain_curve(voice_audio, str(music_path)) if getattr(config, "MUSIC_LEVEL_FOLLOW_VOICE", True) else None
+    leveled = work_dir / "_music_bed_leveled.wav"
+    if curve is not None and _apply_gain_curve(str(music_path), curve, str(leveled)):
+        music_path = leveled
+    else:
+        music_vol = _db_to_factor(_music_gain_db(voice_audio, str(music_path)))
     ratio = getattr(config, "MUSIC_DUCKING_RATIO", 4)
     threshold = getattr(config, "MUSIC_DUCKING_THRESHOLD", 0.08)
     # loudnorm normaliza o volume final para -14 LUFS (padrão usado por

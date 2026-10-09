@@ -543,6 +543,24 @@ clipe e evita repetir as últimas. Para conferir o que ele está vendo:
 - A biblioteca **NCS** que vinha com o programa (23 faixas de phonk/funk)
   fica em `assets/music/ncs/`, desligada. Para usar: `MUSIC_USE_NCS = True`.
 
+**Volume acompanhando a voz.** O programa mede a loudness da fala e da
+música a cada 0,1 s ao longo do clipe inteiro e ajusta o volume da música
+trecho a trecho, pra ela ficar sempre `MUSIC_BELOW_VOICE_DB` (22 dB) abaixo
+da fala:
+- se o convidado fala mais baixo, a música desce junto;
+- no drop, ela é segurada; na parte calma, sobe um pouco.
+
+As mudanças são suaves (média de 1,5 s) e limitadas
+(`MUSIC_LEVEL_MAX_CUT_DB` / `MUSIC_LEVEL_MAX_BOOST_DB`), pra não "bombear".
+O *ducking* continua por cima, abaixando a música enquanto alguém fala.
+
+Medido em 8 faixas com um trecho real de podcast que tinha 20 s de fala 8
+dB mais baixa: com o volume único de antes, a distância entre voz e música
+variava de 3 a 9 dB ao longo do clipe, e no trecho baixo a música ficava
+só ~17 dB abaixo da fala. Agora a distância fica em 22 dB o tempo todo,
+variando em geral menos de 2 dB (4 dB numa faixa com pausa em silêncio).
+Para voltar ao volume único: `MUSIC_LEVEL_FOLLOW_VOICE = False`.
+
 > ⚠️ Música comercial (os hits do TikTok/Instagram/rádio) é reconhecida pelo
 > Content ID do YouTube: o clipe é reivindicado (a receita vai pra
 > gravadora), fica sem som ou é bloqueado, conforme a gravadora. Para trend
