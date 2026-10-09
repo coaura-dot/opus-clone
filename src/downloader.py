@@ -62,6 +62,7 @@ def cookie_args() -> tuple:
 
 
 def download_youtube_video(url: str, work_dir: str) -> Path:
+    from . import config
     out_dir = ensure_dir(work_dir)
     out_template = str(out_dir / "source.%(ext)s")
 
@@ -82,6 +83,7 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
         "-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--no-playlist",
+        "--sleep-requests", str(getattr(config, "YTDLP_SLEEP_REQUESTS", 1.0)),
         *_js_runtime_args(),
         *cookie_args(),
         "-o", out_template,

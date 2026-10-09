@@ -44,8 +44,11 @@ _ES_MARKERS = re.compile(r"[ñ¿¡]|\b(el|los|las|con|una|del|muy|pero|cómo|qu�
 
 def _ydl(flat: bool, lang: Optional[str] = None):
     import yt_dlp
+    # sleep_interval_requests: uma pausa entre as consultas -- o YouTube passou
+    # a bloquear o IP (HTTP 429 / "not a bot") de quem consulta em rajada
     opts = {"quiet": True, "no_warnings": True, "skip_download": True,
-            "ignore_no_formats_error": True, "socket_timeout": 30}
+            "ignore_no_formats_error": True, "socket_timeout": 30,
+            "sleep_interval_requests": getattr(config, "YTDLP_SLEEP_REQUESTS", 1.0)}
     if lang:
         opts["extractor_args"] = {"youtube": {"lang": [lang]}}
         opts["http_headers"] = _HEADERS
@@ -94,7 +97,22 @@ def blocked(*texts) -> Optional[str]:
     return next((w for w in words if w in joined), None)
 
 
+_LIST_CACHE: dict = {}
+_LIST_TTL = 90 * 60
+
+
 def list_channel(channel: str, n: int = 10) -> List[dict]:
+    """Últimos `n` vídeos do canal (guarda por 90 min: canal não lança vídeo
+    a cada meia hora, e cada consulta a menos é menos chance de bloqueio)."""
+    hit = _LIST_CACHE.get((channel, n))
+    if hit and time.time() - hit[0] < _LIST_TTL:
+        return [dict(c) for c in hit[1]]
+    out = _list_channel(channel, n)
+    _LIST_CACHE[(channel, n)] = (time.time(), out)
+    return [dict(c) for c in out]
+
+
+def _list_channel(channel: str, n: int = 10) -> List[dict]:
     channel, lang = _split_spec(channel)
     with _ydl(flat=True) as y:
         y.params["playlistend"] = n

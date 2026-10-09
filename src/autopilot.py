@@ -405,6 +405,10 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
     note = "" if privacy in ("public", "?") else f" [{privacy} -- libera sozinho quando a auditoria sair]"
     log(f"    postado: https://youtube.com/shorts/{vid}  "
         f"({state.uploads_today()}/{daily_limit()} hoje){note}")
+    if queue:
+        _, nxt = can_post_now(state)
+        log(f"    próxima postagem às {datetime.fromtimestamp(max(nxt, time.time())):%H:%M} "
+            f"(1 a cada {post_gap_seconds() / 60:.0f} min, até {daily_limit()} por dia)")
     if getattr(config, "AUTOPILOT_DELETE_POSTED_FILES", False):
         for f in (item["video"], item.get("video_sem_musica")):
             if f and Path(f).exists():
@@ -750,8 +754,17 @@ def run_forever(upload: bool = True):
                     and make_room(state, out_root, log) and housekeeping.has_room(state, out_root, log)):
                 repair_models(log)
                 update_ytdlp(state, log)
-                log("  >> Procurando vídeo bombando pra cortar...")
-                source = discovery.pick_source(state.seen_ids(), state.recent_channels(), log=log)
+                retry = state.data.get("retry_source")
+                if retry and time.time() - retry.get("at", 0) < 24 * 3600 \
+                        and retry["source"]["id"] not in state.seen_ids():
+                    # o download foi bloqueado: tenta o MESMO vídeo de novo, sem
+                    # refazer a busca (cada busca são dezenas de consultas ao YouTube)
+                    source = retry["source"]
+                    log(f"  >> Tentando de novo o download de \"{source.get('title', source['id'])}\"...")
+                else:
+                    log("  >> Procurando vídeo bombando pra cortar...")
+                    source = discovery.pick_source(state.seen_ids(), state.recent_channels(), log=log)
+                state.data.pop("retry_source", None)
                 if source:
                     try:
                         produce(state, source, out_root, log)
@@ -768,6 +781,7 @@ def run_forever(upload: bool = True):
                         log(f"  [!] Problema no PC: {e}. O vídeo não foi descartado; "
                             "tento de novo em 30 min (a postagem continua).")
                     except YoutubeBlocked as e:
+                        state.data["retry_source"] = {"source": source, "at": time.time()}
                         n = state.data.get("download_blocks", 0) + 1
                         # 1ª pausa curta: no PC do usuário o bloqueio passou em ~10 min
                         wait = min(15 * 60 * 2 ** (n - 1), 6 * 3600)
@@ -798,7 +812,8 @@ def run_forever(upload: bool = True):
                     wake = min(wake, blocked_until)  # volta a baixar assim que a pausa acabar
                 score_idle(state, log, wake)
                 _sleep_until(wake, log,
-                             f"fila com {len(state.data['queue'])} clipe(s), esperando a hora de postar")
+                             f"fila com {len(state.data['queue'])} clipe(s); próxima postagem às "
+                             f"{datetime.fromtimestamp(max(nxt, time.time())):%H:%M}")
             else:
                 _sleep_until(time.time() + 1800, log,
                              "fila cheia e postagem indisponível (confira o login do YouTube)")
