@@ -329,6 +329,120 @@ def _prio(c: dict) -> int:
     return 2 if sc >= 10 ** 6 else 1 if sc >= 10 ** 5 else 0
 
 
+# ------------------------------------------------- banco de clipes ---
+def _channel_of(state: State, item: dict) -> str:
+    src = state.data["sources"].get(item.get("source_id") or "", {})
+    return item.get("channel") or src.get("channel") or item.get("source_id") or "?"
+
+
+def _learned_weights(state: State) -> Optional[dict]:
+    from .virality import current_weights
+    learned = state.data.get("feedback", {}).get("weights")
+    return current_weights(learned) if learned else None
+
+
+def expire_queue(state: State, log: Log) -> int:
+    """Clipe parado na fila há dias (sempre perdendo pros melhores) sai:
+    abre espaço pra conteúdo novo."""
+    days = getattr(config, "AUTOPILOT_QUEUE_MAX_AGE_DAYS", 4)
+    if not days:
+        return 0
+    now = time.time()
+    old = [c for c in state.data["queue"] if not _prio(c) and now - c.get("added", now) > days * 86400]
+    if old:
+        state.data["queue"] = [c for c in state.data["queue"] if c not in old]
+        state.save()
+        log(f"  Fila: {len(old)} clipe(s) com mais de {days} dias sem ser escolhido(s) saíram "
+            "(abre espaço pra conteúdo novo).")
+    return len(old)
+
+
+def pool_ready(state: State, log: Log) -> bool:
+    """Hora de postar: a fila já tem clipes de podcasts diferentes o bastante
+    pra escolher o mais viral? Pedido do usuário: gerar vários clipes de
+    vários podcasts no tempo em que não pode postar e postar o melhor -- não
+    o primeiro que ficou pronto. Se o banco não enche (YouTube bloqueando
+    download, por exemplo), posta o melhor que tiver depois de
+    AUTOPILOT_POOL_MAX_WAIT_HOURS."""
+    queue = state.data["queue"]
+    if any(_prio(c) for c in queue):
+        return True  # link colado na mão / repostagem: já escolhidos
+    need_n = getattr(config, "AUTOPILOT_POOL_MIN", 6)
+    need_src = getattr(config, "AUTOPILOT_POOL_MIN_SOURCES", 3)
+    n, srcs = len(queue), len({_channel_of(state, c) for c in queue})
+    now = time.time()
+    if n >= need_n and srcs >= need_src:
+        return True
+    since = state.data.get("pool_wait_since") or now
+    if not state.data.get("pool_wait_since"):
+        state.data["pool_wait_since"] = since
+        state.save()
+        limit = since + getattr(config, "AUTOPILOT_POOL_MAX_WAIT_HOURS", 3) * 3600
+        log(f"  Hora de postar, mas a fila tem {n} clipe(s) de {srcs} podcast(s): junto pelo menos "
+            f"{need_n} de {need_src} podcasts diferentes pra postar o mais viral "
+            f"(no máximo até {datetime.fromtimestamp(limit):%H:%M}).")
+    if now - since >= getattr(config, "AUTOPILOT_POOL_MAX_WAIT_HOURS", 3) * 3600:
+        return True
+    return False
+
+
+def _pool_deadline(state: State) -> float:
+    since = state.data.get("pool_wait_since")
+    return since + getattr(config, "AUTOPILOT_POOL_MAX_WAIT_HOURS", 3) * 3600 if since else 0.0
+
+
+def _diversity_penalty(state: State, item: dict) -> float:
+    """Não posta o mesmo vídeo/podcast em sequência (achado real: os 2
+    últimos posts eram do mesmo vídeo do Market Makers)."""
+    posted = state.data["posted"]
+    if not posted:
+        return 0.0
+    ch, now = _channel_of(state, item), time.time()
+    last = posted[-1]
+    pen = 0.0
+    if last.get("source_id") and last.get("source_id") == item.get("source_id"):
+        pen += 12.0
+    elif _channel_of(state, last) == ch:
+        pen += 6.0
+    pen += 3.0 * sum(1 for p in posted if now - p.get("at", 0) < 86400 and _channel_of(state, p) == ch)
+    return pen
+
+
+def _ai_compare(state: State, queue: list, key, log: Log) -> None:
+    """Juiz de IA ligado: compara os finalistas (de podcasts diferentes)
+    entre si antes de postar -- nota de potencial viral relativa."""
+    from . import ai_judge
+    if not ai_judge.enabled():
+        return
+    finalists, per = [], {}
+    for c in sorted((c for c in queue if not _prio(c)), key=key):
+        ch = _channel_of(state, c)
+        if per.get(ch, 0) >= 2:
+            continue
+        per[ch] = per.get(ch, 0) + 1
+        finalists.append(c)
+        if len(finalists) >= getattr(config, "AI_COMPARE_FINALISTS", 5):
+            break
+    if len(finalists) < 2 or all("ai_compare" in c for c in finalists):
+        return
+    items = []
+    for c in finalists:
+        try:
+            m = json.loads(Path(c["meta"]).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            m = {}
+        items.append({"title": m.get("title", ""), "text": m.get("text") or m.get("description", ""),
+                      "duration": (m.get("end", 0) or 0) - (m.get("start", 0) or 0),
+                      "source": m.get("source_title") or _channel_of(state, c)})
+    verdicts = ai_judge.compare(items)
+    if not verdicts:
+        return
+    for c, v, it in zip(finalists, verdicts, items):
+        c["ai_compare"], c["ai_compare_reason"] = v["score"], v["reason"]
+        log(f"    [IA] {v['score']:3d}/100 \"{it['title'][:60]}\" -- {v['reason']}")
+    state.save()
+
+
 def post_next(state: State, service, log: Log, ignore_schedule: bool = False) -> bool:
     """Posta o melhor clipe da fila. True se postou."""
     from . import youtube_uploader as yt
@@ -354,7 +468,12 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         score_viral(state, c, log)
     # prioridade primeiro (repostagem / link colado na mão); depois a maior
     # nota combinada (viralidade + qualidade)
-    queue.sort(key=lambda c: (-_prio(c), -rank_key(c), c.get("added", 0)))
+    weights = _learned_weights(state)
+
+    def key(c):
+        return (-_prio(c), -(rank_key(c, weights) - _diversity_penalty(state, c)), c.get("added", 0))
+    _ai_compare(state, queue, key, log)
+    queue.sort(key=key)
     item = queue[0]
     if not Path(item["video"]).exists():
         log(f"    arquivo sumiu, tirando da fila: {item['video']}")
@@ -367,6 +486,10 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         state.save()
         return False
     meta = json.loads(Path(item["meta"]).read_text(encoding="utf-8"))
+    if not _prio(item):
+        others = len({_channel_of(state, c) for c in queue})
+        log(f"  >> Escolhido entre {len(queue)} clipe(s) de {others} podcast(s): nota final "
+            f"{rank_key(item, weights):.0f}" + (f" (IA: {item['ai_compare']}/100)" if "ai_compare" in item else ""))
     log(f"  >> Postando no YouTube: \"{meta['title']}\"")
     try:
         vid = yt.upload_video(service, item["video"], meta, progress=log)
@@ -395,7 +518,13 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         privacy = "?"
     entry = {"youtube_id": vid, "title": meta["title"], "at": time.time(),
              "source_id": item.get("source_id"), "video": item["video"],
-             "video_sem_musica": item.get("video_sem_musica"), "privacy": privacy}
+             "video_sem_musica": item.get("video_sem_musica"), "privacy": privacy,
+             "channel": _channel_of(state, item)}
+    # a nota que ele teve, pra conferir com as views reais (src/feedback.py)
+    for k in ("viral", "viral_parts", "quality", "ai_score", "ai_compare"):
+        if k in item:
+            entry[k] = item[k]
+    state.data.pop("pool_wait_since", None)
     if item.get("replaces"):
         entry["replaces"] = item["replaces"]
     if privacy == "?":
@@ -450,7 +579,9 @@ def score_viral(state: State, item: dict, log: Log) -> None:
     from . import virality
     try:
         meta = json.loads(Path(item["meta"]).read_text(encoding="utf-8"))
-        v, parts = virality.analyze(item["video"], meta)
+        v, parts = virality.analyze(item["video"], meta, weights=_learned_weights(state))
+        if meta.get("ai_score") is not None:
+            item["ai_score"] = meta["ai_score"]
     except Exception as e:  # análise nunca derruba o piloto
         log(f"    [!] não consegui medir a viralidade ({e.__class__.__name__}: {e})")
         item["viral"] = 50
@@ -459,7 +590,7 @@ def score_viral(state: State, item: dict, log: Log) -> None:
     item["viral"], item["viral_parts"] = v, parts
     state.save()
     why = virality.summary(parts)
-    log(f"    viralidade {v}/100 -> nota final {virality.rank_key(item):.0f}: "
+    log(f"    viralidade {v}/100 -> nota final {virality.rank_key(item, _learned_weights(state)):.0f}: "
         f"\"{meta.get('title', '')}\"" + (f" ({why})" if why else ""))
 
 
@@ -484,12 +615,13 @@ def score_idle(state: State, log: Log, until: float) -> int:
         done += 1
     if done:
         from .virality import rank_key
-        best = max(state.data["queue"], key=rank_key)
+        w = _learned_weights(state)
+        best = max(state.data["queue"], key=lambda c: rank_key(c, w) - _diversity_penalty(state, c))
         try:
             t = json.loads(Path(best["meta"]).read_text(encoding="utf-8")).get("title", "")
         except (OSError, ValueError):
             t = Path(best["video"]).name
-        log(f"    próximo a postar (mais viral da fila): \"{t}\" -- nota {rank_key(best):.0f}")
+        log(f"    próximo a postar (mais viral da fila): \"{t}\" -- nota {rank_key(best, w):.0f}")
     return done
 
 
@@ -732,10 +864,20 @@ def run_forever(upload: bool = True):
                 if acted:
                     continue
 
-            # 1) postar, se estiver na hora
+            expire_queue(state, log)
+            if service is not None:
+                # a nota de viralidade acerta? confere com as views reais (1x por dia)
+                from . import feedback
+                feedback.refresh_views(state, service, log)
+                feedback.calibrate(state, log)
+
+            # 1) postar, se estiver na hora -- e se o banco de clipes já tem
+            # opção de podcasts diferentes pra escolher o mais viral
+            waiting_pool = False
             if service is not None and state.data["queue"]:
                 ok, _ = can_post_now(state)
-                if ok:
+                waiting_pool = ok and not pool_ready(state, log)
+                if ok and not waiting_pool:
                     from . import youtube_uploader as yt
                     try:
                         post_next(state, service, log)
@@ -763,7 +905,12 @@ def run_forever(upload: bool = True):
                     log(f"  >> Tentando de novo o download de \"{source.get('title', source['id'])}\"...")
                 else:
                     log("  >> Procurando vídeo bombando pra cortar...")
-                    source = discovery.pick_source(state.seen_ids(), state.recent_channels(), log=log)
+                    # variedade: canal que já tem clipe esperando na fila também
+                    # perde prioridade (o banco precisa de podcasts diferentes)
+                    recent = state.recent_channels()
+                    for ch in {_channel_of(state, c) for c in state.data["queue"]}:
+                        recent[ch] = recent.get(ch, 0) + 1
+                    source = discovery.pick_source(state.seen_ids(), recent, log=log)
                 state.data.pop("retry_source", None)
                 if source:
                     try:
@@ -807,6 +954,8 @@ def run_forever(upload: bool = True):
                              else "downloads pausados pelo bloqueio do YouTube")
             elif service is not None and state.data["queue"]:
                 _, nxt = can_post_now(state)
+                if waiting_pool:
+                    nxt = _pool_deadline(state)  # posta o melhor que tiver nessa hora
                 wake = min(nxt, time.time() + 3600)
                 if time.time() < blocked_until:
                     wake = min(wake, blocked_until)  # volta a baixar assim que a pausa acabar

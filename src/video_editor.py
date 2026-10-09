@@ -166,7 +166,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     # e no .post.txt)
     # título escrito pela IA (src/ai_judge.py), quando ligada; senão, a frase-gancho
     title = (getattr(candidate, "ai_title", "") or "").strip() or \
-        make_title(getattr(candidate, "hook_text", "") or candidate.text)
+        make_title(candidate.text, hook=getattr(candidate, "hook_text", ""))
     hook_text = title if getattr(config, "HOOK_ENABLED", True) else None
     generate_ass(clip_words, clip_offset=0.0, output_path=str(ass_path),
                  clip_duration=out_duration, hook_text=hook_text,

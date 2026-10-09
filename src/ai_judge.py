@@ -194,3 +194,84 @@ def rank(candidates: list) -> Optional[List[dict]]:
     print(f"    [IA] {len(candidates)} trechos avaliados ({u.input_tokens}+{u.output_tokens} tokens, "
           f"~US${cost:.3f})")
     return out
+
+
+_COMPARE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "clips": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"id": {"type": "integer"}, "score": {"type": "integer"},
+                               "reason": {"type": "string"}},
+                "required": ["id", "score", "reason"],
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["clips"],
+    "additionalProperties": False,
+}
+
+_COMPARE_SYSTEM = """Você decide qual corte o canal posta AGORA no YouTube Shorts. Os \
+finalistas vêm de podcasts/vídeos diferentes (transcrição automática, pode ter erros \
+de palavra). Público brasileiro, adulto; o canal quer conteúdo inteligente que viraliza.
+
+Dê a cada finalista uma nota de 0 a 100 de POTENCIAL VIRAL comparando uns com os outros:
+- os primeiros 3 segundos prendem quem está rolando o feed?
+- funciona sozinho, sem o resto do episódio?
+- a ideia/história fecha (tem desfecho, conclusão, punchline)?
+- dá vontade de comentar, mandar pra alguém, assistir de novo?
+- o assunto interessa a muita gente (não só a quem acompanha o podcast)?
+Nota baixa: encerramento/recado do episódio, trecho que termina no meio, enrolação, \
+piada interna. Use a escala toda e não dê notas iguais. reason: uma frase curta."""
+
+
+def compare(items: List[dict]) -> Optional[List[dict]]:
+    """Comparação final entre os clipes da fila antes de postar: [{score,
+    reason}] na mesma ordem, ou None (IA desligada/falhou)."""
+    if len(items) < 2 or not enabled():
+        return None
+    import anthropic
+    parts = []
+    for i, it in enumerate(items):
+        parts.append(f"<corte id=\"{i}\" duracao=\"{it.get('duration', 0):.0f}s\" "
+                     f"origem=\"{(it.get('source') or '').replace(chr(34), '')[:90]}\">\n"
+                     f"Título: {it.get('title', '')}\n{(it.get('text') or '').strip()}\n</corte>")
+    parts.append("\nDê nota a TODOS os cortes acima, um item por id.")
+    client = anthropic.Anthropic(api_key=_api_key(), timeout=180.0, max_retries=2)
+    try:
+        response = client.beta.messages.create(
+            model=getattr(config, "AI_JUDGE_MODEL", "claude-opus-5-5"),
+            max_tokens=8000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",
+            system=_COMPARE_SYSTEM,
+            output_config={"effort": getattr(config, "AI_JUDGE_EFFORT", "medium"),
+                           "format": {"type": "json_schema", "schema": _COMPARE_SCHEMA}},
+            messages=[{"role": "user", "content": "\n".join(parts)}],
+        )
+    except anthropic.AuthenticationError:
+        _disable("chave da API recusada (confira credentials/claude_api_key.txt)")
+        return None
+    except Exception as e:  # comparação nunca impede a postagem: vale a nota das regras
+        print(f"    [IA] comparação dos finalistas falhou ({e.__class__.__name__}); vale a nota das regras")
+        return None
+    if response.stop_reason == "refusal":
+        return None
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    try:
+        got = json.loads(text)["clips"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    out: List[Optional[dict]] = [None] * len(items)
+    for it in got:
+        i = it.get("id")
+        if isinstance(i, int) and 0 <= i < len(items) and out[i] is None:
+            out[i] = {"score": int(max(0, min(100, it.get("score", 0)))), "reason": (it.get("reason") or "").strip()}
+    if any(o is None for o in out):
+        return None
+    u = response.usage
+    print(f"    [IA] {len(items)} finalistas comparados (~US${(u.input_tokens * 4 + u.output_tokens * 20) / 1e6:.3f})")
+    return out

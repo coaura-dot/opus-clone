@@ -5,18 +5,28 @@ que ele está parado esperando a hora de postar. A fila posta sempre o clipe
 com a maior nota combinada (viralidade + qualidade).
 
 O que conta (cada item vale de 0 a 1 e entra com um peso):
-  gancho      os 3 primeiros segundos: fala começando logo (sem silêncio pra
-              rolar o feed), frase forte/pergunta, energia da voz
+  gancho      o que é DITO nos primeiros ~4 s (antes: a frase-gancho, que
+              podia estar no meio do clipe): pergunta, afirmação forte,
+              número, nome, "você"; fala começando logo; energia da voz
+  contexto    o começo se sustenta sozinho (sem "ele/isso..." de quem não
+              foi apresentado, sem "Mas..." de ideia anterior)
   picos       momentos de pico de voz (risada, grito, ênfase) por minuto
   ritmo       fala densa e variada (sem trecho morto, sem monotonia)
-  conteúdo    emoção, números/dinheiro, conflito/curiosidade, história
-  fechamento  termina numa frase completa (não corta no meio da ideia)
+  conteúdo    emoção, dinheiro/números, conflito, história, curiosidade e
+              substância (explicação, dado, assunto de gente pensando)
+  fechamento  termina numa frase completa, de preferência com conclusão --
+              não numa pergunta sem resposta nem no meio da ideia
   imagem      rosto em quadro e movimento na medida (nem parado, nem caos)
   duração     25-75 s rendem mais até o fim
   título      tamanho bom pro feed, com pergunta ou palavra forte
 
-Os pesos são uma estimativa (regras de editor de cortes), não aprendidos de
-dados de views -- dá pra ajustar em VIRAL_WEIGHTS (config.py).
+Trava: trecho que é recado do canal, abertura ou ENCERRAMENTO do episódio
+("quer deixar um recado final?" -- achado real, foi postado) fica com no
+máximo 25, seja qual for o resto.
+
+Com o juiz de IA ligado, a nota dele entra na média (ele entende o assunto,
+as regras não). E os pesos se ajustam sozinhos com as views reais dos
+vídeos postados (src/feedback.py); dá pra fixar à mão em VIRAL_WEIGHTS.
 """
 import re
 import subprocess
@@ -39,8 +49,13 @@ _STORY = re.compile(r"\b(a[ií] (ele|ela|eu|o cara)|do nada|de repente|quando eu
 _STRONG_TITLE = re.compile(r"\?|\b(nunca|ningu[ée]m|verdade|segredo|mentira|dinheiro|pol[íi]cia|"
                            r"milh|bilh|pior|melhor|imposs[íi]vel|absurd|louc|medo)\w*", re.I)
 
-DEFAULT_WEIGHTS = {"gancho": 22, "picos": 12, "ritmo": 12, "conteudo": 16, "fechamento": 8,
-                   "imagem": 12, "duracao": 10, "titulo": 8}
+_CURIOSITY = re.compile(r"(voc[êe] sabia|o que ningu[ée]m|a verdade (sobre|[ée])|ningu[ée]m (fala|conta|sabe)|"
+                        r"por que (que )?|como ([ée] que|funciona)|o motivo|descobri|a hist[óo]ria d|"
+                        r"o (maior|pior|melhor) |nunca (vi|imaginei)|imagina (se|s[óo])|sabe o que)", re.I)
+_YOU = re.compile(r"\b(voc[êe]|vc|tu|seu|sua|you|your)\b", re.I)
+
+DEFAULT_WEIGHTS = {"gancho": 22, "contexto": 10, "picos": 8, "ritmo": 10, "conteudo": 18,
+                   "fechamento": 10, "imagem": 10, "duracao": 7, "titulo": 5}
 
 
 def _audio(video: str) -> Optional[np.ndarray]:
@@ -69,7 +84,84 @@ def _db_curve(x: np.ndarray, hop: int = 1600) -> np.ndarray:  # 100 ms
     return 10 * np.log10(np.mean(x[:n * hop].reshape(n, hop) ** 2, axis=1) + 1e-10)
 
 
-def analyze(video: str, meta: dict) -> Tuple[int, Dict[str, float]]:
+def _sentences(text: str):
+    return [p.strip() for p in re.split(r"(?<=[.!?…])\s+", text.strip()) if p.strip()]
+
+
+def _opening(text: str, n_words: int = 12) -> str:
+    """O que é dito nos primeiros ~4 s (fala normal: ~3 palavras/s)."""
+    return " ".join(text.split()[:n_words])
+
+
+def _text_parts(text: str, title: str, minutes: float) -> Dict[str, float]:
+    """Os itens que saem só do texto (servem pra testar sem o vídeo)."""
+    from .clip_selector import (_SUBSTANCE_RE, _ends_on_open_question, _ends_on_topic_conclusion,
+                                _starts_mid_thought, _text_score)
+    parts: Dict[str, float] = {}
+    sents = _sentences(text)
+    first = sents[0] if sents else ""
+    second = sents[1] if len(sents) > 1 else ""
+
+    # gancho (texto): o começo de verdade do clipe
+    op = _opening(text)
+    g = 0.25
+    g += min(_text_score(op), 6.0) / 6.0 * 0.35
+    if "?" in first[:120]:
+        g += 0.15
+    if _YOU.search(op):
+        g += 0.1                                  # fala COM quem assiste
+    if re.search(r"\d", op) or re.search(r"(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}", op):
+        g += 0.1                                  # concreto: número, nome
+    if _CURIOSITY.search(op):
+        g += 0.15
+    if _starts_mid_thought(first):
+        g -= 0.3                                  # "Mas...", "Só que..."
+    parts["_gancho_texto"] = float(np.clip(g, 0, 1))
+
+    # contexto: o começo se sustenta sozinho?
+    try:
+        from .opener import opening_depends_on_context
+        dependent = opening_depends_on_context(first, second)
+    except Exception:
+        dependent = False
+    parts["contexto"] = 0.25 if dependent else (0.6 if _starts_mid_thought(first) else 1.0)
+
+    # conteúdo (por minuto)
+    emo = len(_EMOTION.findall(text)) / minutes
+    money = len(_MONEY.findall(text)) / minutes
+    conflict = len(_CONFLICT.findall(text)) / minutes
+    story = len(_STORY.findall(text)) / minutes
+    curious = len(_CURIOSITY.findall(text)) / minutes
+    substance = len(_SUBSTANCE_RE.findall(text)) / minutes
+    parts["conteudo"] = float(np.clip(min(emo, 3) / 3 * 0.2 + min(money, 2) / 2 * 0.15 +
+                                      min(conflict, 3) / 3 * 0.2 + min(story, 2) / 2 * 0.15 +
+                                      min(curious, 2) / 2 * 0.1 + min(substance, 4) / 4 * 0.2, 0, 1))
+
+    # fechamento: termina numa frase completa, com conclusão
+    last = sents[-1] if sents else ""
+    tail = text.strip()[-80:]
+    fe = 0.6 if re.search(r"[.!]\s*$", tail) and not tail.endswith("...") else 0.25
+    if any(_ends_on_topic_conclusion(x) for x in sents[-2:]):
+        fe += 0.4
+    if _ends_on_open_question(last):
+        fe -= 0.3                                 # pergunta sem resposta no fim
+    parts["fechamento"] = float(np.clip(fe, 0, 1))
+
+    # título
+    tl = len(title)
+    parts["titulo"] = (0.5 if 25 <= tl <= 75 else 0.2) + (0.5 if _STRONG_TITLE.search(title) else 0.0)
+    return parts
+
+
+def _capped(text: str, title: str, hook: str) -> bool:
+    """Recado do canal / abertura / encerramento do episódio no começo."""
+    from .quality import _CLOSING, _OPENING, _PROMO, _hits
+    head = " ".join(text.split()[:45])
+    return bool(_hits(_CLOSING, head) or _hits(_CLOSING, hook) or _hits(_OPENING, head)
+                or len(_hits(_PROMO, head)) >= 1 and len(_hits(_PROMO, text)) >= 2)
+
+
+def analyze(video: str, meta: dict, weights: Optional[Dict[str, float]] = None) -> Tuple[int, Dict[str, float]]:
     """(nota 0-100, notas de cada item 0-1)."""
     text = meta.get("text") or meta.get("description", "") or ""
     title = meta.get("title", "") or ""
@@ -102,24 +194,10 @@ def analyze(video: str, meta: dict) -> Tuple[int, Dict[str, float]]:
         hook_audio = 0.5
         parts["picos"] = parts["ritmo"] = 0.4
 
-    # --- gancho (3 primeiros segundos)
-    hook_words = len(hook.split())
-    hook_text = 1.0 if _STRONG_TITLE.search(hook) else 0.4
-    if hook_words > 18:
-        hook_text -= 0.3
-    parts["gancho"] = float(np.clip(0.55 * hook_audio + 0.45 * hook_text, 0, 1))
-
-    # --- conteúdo (por minuto)
-    emo = len(_EMOTION.findall(text)) / minutes
-    money = len(_MONEY.findall(text)) / minutes
-    conflict = len(_CONFLICT.findall(text)) / minutes
-    story = len(_STORY.findall(text)) / minutes
-    parts["conteudo"] = float(np.clip(min(emo, 3) / 3 * 0.3 + min(money, 2) / 2 * 0.25 +
-                                      min(conflict, 3) / 3 * 0.3 + min(story, 2) / 2 * 0.15, 0, 1))
-
-    # --- fechamento: última frase completa
-    tail = text.strip()[-80:]
-    parts["fechamento"] = 1.0 if re.search(r"[.!?]\s*$", tail) and not tail.endswith("...") else 0.3
+    # --- texto: gancho (o começo de verdade), contexto, conteúdo, fechamento, título
+    tp = _text_parts(text, title, minutes)
+    parts["gancho"] = float(np.clip(0.4 * hook_audio + 0.6 * tp.pop("_gancho_texto"), 0, 1))
+    parts.update(tp)
 
     # --- imagem
     fr = _frames(video)
@@ -150,32 +228,59 @@ def analyze(video: str, meta: dict) -> Tuple[int, Dict[str, float]]:
     else:
         parts["duracao"] = float(np.clip(1.0 - (dur - 75) / 105.0, 0.1, 1.0))
 
-    # --- título
-    tl = len(title)
-    parts["titulo"] = (0.5 if 25 <= tl <= 75 else 0.2) + (0.5 if _STRONG_TITLE.search(title) else 0.0)
-
-    weights = dict(DEFAULT_WEIGHTS)
-    weights.update(getattr(config, "VIRAL_WEIGHTS", {}) or {})
-    total = sum(weights.values()) or 1
-    score = sum(weights[k] * parts.get(k, 0.0) for k in weights) / total * 100
-    return int(round(score)), {k: round(v, 2) for k, v in parts.items()}
+    parts = {k: round(v, 2) for k, v in parts.items()}
+    if _capped(text, title, hook):
+        parts["_trava"] = 1.0
+    return score_from_parts(parts, meta.get("ai_score"), weights), parts
 
 
-def rank_key(item: dict) -> float:
-    """Nota usada pra escolher o que postar: viralidade + qualidade."""
+def current_weights(learned: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    """Pesos: padrão < aprendidos com as views reais (src/feedback.py) <
+    fixados à mão em VIRAL_WEIGHTS."""
+    w = dict(DEFAULT_WEIGHTS)
+    w.update(learned or {})
+    w.update(getattr(config, "VIRAL_WEIGHTS", {}) or {})
+    return w
+
+
+def score_from_parts(parts: Dict[str, float], ai_score=None,
+                     weights: Optional[Dict[str, float]] = None) -> int:
+    w = weights or current_weights()
+    keys = [k for k in w if k in parts]
+    total = sum(w[k] for k in keys) or 1
+    score = sum(w[k] * parts[k] for k in keys) / total * 100
+    if isinstance(ai_score, (int, float)):
+        score = 0.5 * score + 0.5 * ai_score  # a IA entende o assunto; as regras, a forma
+    if parts.get("_trava"):
+        score = min(score, 25.0)
+    return int(round(score))
+
+
+def rank_key(item: dict, weights: Optional[Dict[str, float]] = None) -> float:
+    """Nota usada pra escolher o que postar: viralidade + qualidade (+ a
+    comparação da IA entre os finalistas, quando ligada)."""
     q = item.get("quality", 50)
     v = item.get("viral")
     if v is None:
         return q - 5.0  # ainda sem análise: um pouco atrás dos já analisados
-    return 0.6 * v + 0.4 * q
+    if weights and item.get("viral_parts"):
+        v = score_from_parts(item["viral_parts"], item.get("ai_score"), weights)
+    key = 0.6 * v + 0.4 * q
+    if isinstance(item.get("ai_compare"), (int, float)):
+        key = 0.5 * key + 0.5 * item["ai_compare"]
+    if (item.get("viral_parts") or {}).get("_trava"):
+        key = min(key, 30.0)  # recado/encerramento: nem a IA tira daqui
+    return key
 
 
 def summary(parts: Dict[str, float]) -> str:
-    names = {"gancho": "gancho", "picos": "picos de voz", "ritmo": "ritmo", "conteudo": "conteúdo",
-             "fechamento": "fechamento", "imagem": "imagem", "duracao": "duração", "titulo": "título"}
-    good = [names[k] for k, v in sorted(parts.items(), key=lambda kv: -kv[1]) if v >= 0.7][:3]
-    bad = [names[k] for k, v in sorted(parts.items(), key=lambda kv: kv[1]) if v < 0.35][:2]
-    out = []
+    names = {"gancho": "gancho", "contexto": "começo se sustenta", "picos": "picos de voz", "ritmo": "ritmo",
+             "conteudo": "conteúdo", "fechamento": "fechamento", "imagem": "imagem", "duracao": "duração",
+             "titulo": "título"}
+    items = [(k, v) for k, v in parts.items() if k in names]
+    good = [names[k] for k, v in sorted(items, key=lambda kv: -kv[1]) if v >= 0.7][:3]
+    bad = [names[k] for k, v in sorted(items, key=lambda kv: kv[1]) if v < 0.35][:2]
+    out = ["TRAVADO: recado/abertura/encerramento do episódio"] if parts.get("_trava") else []
     if good:
         out.append("forte: " + ", ".join(good))
     if bad:

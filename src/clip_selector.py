@@ -872,8 +872,14 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         hooks = ranked_hooks  # vídeo sem gancho claro: usa os melhores que houver
     hooks = hooks[:max(n_clips * 8, 24)]
 
-    from .quality import _PROMO, _OPENING, _hits
+    from .quality import _PROMO, _OPENING, _CLOSING, _hits
     promo_w = getattr(config, "SELECT_PROMO_PENALTY", 8.0)
+    # trailer do começo: muito podcast abre com 30-90 s de "melhores momentos"
+    # montados (achado real, postado: clipe do minuto 0 com "quer deixar um
+    # recado final antes de te liberar", fala que é do FIM da conversa)
+    intro_s = getattr(config, "SELECT_SKIP_INTRO_SECONDS", 90.0)
+    intro_w = getattr(config, "SELECT_INTRO_PENALTY", 10.0)
+    has_teaser_zone = is_first_segment and total_duration >= 10 * 60
     long_after = getattr(config, "SELECT_PREFER_MAX_SECONDS", 90.0)
     long_w = getattr(config, "SELECT_LONG_PENALTY_PER_SECOND", 0.06)
 
@@ -882,8 +888,8 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         hook_t = sentences[h]["start"]
         # gancho que é recado do canal ("segue a gente no Spotify") não é gancho
         # -- achado real: virou clipe e foi postado
-        if _hits(_PROMO, sentences[h]["text"]):
-            continue
+        if _hits(_PROMO, sentences[h]["text"]) or _hits(_CLOSING, sentences[h]["text"]):
+            continue  # ... nem o "recado final" do convidado
 
         # ETAPA 1: contexto — começo do assunto em que o gancho está
         start_idx, clean_start = h, clean_start_at(h)
@@ -987,6 +993,12 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
         score -= min(len(_hits(_PROMO, text)), 3) * promo_w
         if _hits(_OPENING, head):
             score -= promo_w
+        if _hits(_CLOSING, head):
+            score -= 2 * promo_w
+        elif _hits(_CLOSING, text):
+            score -= promo_w
+        if has_teaser_zone and start_t < intro_s:
+            score -= intro_w
         # Shorts curtos seguram mais gente até o fim: dentro da faixa
         # permitida, cada segundo além de SELECT_PREFER_MAX_SECONDS custa um pouco
         score -= max(dur - long_after, 0.0) * long_w
@@ -1043,8 +1055,9 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
             return []
 
     chosen: List[ClipCandidate] = pool[:n_clips]
+    from .post_kit import make_title
     for c in chosen:
-        c.title = c.ai_title or _make_title(c.hook_text or c.text)
+        c.title = c.ai_title or make_title(c.text, hook=c.hook_text)
 
     if not chosen:
         raise RuntimeError("Não foi possível selecionar clipes sem sobreposição.")

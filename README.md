@@ -256,21 +256,46 @@ lista a fila com as notas e os últimos descartados.
 
 ### Nota de viralidade: no tempo livre, ele escolhe o que postar
 
-Enquanto espera a hora da próxima postagem, o piloto analisa os clipes da
-fila com mais calma (`src/virality.py`, ~10 s por clipe) e dá uma nota de
-viralidade de 0 a 100:
-- **gancho:** os 3 primeiros segundos. A fala começa logo? A frase é forte? A voz tem energia?
-- **picos de voz:** risada, grito, ênfase.
-- **ritmo:** fala densa e variada.
-- **conteúdo:** emoção, dinheiro, conflito, história.
-- **fechamento:** termina numa frase completa?
-- **imagem:** rosto em quadro e movimento na medida.
-- **duração e título.**
+**Banco de clipes.** Enquanto não pode postar, o piloto vai gerando clipes
+de podcasts diferentes, até `AUTOPILOT_QUEUE_TARGET` (15). Canal que já
+tem clipe na fila perde prioridade na busca. Na hora de postar, ele só
+posta se a fila tiver pelo menos `AUTOPILOT_POOL_MIN` (6) clipes de
+`AUTOPILOT_POOL_MIN_SOURCES` (3) podcasts diferentes, e escolhe o mais
+viral entre eles. Se o banco não encher em
+`AUTOPILOT_POOL_MAX_WAIT_HOURS` (3 h), por exemplo com o YouTube bloqueando
+download, posta o melhor que tiver. Não posta o mesmo vídeo ou podcast em
+sequência. Clipe parado na fila há mais de `AUTOPILOT_QUEUE_MAX_AGE_DAYS`
+(4) dias sai, pra abrir espaço pra conteúdo novo.
 
-Na hora de postar, vai sempre o clipe com a maior nota final (60%
-viralidade + 40% qualidade). O log mostra a nota de cada clipe, o que pesou
-e qual é o próximo da fila. Os pesos são regras de editor, não aprendidos
-de views; dá pra ajustar em `VIRAL_WEIGHTS` (`src/config.py`).
+**A nota (`src/virality.py`, ~10 s por clipe, 0 a 100):**
+- **gancho:** o que é dito nos primeiros ~4 s (pergunta, afirmação forte,
+  número, nome, falar com "você"), se a fala começa logo e se a voz tem
+  energia;
+- **contexto:** o começo se sustenta sozinho, sem "ele/isso..." de alguém
+  que não foi apresentado e sem "Mas..." de uma ideia anterior;
+- **conteúdo:** emoção, dinheiro, conflito, história, curiosidade e
+  substância (explicação, dado);
+- **fechamento:** termina numa frase completa, de preferência com
+  conclusão, e não numa pergunta sem resposta;
+- **picos de voz, ritmo, imagem** (rosto e movimento), **duração e título**.
+
+Recado do canal, abertura ou **encerramento do episódio** ("quer deixar um
+recado final?") fica travado em no máximo 25. A nota final é 60%
+viralidade + 40% qualidade. Com o juiz de IA ligado, a nota da IA entra na
+média e, antes de cada postagem, a IA compara os 5 melhores da fila entre
+si (~US$0,03 por postagem).
+
+**Conferida com as views reais (`src/feedback.py`).** Cada vídeo postado
+guarda a nota que teve. Uma vez por dia o piloto busca as views dos vídeos
+com 2 a 10 dias de vida (1 unidade de cota da API a cada 50 vídeos). Com 8
+ou mais medidos, o log mostra o quanto a nota acerta a ordem das views:
+```
+[feedback] nota de viralidade x views reais (12 vídeos): correlação +0.41 -- acerta parte
+```
+Com 15 ou mais, os pesos se ajustam sozinhos: o item que anda junto com as
+views ganha peso. O ajuste é pequeno no começo e cresce com a quantidade de
+vídeos (até 70%), pra não seguir ruído. Pesos fixados em `VIRAL_WEIGHTS`
+continuam mandando.
 
 ### Enquanto a auditoria não sai: vídeos privados que se liberam sozinhos
 
@@ -298,6 +323,10 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_MIN_VIEWS` | 20000 | só vídeos com pelo menos N views |
 | `AUTOPILOT_MAX_AGE_DAYS` | 30 | só vídeos de até N dias; entre eles vence o que está indo **melhor que o normal do próprio canal** (views por dia), no máximo 2 por canal na disputa; 0 = qualquer idade |
 | `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
+| `AUTOPILOT_PREFER_EPISODE_MINUTES` | 35 | vídeo mais curto que isso (provável corte, não o episódio inteiro) perde até 40% na escolha |
+| `AUTOPILOT_EXPERT_BONUS` | 1.3 | título com convidado especialista (cientista, médico, economista, CEO, delegado...) ganha na escolha |
+| `AUTOPILOT_WEAK_TOPIC_FACTOR` | 0.7 | título de desafio, zoeira ou pegadinha perde na escolha |
+| `AUTOPILOT_QUEUE_TARGET` / `AUTOPILOT_POOL_MIN` / `AUTOPILOT_POOL_MIN_SOURCES` | 15 / 6 / 3 | banco de clipes: quantos gera e o mínimo (de quantos podcasts) pra escolher o mais viral |
 | `AUTOPILOT_POSTS_PER_DAY` | 24 | meta; o limite real sai da cota (`YOUTUBE_DAILY_QUOTA`: 10.000 = 6/dia, 40.000 = 24/dia) |
 | `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha o limite do dia pela janela (6/dia em 24h = 1 a cada 4h) |
 | `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
@@ -581,6 +610,13 @@ pontuação transparente que você pode ajustar:
 
 - **Texto**: detecta ganchos comuns ("você sabia", "o maior erro", números,
   perguntas, palavras de forte carga emocional) em português e inglês
+- **Fora**: o trailer de "melhores momentos" dos primeiros 90 s do episódio
+  (`SELECT_SKIP_INTRO_SECONDS`) e o encerramento da conversa ("recado
+  final", "antes de te liberar", "onde a galera te encontra")
+- **Título** (sem IA): a frase do começo do clipe que melhor funciona
+  sozinha, com pergunta, número, nome ou assunto concreto. Sai o vocativo
+  ("Walter, quer...") e a hesitação, e perde a frase que depende de
+  contexto ("ele...", "isso..."). Com o juiz de IA ligado, o título é o dele
 - **Áudio**: mede a energia (RMS) da voz — trechos com mais entusiasmo/ênfase
   pontuam mais
 - **Estrutura**: nunca corta no meio de uma frase; prioriza a duração ideal

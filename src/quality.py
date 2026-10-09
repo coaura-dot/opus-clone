@@ -42,6 +42,18 @@ _OPENING = [
     r"(hoje|nesse epis[óo]dio) (a gente )?recebe", r"obrigad[oa] por (ter )?vir", r"valeu (galera|pessoal),? at[ée]",
     r"at[ée] (o )?pr[óo]ximo (epis[óo]dio|v[ií]deo)", r"encerrando (o|mais um)",
 ]
+# FIM da conversa (achado real, postado: "Walter, quer deixar um recado final
+# antes de te liberar..." -- e ainda veio do trailer no começo do vídeo)
+_CLOSING = [
+    r"recado final", r"(um|o seu|seu) recado (final|pra galera|pro pessoal|pra quem)",
+    r"antes de (te|você|vc) liberar", r"(pra|para) (gente )?(encerrar|finalizar|terminar)",
+    r"considera[çc][õo]es finais", r"[úu]ltimas palavras", r"pra fechar (o|a) (papo|conversa|epis)",
+    r"onde (é que )?(a galera|as pessoas|o pessoal|o povo|a gente) (pode|podem|consegue|vai) te "
+    r"(encontrar|seguir|acompanhar|achar)",
+    r"obrigad[oa] (pela|por) (presen[çc]a|conversa|participa[çc][ãa]o|vinda|ter vindo|ter aceitado)",
+    r"foi um (prazer|privil[ée]gio|honra) (te receber|ter voc[êe]|estar aqui|conversar)",
+    r"valeu (demais )?por (ter )?vir", r"volta (mais )?vezes", r"a casa [ée] sua",
+]
 _STRONG_HOOK = [
     r"\?$", r"\bnunca\b", r"\bningu[ée]m\b", r"\bverdade\b", r"\bsegredo\b", r"\bmentira\b", r"\bmorr",
     r"\bpreso\b", r"\bpol[ií]cia\b", r"\bmilh(ão|ões|oes)\b", r"\bbilh", r"\bdinheiro\b", r"\bmedo\b",
@@ -101,6 +113,12 @@ def assess(video: str, meta: dict) -> Tuple[int, List[str], bool]:
     if _hits(_OPENING, head) or _hits(_OPENING, hook):
         score -= 25
         reasons.append("abertura/encerramento do episódio")
+    if _hits(_CLOSING, head) or _hits(_CLOSING, hook):
+        reject = True
+        reasons.append("fim da conversa (recado final/agradecimento)")
+    elif _hits(_CLOSING, text):
+        score -= 10
+        reasons.append("termina no encerramento do episódio")
 
     # 2) gancho
     hook_words = len(hook.split())

@@ -176,6 +176,50 @@ def _full_info(video_id: str) -> Optional[dict]:
             "age_limit": v.get("age_limit") or 0}
 
 
+# convidado com profissão/autoridade no título ("DIRETOR DE MERCADOS GLOBAIS
+# DA HOTEIS.COM - Juan Pasquel", "NEUROCIENTISTA explica...") rende corte com
+# conteúdo; título de zoeira/desafio, não (pedido do usuário: podcasts com
+# gente inteligente, convidados interessantes)
+_EXPERT_RE = re.compile(
+    r"\b(cientista|neurocientista|f[íi]sic[oa]|qu[íi]mic[oa]|bi[óo]log[oa]|astr[ôo]nom[oa]|astronauta|"
+    r"m[ée]dic[oa]|psiquiatra|psic[óo]log[oa]|neurologista|cardiologista|cirurgi[ãa]o|nutr[óo]log[oa]|"
+    r"economista|historiador[a]?|fil[óo]sof[oa]|soci[óo]log[oa]|antrop[óo]log[oa]|professor[a]?|"
+    r"doutor[a]?|phd|pesquisador[a]?|engenheir[oa]|matem[áa]tic[oa]|escritor[a]?|jornalista|"
+    r"juiz[a]?|delegad[oa]|promotor[a]?|advogad[oa]|perit[oa]|militar|coronel|general|ex-?agente|"
+    r"piloto|diplomata|ministr[oa]|ex-?presidente|governador[a]?|senador[a]?|deputad[oa]|"
+    r"ceo|fundador[a]?|empres[áa]ri[oa]|investidor[a]?|diretor[a]?|executiv[oa]|bilion[áa]ri[oa]|"
+    r"milion[áa]ri[oa]|campe[ãa]o|medalhista|ol[íi]mpic[oa]|especialista|expert|"
+    r"scientist|doctor|professor|founder|ceo|economist|historian|astronaut|author)\b", re.IGNORECASE)
+_WEAK_RE = re.compile(
+    r"\b(tente n[ãa]o rir|desafio|challenge|pegadinha|zoeira|trollagem|tretas?|barraco|"
+    r"respondendo (coment[áa]rios|seguidores)|q ?& ?a|unboxing)\b", re.IGNORECASE)
+# (react e compilado NÃO entram: os reacts bons -- Orochinho, Dr Donut -- usam esses nomes)
+
+
+def topic_factor(title: str) -> float:
+    """Peso do assunto/convidado pelo título (1 = neutro)."""
+    t = title or ""
+    f = 1.0
+    if _EXPERT_RE.search(t):
+        f *= getattr(config, "AUTOPILOT_EXPERT_BONUS", 1.3)
+    if _WEAK_RE.search(t):
+        f *= getattr(config, "AUTOPILOT_WEAK_TOPIC_FACTOR", 0.7)
+    return f
+
+
+def length_factor(duration) -> float:
+    """Episódio inteiro rende mais (mais assunto pra escolher o melhor
+    trecho); vídeo curto costuma já ser um corte -- achado real: um vídeo
+    de 17 min (corte do Market Makers) com trailer no começo virou 2 posts
+    fracos. Reacts longos também ficam com peso cheio."""
+    if not duration:
+        return 1.0
+    pref = getattr(config, "AUTOPILOT_PREFER_EPISODE_MINUTES", 35) * 60
+    if duration >= pref:
+        return 1.0
+    return 0.6 + 0.4 * max(duration - 8 * 60, 0) / max(pref - 8 * 60, 1)
+
+
 def _duration_ok(d) -> bool:
     if not d:
         return True  # desconhecida na listagem rápida: confere depois
@@ -227,7 +271,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
         rel = v / max(channel_norm.get(c.get("channel"), v), 1.0)  # >1 = acima do normal do canal
         # bombando pro canal dele (rel) pesa mais que o tamanho do canal (v);
         # canal usado nas últimas 24h perde prioridade (varia a fonte)
-        return (rel ** 0.75) * (v ** 0.25) * (0.6 ** recent_channels.get(c.get("channel"), 0))
+        return ((rel ** 0.75) * (v ** 0.25) * (0.6 ** recent_channels.get(c.get("channel"), 0))
+                * topic_factor(c.get("title")) * length_factor(c.get("duration")))
 
     uniq = {}
     for c in cands:
@@ -276,7 +321,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
             if max_age_d and ts and time.time() - ts > max_age_d * 86400:
                 continue
             c.update(title=info.get("title") or c["title"], channel=info.get("channel") or c["channel"],
-                     timestamp=ts, view_count=info.get("view_count") or c["view_count"])
+                     timestamp=ts, view_count=info.get("view_count") or c["view_count"],
+                     duration=info.get("duration") or c.get("duration"))
         # idade: a data real; sem ela (consulta falhou/bloqueada), estima pela
         # posição na lista do canal (vem do mais novo pro mais velho) -- antes,
         # vídeo sem data escapava do limite de idade e ainda ganhava na nota
@@ -299,6 +345,11 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print) ->
     age = (f", publicado há ~{c['age_days']:.0f} dias (estimado)" if c.get("age_estimated")
            else f", publicado há {c['age_days']:.0f} dias")
     lang = f" [{c['lang']}]" if c.get("lang") else ""
+    extra = []
+    if c.get("duration"):
+        extra.append(f"{c['duration'] / 60:.0f} min")
+    if _EXPERT_RE.search(c.get("title") or ""):
+        extra.append("convidado especialista")
     log(f"    [busca] escolhido: \"{c['title']}\" ({c['channel']}){lang} -- "
-        f"{c['view_count']:,} views{age}".replace(",", "."))
+        f"{c['view_count']:,} views{age}".replace(",", ".") + (f" ({', '.join(extra)})" if extra else ""))
     return c

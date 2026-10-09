@@ -70,6 +70,10 @@ def _clean_title(sentence: str) -> str:
         s = re.sub(r"^(e|então|mas|aí|daí|porque|tipo|né|cara|mano|velho|véi|bicho|po|pô|porra|caralho|"
                    r"puta merda|nossa|olha|ó|ah|eh|é|ué|bom|enfim|sabe|tá|beleza|and|so|but)\b[,!.\s]*",
                    "", s.strip(), flags=re.IGNORECASE)
+    # vocativo de quem pergunta ("Walter, quer deixar...", "Fulano, por que
+    # você...") -- achado real nos títulos postados
+    s = re.sub(r"^[A-ZÀ-Ý][\wÀ-ÿ]+(?:\s[A-ZÀ-Ý][\wÀ-ÿ]+)?,\s+(?=(você|vc|tu|quer|queria|conta|fala|explica|"
+               r"me\b|como|por ?que|qual|quais|quanto|o que|e (você|aí)))", "", s.strip())
     s = re.sub(r",?\s*\b(né|tá ligado|entendeu|sabe)\?*$", "", s, flags=re.IGNORECASE)
     s = s.strip(" .…,;:")
     if len(s) > TITLE_MAX_CHARS:
@@ -81,27 +85,60 @@ def _clean_title(sentence: str) -> str:
     return s[:1].upper() + s[1:] if s else ""
 
 
-def make_title(clip_text: str) -> str:
+_DEPENDENT_START = re.compile(r"^(ele|ela|eles|elas|isso|isto|aquilo|esse|essa|esses|essas|aquele|aquela|"
+                              r"ali|lá|daí|aí|nisso|disso|he|she|they|this|that|it)\b", re.IGNORECASE)
+_HESITATION = re.compile(r"\b(\w+)(?: \1\b)+|\b(tipo|né|assim|sabe|enfim|meio que|que por isso que)\b",
+                         re.IGNORECASE)
+
+
+def make_title(clip_text: str, hook: Optional[str] = None) -> str:
+    """Título sem IA: a frase do COMEÇO do clipe (o que a pessoa ouve
+    primeiro) que mais funciona sozinha como título -- gancho, pergunta,
+    número, nome próprio, assunto concreto; frase que depende de contexto
+    ("ele...", "isso..."), cheia de hesitação ou que é recado/encerramento
+    perde. Com o juiz de IA ligado (src/ai_judge.py), o título é o dele."""
+    from .clip_selector import _SUBSTANCE_RE
+    from .quality import _CLOSING, _OPENING, _PROMO, _hits
     sentences = _sentences(clip_text)
-    best, best_score = None, -1.0
-    for i, sent in enumerate(sentences[:8]):  # o título tem que vir do começo do clipe
-        n_chars = len(sent)
-        if n_chars < 20:
+    total = len(clip_text.split())
+    pool, seen = [], 0
+    for i, sent in enumerate(sentences):
+        if i >= 12 or seen > max(total * 0.5, 60):
+            break
+        pool.append((i, sent))
+        seen += len(sent.split())
+    hook = (hook or "").strip()
+    if hook and all(hook != s_ for _, s_ in pool):
+        pool.append((len(pool), hook))
+    best, best_score = None, float("-inf")
+    for i, sent in pool:
+        cand = _clean_title(sent)
+        if len(cand) < 20:
             continue
-        score = _text_score(sent)
-        score += 1.0 / (1 + i)                    # desempate: prefere o que é dito primeiro
-        if 30 <= n_chars <= TITLE_MAX_CHARS:
-            score += 2.0                          # frase curta e completa = título que cabe inteiro
-        elif n_chars > 90:
-            score -= 3.0                          # sairia truncada com "…"
+        score = _text_score(cand) + 1.0 / (1 + i)          # desempate: o que é dito primeiro
+        proper = re.findall(r"(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}", cand)
+        score += min(len(proper), 3) * 0.8                    # concreto: cita alguém/algo
+        score += min(len(_SUBSTANCE_RE.findall(cand)), 3) * 0.7
+        if hook and sent.strip() == hook:
+            score += 1.5                                      # a frase-gancho que originou o corte
+        if len(sent) <= TITLE_MAX_CHARS + 5 and len(cand) >= 30:
+            score += 2.0                                      # cabe inteira, sem cortar
+        elif len(sent) > 90:
+            score -= 3.0                                      # sairia truncada
         if sent[:1].islower():
-            score -= 2.0                          # começa em minúscula = pedaço de frase maior
+            score -= 2.0                                      # pedaço de frase maior
         if sent.endswith(("...", "…")):
-            score -= 3.0                          # fala interrompida, não é frase completa
+            score -= 3.0                                      # fala interrompida
+        if _DEPENDENT_START.match(cand):
+            score -= 2.5                                      # "ele/isso..." -- quem? o quê?
+        score -= 0.8 * len(_HESITATION.findall(cand))
+        if cand.endswith("?"):
+            score += 1.0
+        if _hits(_CLOSING, cand) or _hits(_PROMO, cand) or _hits(_OPENING, cand):
+            score -= 10.0
         if score > best_score:
-            best, best_score = sent, score
-    title = _clean_title(best or clip_text)
-    return title or "Corte"
+            best, best_score = cand, score
+    return best or _clean_title(hook or clip_text) or "Corte"
 
 
 def make_topic_hashtags(clip_text: str, max_tags: int = 4) -> List[str]:

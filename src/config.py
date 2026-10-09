@@ -23,6 +23,8 @@ IDEAL_CLIP_DURATION = 40             # não usado pela seleção por gancho (só
 # um pouco por segundo -- continua podendo ir até MAX_CLIP_DURATION quando o
 # assunto pede, mas entre dois cortes bons o mais enxuto ganha
 SELECT_PROMO_PENALTY = 8.0
+SELECT_SKIP_INTRO_SECONDS = 90.0        # trailer de "melhores momentos" no começo do episódio...
+SELECT_INTRO_PENALTY = 10.0             # ...trecho que começa nele perde esses pontos
 SELECT_SUBSTANCE_WEIGHT = 0.8         # peso da "substância" (explicação/argumento/dado por minuto)
 
 # --- Juiz de cortes com IA (src/ai_judge.py) -- opcional ---
@@ -38,6 +40,7 @@ AI_JUDGE_EFFORT = "medium"
 AI_JUDGE_MAX_CANDIDATES = 12          # quantos trechos de cada vídeo vão pra avaliação
 AI_REJECT_BELOW = 35                  # nota da IA abaixo disso: o piloto não posta
 AI_CHUNK_MIN_SCORE = 60               # vídeo longo: bloco com trecho de nota >= isso já vira clipe (senão segue procurando)
+AI_COMPARE_FINALISTS = 5                # antes de postar, a IA compara os N melhores da fila (de podcasts diferentes)
 SELECT_PREFER_MAX_SECONDS = 90.0
 SELECT_LONG_PENALTY_PER_SECOND = 0.06
 HOOK_MIN_SCORE = 2.0                 # pontuação mínima de uma frase pra contar como gancho
@@ -1038,9 +1041,20 @@ AUTOPILOT_MAX_AGE_DAYS = 30             # só vídeo publicado nos últimos N di
 AUTOPILOT_MIN_VIEWS = 20000
 AUTOPILOT_EST_DAYS_PER_VIDEO = 2.0      # sem data do vídeo: estima a idade como (posição no canal) x isso
 AUTOPILOT_MIN_SOURCE_MINUTES = 8        # vídeo curto demais não rende cortes bons
+AUTOPILOT_PREFER_EPISODE_MINUTES = 35   # abaixo disso (provável corte, não o episódio) perde até 40% na escolha
+AUTOPILOT_EXPERT_BONUS = 1.3            # título com convidado especialista (cientista, médico, economista, CEO...)
+AUTOPILOT_WEAK_TOPIC_FACTOR = 0.7       # título de desafio/zoeira/compilado/live
 AUTOPILOT_MAX_SOURCE_MINUTES = 240
 AUTOPILOT_CLIPS_PER_VIDEO = 3
-AUTOPILOT_QUEUE_TARGET = 30             # mantém até N clipes prontos esperando postagem
+AUTOPILOT_QUEUE_TARGET = 15             # gera até N clipes (de podcasts variados) enquanto espera a hora de postar
+# banco de clipes: na hora de postar, só posta se a fila já tiver pelo menos
+# AUTOPILOT_POOL_MIN clipes de AUTOPILOT_POOL_MIN_SOURCES podcasts diferentes
+# (aí escolhe o mais viral entre eles); se não juntar em
+# AUTOPILOT_POOL_MAX_WAIT_HOURS, posta o melhor que tiver
+AUTOPILOT_POOL_MIN = 6
+AUTOPILOT_POOL_MIN_SOURCES = 3
+AUTOPILOT_POOL_MAX_WAIT_HOURS = 3
+AUTOPILOT_QUEUE_MAX_AGE_DAYS = 4        # clipe parado na fila há mais que isso sai (conteúdo velho)
 # nota de qualidade (src/quality.py, 0-100): abaixo disso o clipe NÃO é
 # postado -- propaganda/recado do canal, abertura do episódio, fala
 # arrastada, vídeo escuro/congelado. A fila posta sempre a maior nota primeiro.
