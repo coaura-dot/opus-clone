@@ -8,6 +8,18 @@ from typing import Optional
 from .utils import run, ensure_dir
 
 
+@lru_cache(maxsize=1)
+def ytdlp_cmd() -> tuple:
+    """O yt-dlp DESTE Python (o do .venv, que o piloto atualiza todo dia --
+    ver autopilot.update_ytdlp). Chamar só "yt-dlp" podia pegar outra cópia,
+    mais velha, que estivesse no PATH do Windows."""
+    import importlib.util
+    import sys
+    if importlib.util.find_spec("yt_dlp") is not None:
+        return (sys.executable, "-m", "yt_dlp")
+    return ("yt-dlp",)
+
+
 @lru_cache(maxsize=1)  # decide (e avisa) uma vez só por execução
 def _js_runtime_args() -> tuple:
     """O YouTube passou a exigir a execução de um desafio JavaScript pra
@@ -66,7 +78,7 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
 
     print(f"[1/6] Baixando vídeo: {url}")
     cmd = [
-        "yt-dlp",
+        *ytdlp_cmd(),
         "-f", "bv*[ext=mp4][height<=1080]+ba[ext=m4a]/b[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "--no-playlist",
@@ -87,6 +99,6 @@ def download_youtube_video(url: str, work_dir: str) -> Path:
 
 
 def get_video_title(url: str) -> str:
-    cmd = ["yt-dlp", "--get-title", "--no-playlist", *_js_runtime_args(), *cookie_args(), url]
+    cmd = [*ytdlp_cmd(), "--get-title", "--no-playlist", *_js_runtime_args(), *cookie_args(), url]
     out = run(cmd).stdout.decode(errors="ignore").strip()
     return out or "video"

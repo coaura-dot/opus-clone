@@ -232,6 +232,10 @@ A solução de verdade são os cookies de uma conta do Google logada:
 (Se você usa o Firefox, dá pra pôr `YTDLP_COOKIES_FROM_BROWSER = "firefox"`
 no `config.py` em vez do arquivo.)
 
+O piloto também atualiza o yt-dlp do `.venv` uma vez por dia
+(`AUTOPILOT_UPDATE_YTDLP`): o YouTube muda direto, e versão velha falha com
+"HTTP Error 403" ou "unable to extract yt initial data".
+
 ### Nota de qualidade: o que posta e o que não posta
 
 Cada clipe pronto ganha uma nota de 0 a 100 (`src/quality.py`). A fila
@@ -406,6 +410,16 @@ feixe (`WHISPERCPP_BEAM_SIZE = 5`), o título do vídeo como dica de
 vocabulário (nomes próprios) e o alinhamento DTW pro tempo de cada palavra
 (`WHISPERCPP_DTW`). Se o seu `whisper-cli` for antigo e não conhecer alguma
 dessas opções, ele tenta de novo sem elas.
+
+**Download pela metade.** Se o arquivo do modelo ficou incompleto (o
+download caiu), o programa não usa ele: transcreve com o próximo modelo bom
+da pasta (no fim, o `WHISPERCPP_MODEL`), e o piloto automático baixa o
+arquivo de novo em segundo plano, continuando de onde parou e conferindo o
+tamanho e o SHA-256 antes de usar (`src/whisper_models.py`). Um modelo que
+o whisper.cpp recusa ao carregar vira `<nome>.incompleto` (ou
+`.incompativel`, se o arquivo está inteiro mas a sua versão do whisper.cpp
+não lê) e não é tentado de novo. Se nem o modelo configurado carregar, o
+piloto pausa a edição por 30 min sem descartar o vídeo escolhido.
 
 **Sincronia da legenda.** Duas correções, valem pra qualquer modelo:
 - vídeo com quadros por segundo variável (VFR, aparece como "29.6fps" no

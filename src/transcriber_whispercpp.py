@@ -97,17 +97,49 @@ _BETTER_MODELS = [
 ]
 
 
+_WARNED = set()
+
+
+def model_candidates(model_path: str) -> list:
+    """Modelos pra tentar, do melhor pro configurado. Arquivo pela metade
+    (download interrompido) fica de fora -- ver src/whisper_models.py."""
+    from . import config
+    from .whisper_models import problem
+    out = []
+    if getattr(config, "WHISPERCPP_AUTO_BEST_MODEL", True):
+        folder = Path(model_path).parent
+        for name in _BETTER_MODELS:
+            cand = folder / name
+            if not cand.exists():
+                continue
+            why = problem(cand)
+            if why:
+                if name not in _WARNED:
+                    _WARNED.add(name)
+                    print(f"    [aviso] modelo {name} {why} -- pulando (o piloto baixa de novo sozinho)")
+                continue
+            out.append(str(cand))
+    if str(model_path) not in out:
+        out.append(str(model_path))
+    return out
+
+
 def best_model(model_path: str) -> str:
     """O melhor modelo disponível na pasta do modelo configurado."""
-    from . import config
-    if not getattr(config, "WHISPERCPP_AUTO_BEST_MODEL", True):
-        return model_path
-    folder = Path(model_path).parent
-    for name in _BETTER_MODELS:
-        cand = folder / name
-        if cand.exists():
-            return str(cand)
-    return model_path
+    return model_candidates(model_path)[0]
+
+
+# o whisper.cpp não conseguiu carregar o modelo (arquivo, não parâmetro)
+_LOAD_FAIL = ("failed to load model", "failed to initialize whisper context")
+# ... porque o ARQUIVO está estragado/incompleto (não é falta de memória da GPU)
+_FILE_BAD = ("not all tensors loaded", "invalid model", "bad magic", "wrong size in model file",
+             "unknown tensor", "unexpected end of file")
+
+
+class ModelLoadError(RuntimeError):
+    def __init__(self, msg: str, file_bad: bool = False):
+        super().__init__(msg)
+        self.file_bad = file_bad  # arquivo estragado (e não falta de memória etc.)
 
 
 def _dtw_preset(model_path: str) -> Optional[str]:
@@ -138,6 +170,29 @@ def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
                use_gpu: bool = True, gpu_device: int = 0,
                extra_args: Optional[list] = None, prompt: Optional[str] = None,
                beam_size: int = 5, use_dtw: bool = True) -> Transcript:
+    """Transcreve com o melhor modelo que carregar (ver _transcribe)."""
+    from .whisper_models import mark_broken
+    models = model_candidates(model_path)
+    for i, m in enumerate(models):
+        try:
+            return _transcribe(audio_path, m, bin_path, language, threads, use_gpu, gpu_device,
+                               extra_args, prompt, beam_size, use_dtw)
+        except ModelLoadError as e:
+            if i == len(models) - 1:
+                raise
+            moved = mark_broken(m) if e.file_bad else None
+            print(f"    [aviso] o whisper.cpp não carregou o modelo {Path(m).name}"
+                  + ((" (arquivo estragado" if moved.name.endswith(".incompleto") else
+                      " (esta versão do whisper.cpp não lê esse arquivo") + f"; renomeado pra {moved.name})"
+                     if moved else "")
+                  + f" -- usando {Path(models[i + 1]).name}")
+
+
+def _transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
+                language: str = "auto", threads: int = 0,
+                use_gpu: bool = True, gpu_device: int = 0,
+                extra_args: Optional[list] = None, prompt: Optional[str] = None,
+                beam_size: int = 5, use_dtw: bool = True) -> Transcript:
     """Transcreve via whisper.cpp. `bin_path` pode ser só o nome do
     executável (se estiver no PATH) ou o caminho completo pro
     whisper-cli.exe. `model_path` precisa apontar pra um arquivo .bin no
@@ -147,7 +202,6 @@ def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
     acerta mais nomes próprios e gírias que aparecem nele.
     `use_dtw`: tempo de cada palavra pelo alinhamento DTW (bem mais preciso
     que o padrão do whisper.cpp, que deixava a legenda adiantada/atrasada)."""
-    model_path = best_model(model_path)
     print(f"[2/6] Transcrevendo áudio (whisper.cpp — modelo '{Path(model_path).name}')...")
 
     resolved_bin = shutil.which(bin_path) or (bin_path if Path(bin_path).exists() else None)
@@ -215,6 +269,12 @@ def transcribe(audio_path: str, model_path: str, bin_path: str = "whisper-cli",
                                   encoding="utf-8", errors="replace")
             if proc.returncode == 0 and json_path.exists():
                 break
+            out = (proc.stdout or "") + (proc.stderr or "")
+            if any(m in out for m in _LOAD_FAIL):
+                # o problema é o modelo, não os parâmetros: tirar opção não adianta
+                raise ModelLoadError(f"whisper.cpp não carregou {Path(model_path).name}: "
+                                     f"{out.strip().splitlines()[-1][:200] if out.strip() else ''}",
+                                     any(m in out for m in _FILE_BAD))
             if cmd is not attempts[-1]:
                 print("    [aviso] whisper.cpp recusou parâmetros extras (versão antiga?) -- "
                       "tentando de novo com menos opções")

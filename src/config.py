@@ -1055,6 +1055,8 @@ AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # o intervalo real espalha o limite do
 AUTOPILOT_POST_HOURS = (0, 24)          # posta o dia todo (ex.: (9, 23) = só das 9h às 23h)
 AUTOPILOT_WORKER_TIMEOUT_MINUTES = 150  # vídeo que trava na edição é abandonado
 AUTOPILOT_IDLE_MINUTES = 30             # sem vídeo novo: procura de novo depois de N min
+AUTOPILOT_UPDATE_YTDLP = True           # atualiza o yt-dlp 1x por dia (YouTube muda direto; versão
+                                        # velha falha com 403 / "unable to extract yt initial data")
 AUTOPILOT_MIN_FREE_GB = 5               # disco abaixo disso: apaga clipes já postados
 AUTOPILOT_DELETE_POSTED_FILES = False   # True = apaga o .mp4 logo depois de postar
 # faxina automática da pasta de cortes (src/housekeeping.py)

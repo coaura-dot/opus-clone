@@ -150,6 +150,16 @@ class YoutubeBlocked(Exception):
 _BLOCK_MARKERS = ("Sign in to confirm you", "HTTP Error 429", "Too Many Requests")
 
 
+class LocalFailure(Exception):
+    """A edição falhou por um problema no PC (ex.: modelo do whisper.cpp que
+    não carrega), não por causa do vídeo: o vídeo não é descartado."""
+
+
+# achado real: modelo do whisper.cpp baixado pela metade derrubou TODOS os
+# vídeos de uma noite, e cada um foi marcado como "falhou"
+_LOCAL_MARKERS = ("failed to initialize whisper context", "failed to load model")
+
+
 def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None) -> Optional[list]:
     """Roda main.py num processo separado pra editar um vídeo. Devolve a
     lista de clipes gerados: None se a edição falhou, [] se terminou bem mas
@@ -171,12 +181,14 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
     proc = subprocess.Popen(cmd, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, env=env, **kw)
 
-    seen_block = []
+    seen_block, seen_local = [], []
 
     def _pump():
         repeated = 0
         for raw in proc.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip()
+            if any(m in line for m in _LOCAL_MARKERS):
+                seen_local.append(line)
             if any(m in line for m in _BLOCK_MARKERS):
                 seen_block.append(line)
                 repeated += 1
@@ -206,6 +218,8 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
     if not results.exists():
         if seen_block:
             raise YoutubeBlocked(seen_block[0].strip()[:200])
+        if seen_local:
+            raise LocalFailure("o whisper.cpp não conseguiu carregar o modelo de transcrição")
         log(f"    [!] a edição terminou sem gerar clipes (código {proc.returncode}).")
         return None
     try:
@@ -567,6 +581,69 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
     return kept
 
 
+# --------------------------------------------------------- manutenção ---
+_REPAIR = {"at": 0.0}
+
+
+def repair_models(log: Log) -> None:
+    """Modelo do whisper.cpp baixado pela metade: baixa de novo em segundo
+    plano (src/whisper_models.py). No máximo a cada 6 h."""
+    if getattr(config, "TRANSCRIBE_ENGINE", "") != "whispercpp" or time.time() - _REPAIR["at"] < 6 * 3600:
+        return
+    _REPAIR["at"] = time.time()
+    try:
+        from . import whisper_models
+        from .transcriber_whispercpp import _BETTER_MODELS
+        if getattr(config, "WHISPERCPP_AUTO_BEST_MODEL", True):
+            whisper_models.start_repair(config.WHISPERCPP_MODEL, _BETTER_MODELS, log)
+    except Exception as e:  # manutenção nunca derruba o piloto
+        log(f"  [modelo] não consegui conferir os modelos ({e.__class__.__name__}: {e})")
+
+
+def update_ytdlp(state: State, log: Log) -> None:
+    """Atualiza o yt-dlp uma vez por dia: o YouTube muda direto e versão
+    velha falha com 403 / "unable to extract yt initial data" (log real)."""
+    if not getattr(config, "AUTOPILOT_UPDATE_YTDLP", True):
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    if state.data.get("ytdlp_checked") == today:
+        return
+    state.data["ytdlp_checked"] = today
+    state.save()
+    cmd = [sys.executable, "-m", "pip", "install", "-U", "--quiet", "--disable-pip-version-check",
+           "yt-dlp[default]"]
+    try:
+        before = subprocess.run([sys.executable, "-m", "yt_dlp", "--version"], capture_output=True,
+                                text=True, timeout=60).stdout.strip()
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        after = subprocess.run([sys.executable, "-m", "yt_dlp", "--version"], capture_output=True,
+                               text=True, timeout=60).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"  [yt-dlp] não consegui atualizar agora ({e.__class__.__name__}).")
+        return
+    if r.returncode != 0:
+        log("  [yt-dlp] não consegui atualizar agora (sem internet?); tento amanhã.")
+    elif after and after != before:
+        log(f"  [yt-dlp] atualizado: {before or '?'} -> {after}")
+
+
+def _forgive_local_failures(state: State, log: Log) -> None:
+    """Uma vez só: vídeos que "falharam" nas últimas 48 h podem ter caído
+    pelo modelo de transcrição quebrado (não por culpa do vídeo) -- voltam
+    pra lista."""
+    if state.data.get("forgave_v19"):
+        return
+    now, n = time.time(), 0
+    for vid, s in list(state.data["sources"].items()):
+        if s.get("status") == "failed" and now - s.get("at", 0) < 48 * 3600:
+            del state.data["sources"][vid]
+            n += 1
+    state.data["forgave_v19"] = True
+    state.save()
+    if n:
+        log(f"  {n} vídeo(s) que falharam pelo modelo de transcrição quebrado voltaram pra lista.")
+
+
 # ------------------------------------------------------------ loop ---
 def _sleep_until(ts: float, log: Log, why: str):
     wait = max(ts - time.time(), 0)
@@ -620,6 +697,9 @@ def run_forever(upload: bool = True):
 
     prune_blocked(state, log)
     prune_hook_clips(state, log)
+    _forgive_local_failures(state, log)
+    repair_models(log)
+    update_ytdlp(state, log)
     from . import housekeeping
     housekeeping.clean_work_dir(log)
     housekeeping.cleanup(state, out_root, log)
@@ -664,9 +744,12 @@ def run_forever(upload: bool = True):
             # 2) produzir, se a fila estiver curta (e o YouTube não estiver
             # bloqueando downloads -- ver YoutubeBlocked)
             target = getattr(config, "AUTOPILOT_QUEUE_TARGET", 8)
-            blocked_until = state.data.get("download_blocked_until", 0)
+            local_until = state.data.get("local_fail_until", 0)
+            blocked_until = max(state.data.get("download_blocked_until", 0), local_until)
             if (len(state.data["queue"]) < target and time.time() >= blocked_until
                     and make_room(state, out_root, log) and housekeeping.has_room(state, out_root, log)):
+                repair_models(log)
+                update_ytdlp(state, log)
                 log("  >> Procurando vídeo bombando pra cortar...")
                 source = discovery.pick_source(state.seen_ids(), state.recent_channels(), log=log)
                 if source:
@@ -676,6 +759,14 @@ def run_forever(upload: bool = True):
                         state.save()
                         housekeeping.clean_work_dir(log)
                         housekeeping.cleanup(state, out_root, log)
+                    except LocalFailure as e:
+                        state.data["local_fail_until"] = time.time() + 30 * 60
+                        state.save()
+                        housekeeping.clean_work_dir(log)
+                        _REPAIR["at"] = 0.0  # confere os modelos de novo já
+                        repair_models(log)
+                        log(f"  [!] Problema no PC: {e}. O vídeo não foi descartado; "
+                            "tento de novo em 30 min (a postagem continua).")
                     except YoutubeBlocked as e:
                         n = state.data.get("download_blocks", 0) + 1
                         # 1ª pausa curta: no PC do usuário o bloqueio passou em ~10 min
@@ -698,7 +789,8 @@ def run_forever(upload: bool = True):
 
             # 3) fila cheia (ou downloads pausados): espera a próxima postagem
             if time.time() < blocked_until and not (service is not None and state.data["queue"]):
-                _sleep_until(blocked_until, log, "downloads pausados pelo bloqueio do YouTube")
+                _sleep_until(blocked_until, log, "edição pausada (problema no PC)" if blocked_until == local_until
+                             else "downloads pausados pelo bloqueio do YouTube")
             elif service is not None and state.data["queue"]:
                 _, nxt = can_post_now(state)
                 wake = min(nxt, time.time() + 3600)
@@ -744,7 +836,12 @@ def run_once(url: str, n_clips: int, upload: bool = True):
     vid = _video_id(url) or f"manual_{int(time.time())}"
     source = {"id": vid, "url": url, "title": url}
     before = len(state.data["queue"])
-    made = produce(state, source, out_root, log, n_clips=n_clips)
+    try:
+        made = produce(state, source, out_root, log, n_clips=n_clips)
+    except (LocalFailure, YoutubeBlocked) as e:
+        log(f"  [!] {e}")
+        keep_awake(False)
+        return
     if not made or service is None:
         keep_awake(False)
         return

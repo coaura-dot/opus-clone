@@ -159,7 +159,8 @@ def main():
     _start_watchdog(getattr(config, "WATCHDOG_TIMEOUT_SECONDS", 90 * 60))
 
     ensure_ffmpeg()
-    if not check_dependency("yt-dlp"):
+    from src.downloader import ytdlp_cmd
+    if ytdlp_cmd() == ("yt-dlp",) and not check_dependency("yt-dlp"):
         print("[ERRO] yt-dlp não encontrado. Instale com: pip install yt-dlp")
         sys.exit(1)
 
