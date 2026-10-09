@@ -347,6 +347,11 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         queue.pop(0)
         state.save()
         return False
+    if _old_hook(item):
+        log(f"    clipe antigo com o título no começo, tirando da fila: {Path(item['video']).name}")
+        queue.pop(0)
+        state.save()
+        return False
     meta = json.loads(Path(item["meta"]).read_text(encoding="utf-8"))
     log(f"  >> Postando no YouTube: \"{meta['title']}\"")
     try:
@@ -491,6 +496,47 @@ def prune_blocked(state: State, log: Log) -> int:
     return len(gone)
 
 
+def _old_hook(c: dict) -> bool:
+    """Clipe feito antes de desligar o título-gancho (balão + whoosh no
+    arquivo, src/hook_check.py)? Confere uma vez só por clipe."""
+    if getattr(config, "HOOK_ENABLED", False) or c.get("hook_ok"):
+        return False
+    from .hook_check import burned_hook
+    video = c.get("video")
+    meta = c.get("meta") or (str(Path(video).with_suffix(".meta.json")) if video else None)
+    try:
+        r = burned_hook(video, meta)
+    except Exception:  # conferência nunca derruba o piloto
+        r = None
+    if r is False:
+        c["hook_ok"] = True
+    return bool(r)
+
+
+def prune_hook_clips(state: State, log: Log) -> int:
+    """Tira da fila os clipes antigos com o título-gancho no começo e não
+    libera os vídeos privados antigos que têm ele (ficam privados)."""
+    if getattr(config, "HOOK_ENABLED", False):
+        return 0
+    from .release import _pending
+    gone = [c for c in state.data["queue"] if _old_hook(c)]
+    if gone:
+        state.data["queue"] = [c for c in state.data["queue"] if c not in gone]
+    locked = []
+    for p in _pending(state):
+        if p.get("video") and Path(p["video"]).exists() and _old_hook(p):
+            p["gave_up"] = p["old_hook"] = True
+            locked.append(p)
+    state.save()
+    if gone:
+        log(f"  Fila: {len(gone)} clipe(s) antigo(s) com o título no começo removido(s) "
+            "(feitos antes de desligar o título; os novos saem sem).")
+    if locked:
+        log(f"  {len(locked)} vídeo(s) privado(s) antigo(s) com o título no começo não vão ser "
+            "liberados (ficam privados; dá pra apagar no YouTube Studio).")
+    return len(gone) + len(locked)
+
+
 def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optional[int] = None) -> int:
     vid = source["id"]
     n_clips = n_clips or getattr(config, "AUTOPILOT_CLIPS_PER_VIDEO", 3)
@@ -573,6 +619,7 @@ def run_forever(upload: bool = True):
     log("=" * 60)
 
     prune_blocked(state, log)
+    prune_hook_clips(state, log)
     from . import housekeeping
     housekeeping.clean_work_dir(log)
     housekeeping.cleanup(state, out_root, log)

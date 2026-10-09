@@ -122,6 +122,13 @@ def release_step(state, service, log, startup: bool = False, force: bool = False
     pend.sort(key=lambda p: p.get("at", 0))
     oldest = pend[0]
     now = time.time()
+    # vídeo antigo com o título-gancho no começo (src/hook_check.py): fica privado
+    from .autopilot import _old_hook
+    if oldest.get("video") and Path(oldest["video"]).exists() and _old_hook(oldest):
+        oldest["gave_up"] = oldest["old_hook"] = True
+        state.save()
+        log(f"    o vídeo {oldest['youtube_id']} é antigo, com o título no começo -- fica privado.")
+        return True
 
     # sinal passivo: um vídeo mais novo que os privados já subiu público
     if not r["approved"] and any(p.get("privacy") == "public" and p.get("at", 0) > oldest.get("at", 0)

@@ -678,7 +678,10 @@ um "pop", a palavra falada acende em amarelo e cresce, e números / dinheiro /
 palavras de impacto ficam em verde (`CAPTION_*` em `config.py`). O clipe
 abre com um zoom out suave (~12%, em 1,5 s; `FX_INTRO_*`). O título num
 balão branco no topo nos primeiros ~3 s, com *whoosh*, vem desligado
-(`HOOK_ENABLED = True` liga de novo).
+(`HOOK_ENABLED = True` liga de novo). Clipes feitos antes de desligar o
+título (balão e whoosh ficam gravados no arquivo) saem da fila sozinhos
+quando o piloto liga, e os vídeos privados antigos com o balão não são
+liberados (`src/hook_check.py`).
 
 A fonte usada nas legendas (**Anton**, Google Fonts, licença OFL livre) vem
 embutida em `assets/fonts/` e é carregada diretamente pelo filtro `ass` do

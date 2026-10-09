@@ -211,7 +211,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                            "ai_score": getattr(candidate, "ai_score", None),
                            # react em tela dividida: rosto pequeno é normal (não penaliza)
                            "react": bool(react_plan is not None and react_plan.active_fraction >= 0.5),
-                           "ai_reason": getattr(candidate, "ai_reason", "")})
+                           "ai_reason": getattr(candidate, "ai_reason", ""),
+                           # título-gancho + whoosh queimados no arquivo? (src/hook_check.py)
+                           "hook_burned": bool(hook_text)})
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")
