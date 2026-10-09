@@ -212,6 +212,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                            # react em tela dividida: rosto pequeno é normal (não penaliza)
                            "react": bool(react_plan is not None and react_plan.active_fraction >= 0.5),
                            "ai_reason": getattr(candidate, "ai_reason", ""),
+                           # momento engraçado (src/humor.py)
+                           "laughs_per_min": getattr(candidate, "laughs_per_min", 0.0),
+                           "ends_on_laugh": getattr(candidate, "ends_on_laugh", False),
                            # título-gancho + whoosh queimados no arquivo? (src/hook_check.py)
                            "hook_burned": bool(hook_text)})
 

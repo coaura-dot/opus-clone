@@ -14,6 +14,8 @@ O que conta (cada item vale de 0 a 1 e entra com um peso):
   ritmo       fala densa e variada (sem trecho morto, sem monotonia)
   conteúdo    emoção, dinheiro/números, conflito, história, curiosidade e
               substância (explicação, dado, assunto de gente pensando)
+  humor       risadas/aplausos/reação no áudio (src/humor.py) -- clipe
+              engraçado vale como conteúdo, e terminar na risada é punchline
   fechamento  termina numa frase completa, de preferência com conclusão --
               não numa pergunta sem resposta nem no meio da ideia
   imagem      rosto em quadro e movimento na medida (nem parado, nem caos)
@@ -55,7 +57,7 @@ _CURIOSITY = re.compile(r"(voc[êe] sabia|o que ningu[ée]m|a verdade (sobre|[é
 _YOU = re.compile(r"\b(voc[êe]|vc|tu|seu|sua|you|your)\b", re.I)
 
 DEFAULT_WEIGHTS = {"gancho": 22, "contexto": 10, "picos": 8, "ritmo": 10, "conteudo": 18,
-                   "fechamento": 10, "imagem": 10, "duracao": 7, "titulo": 5}
+                   "humor": 4, "fechamento": 10, "imagem": 10, "duracao": 7, "titulo": 5}
 
 
 def _audio(video: str) -> Optional[np.ndarray]:
@@ -198,6 +200,15 @@ def analyze(video: str, meta: dict, weights: Optional[Dict[str, float]] = None) 
     tp = _text_parts(text, title, minutes)
     parts["gancho"] = float(np.clip(0.4 * hook_audio + 0.6 * tp.pop("_gancho_texto"), 0, 1))
     parts.update(tp)
+    # --- humor: risadas/reações no áudio (src/humor.py, medido na seleção)
+    from .humor import FUNNY_RE
+    laughs = float(meta.get("laughs_per_min") or 0.0)
+    parts["humor"] = float(np.clip(min(laughs, 4.0) / 4.0 * 0.75 + (0.25 if meta.get("ends_on_laugh") else 0.0)
+                                   + min(len(FUNNY_RE.findall(text)), 3) * 0.05, 0, 1))
+    # engraçado conta como conteúdo: clipe de risada não perde por não "explicar" nada
+    parts["conteudo"] = max(parts["conteudo"], 0.85 * parts["humor"])
+    if meta.get("ends_on_laugh"):
+        parts["fechamento"] = max(parts["fechamento"], 0.9)  # termina na risada = punchline
 
     # --- imagem
     fr = _frames(video)
@@ -275,11 +286,11 @@ def rank_key(item: dict, weights: Optional[Dict[str, float]] = None) -> float:
 
 def summary(parts: Dict[str, float]) -> str:
     names = {"gancho": "gancho", "contexto": "começo se sustenta", "picos": "picos de voz", "ritmo": "ritmo",
-             "conteudo": "conteúdo", "fechamento": "fechamento", "imagem": "imagem", "duracao": "duração",
-             "titulo": "título"}
+             "conteudo": "conteúdo", "humor": "risadas", "fechamento": "fechamento", "imagem": "imagem",
+             "duracao": "duração", "titulo": "título"}
     items = [(k, v) for k, v in parts.items() if k in names]
     good = [names[k] for k, v in sorted(items, key=lambda kv: -kv[1]) if v >= 0.7][:3]
-    bad = [names[k] for k, v in sorted(items, key=lambda kv: kv[1]) if v < 0.35][:2]
+    bad = [names[k] for k, v in sorted(items, key=lambda kv: kv[1]) if v < 0.35 and k != "humor"][:2]
     out = ["TRAVADO: recado/abertura/encerramento do episódio"] if parts.get("_trava") else []
     if good:
         out.append("forte: " + ", ".join(good))

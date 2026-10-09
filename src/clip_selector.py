@@ -391,6 +391,9 @@ class ClipCandidate:
     ai_score: Optional[int] = None
     ai_title: str = ""
     ai_reason: str = ""
+    # momento engraçado (src/humor.py): risadas/reações por minuto e se termina numa
+    laughs_per_min: float = 0.0
+    ends_on_laugh: bool = False
 
     @property
     def duration(self):
@@ -880,6 +883,19 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
     intro_s = getattr(config, "SELECT_SKIP_INTRO_SECONDS", 90.0)
     intro_w = getattr(config, "SELECT_INTRO_PENALTY", 10.0)
     has_teaser_zone = is_first_segment and total_duration >= 10 * 60
+    # risada/aplauso/reação no áudio (src/humor.py): piada que funcionou
+    from . import humor
+    humor_w = getattr(config, "SELECT_HUMOR_WEIGHT", 1.2)
+    reacts = []
+    if humor_w:
+        try:
+            x16 = humor.load_audio(audio_path)
+            reacts = humor.reactions(x16, transcript.words) if x16 is not None else []
+            del x16
+        except Exception:
+            reacts = []
+        if reacts:
+            print(f"    {len(reacts)} risada(s)/reação(ões) no áudio deste trecho")
     long_after = getattr(config, "SELECT_PREFER_MAX_SECONDS", 90.0)
     long_w = getattr(config, "SELECT_LONG_PENALTY_PER_SECOND", 0.06)
 
@@ -999,6 +1015,17 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
             score -= promo_w
         if has_teaser_zone and start_t < intro_s:
             score -= intro_w
+        # momento engraçado: risada logo depois da fala; termina NA risada
+        # (estica o fim até ela acabar, se vier logo depois da última frase)
+        laugh_after = [b for a, b in reacts if end_t - 0.3 <= a <= end_t + 1.5]
+        if laugh_after and laugh_after[0] - start_t <= max_dur + topic_grace:
+            end_t = laugh_after[0] + 0.3
+            dur = end_t - start_t
+        hs = humor.stats(reacts, start_t, end_t, text) if humor_w else {"laughs_per_min": 0.0,
+                                                                        "funny_words": 0, "ends_on_laugh": False}
+        score += min(hs["laughs_per_min"], 4.0) * humor_w + min(hs["funny_words"], 3) * 0.4
+        if hs["ends_on_laugh"]:
+            score += 2.0 * (humor_w > 0)
         # Shorts curtos seguram mais gente até o fim: dentro da faixa
         # permitida, cada segundo além de SELECT_PREFER_MAX_SECONDS custa um pouco
         score -= max(dur - long_after, 0.0) * long_w
@@ -1008,7 +1035,9 @@ def select_clips(transcript: Transcript, audio_path: str, total_duration: float,
 
         candidates.append(ClipCandidate(start=start_t, end=end_t, text=text,
                                          score=score, title="",
-                                         hook_text=sentences[h]["text"]))
+                                         hook_text=sentences[h]["text"],
+                                         laughs_per_min=hs["laughs_per_min"],
+                                         ends_on_laugh=hs["ends_on_laugh"]))
 
     if not candidates:
         raise RuntimeError(

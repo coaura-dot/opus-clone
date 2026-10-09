@@ -191,8 +191,9 @@ _EXPERT_RE = re.compile(
     r"milion[áa]ri[oa]|campe[ãa]o|medalhista|ol[íi]mpic[oa]|especialista|expert|"
     r"scientist|doctor|professor|founder|ceo|economist|historian|astronaut|author)\b", re.IGNORECASE)
 _WEAK_RE = re.compile(
-    r"\b(tente n[ãa]o rir|desafio|challenge|pegadinha|zoeira|trollagem|tretas?|barraco|"
-    r"respondendo (coment[áa]rios|seguidores)|q ?& ?a|unboxing)\b", re.IGNORECASE)
+    r"\b(desafio|challenge|respondendo (coment[áa]rios|seguidores)|q ?& ?a|unboxing)\b", re.IGNORECASE)
+# (humor entra: "tente não rir", zoeira, treta não perdem mais -- pedido do usuário;
+# pegadinha/trollagem continuam fora pela lista de bloqueio)
 # (react e compilado NÃO entram: os reacts bons -- Orochinho, Dr Donut -- usam esses nomes)
 
 

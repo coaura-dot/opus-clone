@@ -133,10 +133,14 @@ def assess(video: str, meta: dict) -> Tuple[int, List[str], bool]:
         score -= 5
         reasons.append("gancho comprido")
 
-    # 3) ritmo da fala
+    # 3) ritmo da fala (risada não vira palavra: momento engraçado não é "fala arrastada")
+    laughs = float(meta.get("laughs_per_min") or 0.0)
+    if laughs >= 1.0:
+        score += min(laughs, 4.0) * 2.0 + (3 if meta.get("ends_on_laugh") else 0)
+        reasons.append("momento engraçado (risadas)")
     if dur and dur > 0:
         wps = len(text.split()) / dur
-        if wps < 1.4:
+        if wps < 1.4 and laughs < 1.0:
             score -= 15
             reasons.append(f"fala arrastada ({wps:.1f} palavras/s)")
         elif wps >= 2.4:

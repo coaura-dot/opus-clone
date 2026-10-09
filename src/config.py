@@ -25,6 +25,7 @@ IDEAL_CLIP_DURATION = 40             # não usado pela seleção por gancho (só
 SELECT_PROMO_PENALTY = 8.0
 SELECT_SKIP_INTRO_SECONDS = 90.0        # trailer de "melhores momentos" no começo do episódio...
 SELECT_INTRO_PENALTY = 10.0             # ...trecho que começa nele perde esses pontos
+SELECT_HUMOR_WEIGHT = 1.2              # momento engraçado: pontos por risada/reação por minuto (até 4/min), 0 = desliga
 SELECT_SUBSTANCE_WEIGHT = 0.8         # peso da "substância" (explicação/argumento/dado por minuto)
 
 # --- Juiz de cortes com IA (src/ai_judge.py) -- opcional ---
@@ -1026,6 +1027,14 @@ AUTOPILOT_CHANNELS = [
     "@podpah",                                                   # Podpah -- 10,2 mi
     "@Ticaracaticast",                                           # Ticaracaticast -- 3 mi, episódios de 2 h
     "@cienciasemfim",                                            # Ciência Sem Fim -- 1,3 mi (ciência)
+    # Humor, TV e assunto do momento (pedido do usuário: "vídeos engraçados,
+    # momentos engraçados em podcasts, programas de TV recentes, acontecimentos
+    # recentes"). Atenção: programa de TV é de emissora -- mais chance de
+    # reivindicação do Content ID que podcast; se der problema, tire a linha.
+    "@TheNoite",                                                 # The Noite com Danilo Gentili (SBT) -- 13,8 mi, ~140 mil views/episódio
+    "@IlhadeBarbados",                                           # Ilha de Barbados (humor) -- ~180 mil views/vídeo
+    "@DivaDepressao",                                            # Diva Depressão (TV, reality, famosos) -- ~250 mil views/vídeo
+    "@felipeneto",                                               # Felipe Neto (react do que está bombando) -- ~880 mil views/vídeo
     # Reacts grandes
     "https://www.youtube.com/channel/UCgSAH94ZjV6-w46hPJ0-ffQ",  # orochidois (Orochinho) -- ~780 mil views/vídeo
     "@MaiconKuster",                                             # Maicon Küster -- ~940 mil views/vídeo

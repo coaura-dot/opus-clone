@@ -317,7 +317,7 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês) |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; humor/TV/assunto do momento: The Noite, Ilha de Barbados, Diva Depressão, Felipe Neto; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês). Programa de TV (The Noite) tem mais chance de reivindicação no Content ID |
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
 | `AUTOPILOT_MIN_VIEWS` | 50000 | só vídeos com pelo menos N views |
@@ -570,6 +570,35 @@ Para voltar ao volume único: `MUSIC_LEVEL_FOLLOW_VOICE = False`.
 > com som famoso, poste o `*_sem_musica.mp4` (gerado quando o clipe tem
 > música) e escolha o som em alta pela biblioteca do próprio app, que já
 > tem a licença.
+
+## Momentos engraçados
+
+Além de conteúdo "inteligente", o programa reconhece momento engraçado
+(`src/humor.py`). O Whisper não escreve risada, então ela aparece como um
+buraco na transcrição: som alto, perto do volume da fala, sem palavra
+nenhuma, logo depois de alguém falar e no meio da conversa. Pra não
+confundir com música, o trecho não pode ter grave: medido em 15 risadas
+reais e 23 faixas de música, a energia abaixo de 150 Hz é ~0,1% na
+risada e ~50% na música.
+
+- **Seleção:** cada risada ou reação por minuto soma pontos
+  (`SELECT_HUMOR_WEIGHT`). Se a risada vem logo depois da última frase, o
+  clipe termina nela (é o punchline).
+- **Nota de qualidade:** risada não vira palavra, então momento engraçado
+  não leva mais a penalidade de "fala arrastada".
+- **Nota de viralidade:** entra o item "risadas", e clipe engraçado conta
+  como conteúdo, mesmo sem explicar nada.
+- **Juiz de IA:** passou a valorizar momento que faz rir sozinho.
+
+**Teste:** risadas reais (ESC-50) coladas no meio de 10 min de fala real
+de podcast.
+- Achou 20 de 20.
+- Confundiu 1 de 5 trechos de música.
+- Marcou 3 pontos da fala original. Conferidos de novo com outro modelo
+  do Whisper, uma parte era reação e outra era fala que o Whisper não
+  tinha transcrito.
+
+Por isso a risada é um bônus na nota, não o que decide sozinho.
 
 ## Vídeos longos (podcasts, entrevistas de horas)
 
