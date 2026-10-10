@@ -19,11 +19,22 @@ Primeira vez: siga o passo a passo do README ("Postagem automática").
 """
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# aberto sem console (ex.: pela interface no pythonw) o Windows pode entregar
+# uma saída "quebrada": o 1º print derrubava o piloto (v30). Testa e, se
+# estiver quebrada, segue sem tela -- o log vai pro arquivo de qualquer jeito.
+for _name in ("stdout", "stderr"):
+    try:
+        getattr(sys, _name).write("\n")
+        getattr(sys, _name).flush()
+    except Exception:
+        setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
 
 from src import config
 from src import autopilot

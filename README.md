@@ -165,7 +165,8 @@ crédito do vídeo original e da música.
     com avisos em vermelho.
   - **Atalhos:** cortar um link, conectar o canal do YouTube, abrir as
     pastas "postar à mão" e dos cortes, YouTube Studio.
-  - O piloto roda escondido, sem janela preta. Se cair, a interface religa
+  - O piloto roda escondido, sem janela preta. Se cair, a interface mostra
+    o motivo no log (completo em `autopilot_data\piloto_saida.txt`) e religa
     em 60 s. Ao fechar a janela ela pergunta se é pra desligar o piloto ou
     deixar ele trabalhando sozinho; ao abrir de novo, mostra o piloto que já
     estava ligado. Um piloto aberto pelos `.bat` também aparece e desliga

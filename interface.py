@@ -87,28 +87,69 @@ def _python() -> str:
     return exe
 
 
+CONSOLE = ap.DATA_DIR / "piloto_saida.txt"
+
+
 def _spawn(args, capture: bool = False) -> subprocess.Popen:
-    """Roda `autopilot.py args` sem janela. No Windows ganha um console
-    ESCONDIDO: assim o ffmpeg/whisper.cpp que ele abre herdam esse console
-    em vez de cada um piscar uma janela preta na tela."""
+    """Roda `autopilot.py args` sem janela.
+
+    A saída (print, erros) vai pra autopilot_data/piloto_saida.txt. Achado
+    real (v30 no PC do usuário): a interface roda no pythonw, que não tem
+    console; sem um destino pra saída, o Windows entregava ao piloto uma
+    saída "quebrada" e o primeiro print derrubava ele em 1 s ("O piloto caiu
+    (código 1)" sem parar). No Windows o piloto roda num console SEM
+    JANELA (CREATE_NO_WINDOW): o ffmpeg/whisper.cpp que ele abre herdam esse
+    console em vez de cada um piscar uma janela preta na tela (e o Terminal
+    do Windows 11 não tem janela nenhuma pra mostrar)."""
     cmd = [_python(), "-u", str(ROOT / "autopilot.py")] + [str(a) for a in args]
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     kw = {"cwd": str(ROOT), "env": env, "stdin": subprocess.DEVNULL}
+    out = None
     if capture:
         kw.update(stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                   encoding="utf-8", errors="replace")
+    else:
+        ap.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            if CONSOLE.exists() and CONSOLE.stat().st_size > 5 * 1024 * 1024:
+                CONSOLE.replace(CONSOLE.with_suffix(".old.txt"))
+        except OSError:
+            pass
+        out = open(CONSOLE, "ab")
+        out.write(f"\n===== {datetime.now():%d/%m %H:%M:%S} autopilot.py {' '.join(str(a) for a in args)}\n"
+                  .encode("utf-8"))
+        out.flush()
+        kw.update(stdout=out, stderr=subprocess.STDOUT)
     if WIN:
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         si.wShowWindow = 0  # SW_HIDE
         kw["startupinfo"] = si
-        kw["creationflags"] = (subprocess.CREATE_NO_WINDOW if capture else subprocess.CREATE_NEW_CONSOLE) \
-            | subprocess.CREATE_NEW_PROCESS_GROUP
+        kw["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kw["start_new_session"] = True
-        if not capture:
-            kw.update(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return subprocess.Popen(cmd, **kw)
+    try:
+        return subprocess.Popen(cmd, **kw)
+    finally:
+        if out is not None:
+            out.close()  # o piloto ficou com a cópia dele
+
+
+def _crash_reason() -> str:
+    """A última linha de erro que o piloto escreveu antes de cair."""
+    try:
+        with open(CONSOLE, "rb") as f:
+            f.seek(max(CONSOLE.stat().st_size - 16 * 1024, 0))
+            tail = f.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    tail = [ln.strip() for ln in tail if ln.strip()]
+    for ln in reversed(tail):
+        if ln.startswith("=====") and "autopilot.py" in ln:
+            break
+        if ("Error" in ln or "Exception" in ln or "erro" in ln.lower()) and not ln.startswith("File "):
+            return ln[:220]
+    return tail[-1][:220] if tail else ""
 
 
 def _kill_tree(pid: int) -> None:
@@ -410,7 +451,9 @@ class App:
             self.proc = None
             if self.want_on and self.stop_at is None and code not in (0, None):
                 self.restart_at = now + RESTART_AFTER
-                self._note(f"O piloto caiu (código {code}). Religando em {RESTART_AFTER} s...")
+                why = _crash_reason()
+                self._note(f"O piloto caiu (código {code}){': ' + why if why else ''}. Religando em "
+                           f"{RESTART_AFTER} s... (detalhes em autopilot_data\\piloto_saida.txt)")
             elif self.want_on and self.stop_at is None and not info:
                 self.want_on = False  # saiu sozinho (ex.: já tinha outro piloto ligado)
         if self.restart_at and now >= self.restart_at and not info:

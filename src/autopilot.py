@@ -43,10 +43,17 @@ class Log:
     def __call__(self, msg: str = ""):
         line = f"[{datetime.now():%d/%m %H:%M:%S}] {msg}" if msg else ""
         with self._lock:
+            # a tela é só um espelho do arquivo: saída sem console/quebrada
+            # (piloto aberto pela interface) nunca derruba o piloto
             try:
                 print(line, flush=True)
             except UnicodeEncodeError:
-                print(line.encode("ascii", "replace").decode(), flush=True)
+                try:
+                    print(line.encode("ascii", "replace").decode(), flush=True)
+                except Exception:
+                    pass
+            except Exception:
+                pass
             try:
                 if self.path.exists() and self.path.stat().st_size > 20 * 1024 * 1024:
                     self.path.replace(self.path.with_suffix(".old.log"))
