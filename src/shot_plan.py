@@ -27,6 +27,9 @@ Aqui, com o plano inteiro em mãos:
               mais detalhe da imagem;
       text    cartela/print com texto que não cabe no recorte: quadro
               inteiro sobre fundo borrado;
+      split   tela dividida NO VÍDEO ORIGINAL: uma imagem (foto, print,
+              vídeo reagido) de um lado e a câmera da pessoa do outro. Sai
+              em pé com a imagem em cima e a pessoa embaixo (ver _find_split);
   - barras pretas (letterbox/pillarbox) são medidas por plano e ficam de
     fora do recorte.
 """
@@ -55,6 +58,9 @@ class Shot:
     xs: Optional[np.ndarray] = None  # centro x do recorte por quadro (px da fonte)
     ys: Optional[np.ndarray] = None  # y do rosto por quadro (px da fonte)
     text_x: Optional[Tuple[int, int]] = None  # cartela: faixa horizontal com o texto (px da fonte)
+    content: Optional[Tuple[int, int, int, int]] = None  # split: área da imagem (x0, y0, x1, y1), px da fonte
+    cam: Optional[Tuple[int, int, int, int]] = None      # split: área da câmera da pessoa
+    face: Optional[Tuple[float, float, float]] = None    # split: rosto (cx, cy, altura), px da fonte
 
     def pos(self, frame_idx: int) -> Tuple[float, float]:
         i = int(np.clip(frame_idx - self.start, 0, len(self.xs) - 1))
@@ -80,7 +86,8 @@ class ShotPlan:
         for s in self.shots:
             kinds[s.kind] = kinds.get(s.kind, 0) + 1
         names = {"single": "rosto", "multi": "conversa", "speaker": "conversa (corta pra quem fala)",
-                 "broll": "sem rosto", "text": "texto", "facefit": "close gigante/cena inteira"}
+                 "broll": "sem rosto", "text": "texto", "facefit": "close gigante/cena inteira",
+                 "split": "imagem + pessoa (tela dividida)"}
         parts = ", ".join(f"{names.get(k, k)} {n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         bars = sum(1 for s in self.shots if s.bounds != self.full)
         txt = f"{len(self.shots)} cena(s): {parts}"
@@ -135,9 +142,11 @@ def _detail_profile(gray: np.ndarray) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def build_plan(source_path: str, start: float, duration: float, src_w: int, src_h: int,
-               fps: float, detector, verbose: bool = True) -> Optional[ShotPlan]:
+               fps: float, detector, verbose: bool = True, words=None) -> Optional[ShotPlan]:
     """Analisa o trecho [start, start+duration] e devolve o plano por cena
-    (ou None se não deu pra analisar -- o reframer volta pro modo antigo)."""
+    (ou None se não deu pra analisar -- o reframer volta pro modo antigo).
+    `words`: palavras da transcrição (tempo do vídeo original), pra
+    confirmar tela dividida pela fala ("essa foto aqui")."""
     if detector is None or src_w <= 0 or src_h <= 0:
         return None
     an_w = min(AN_W, src_w)
@@ -154,6 +163,7 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     min_score = getattr(config, "YUNET_SCORE_THRESHOLD", 0.6)
     tiny_h = max(int(round(an_h * _TINY_W / an_w)), 2)
     diffs, hdist = [], []
+    colprof = []   # quadro -> quanto cada coluna da miniatura mudou (troca de só METADE da tela)
     faces = {}     # quadro -> [(cx, cy, w, h)] em px da análise
     acts = {}      # quadro -> [atividade da boca de cada rosto] (None = sem quadro anterior)
     prev_det = None
@@ -177,7 +187,9 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
             if prev_tiny is None:
                 diffs.append(0.0)
                 hdist.append(0.0)
+                colprof.append(np.zeros(tiny_g.shape[1], np.float32))
             else:
+                colprof.append(np.abs(tiny_g - prev_tiny).mean(axis=0))
                 diffs.append(float(np.mean(np.abs(tiny_g - prev_tiny))))
                 hdist.append(float(cv2.compareHist(prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA)))
                 if _is_cut(diffs[-1], hdist[-1]):
@@ -216,7 +228,30 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     bounds_list = _merge_short([0] + cuts + [n], int(round(getattr(config, "SHOT_MIN_SECONDS", 0.4) * fps)))
 
     an_bounds = _all_bounds(bounds_list, scene, an_w, an_h)
-    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts)
+
+    def confirm_split(seam: int, a: int, b: int, still: bool) -> bool:
+        """Borda reta de cima a baixo só vira tela dividida com uma 2ª prova:
+        (1) em algum momento do clipe só UM lado dela trocou de imagem de
+        repente (a foto mudou e a pessoa continuou -- isso não acontece com
+        a lateral de uma estante); ou (2) a fala aponta pra imagem nesse
+        plano ("essa moça aqui", "olha essa foto", "tá vendo") E o lado da
+        imagem está parado como uma foto (achado num react real: "era esse
+        óculos aqui" + a lateral de uma estante viravam tela dividida)."""
+        ts = int(round(seam * _TINY_W / an_w))
+        for prof in colprof:
+            if ts - 2 <= 2 or ts + 2 >= len(prof) - 2:
+                break
+            left, right = float(prof[:ts - 1].mean()), float(prof[ts + 2:].mean())
+            hi, lo = max(left, right), min(left, right)
+            if hi > 18.0 and lo < 6.0 and lo < 0.25 * hi:
+                return True
+        if words and still:
+            from .react_detector import points_at_image
+            if points_at_image(words, start + a / fps - 1.5, start + b / fps + 1.5):
+                return True
+        return False
+
+    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts, confirm_split)
              for a, b, bb in zip(bounds_list[:-1], bounds_list[1:], an_bounds)]
     plan = ShotPlan(shots, n, (0, 0, src_w, src_h))
     if verbose:
@@ -356,7 +391,119 @@ def _all_bounds(edges, scene, an_w, an_h) -> list:
     return out
 
 
-def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None) -> Shot:
+def _seam(gray: np.ndarray) -> Optional[int]:
+    """Coluna de uma "costura" vertical: duas imagens diferentes encostadas
+    (tela dividida da edição). Diferente de uma borda comum (batente de
+    porta, braço, microfone): pega a altura INTEIRA e é fina e reta."""
+    H, W = gray.shape
+    if W < 60 or H < 40:
+        return None
+    g = gray.astype(np.int16)
+    diff = np.abs(g[:, 2:] - g[:, :-2]) > 14           # diff[:, c] compara c e c+2
+    cov = diff.mean(axis=0).astype(np.float32)          # fração da altura com borda
+    # o normal da vizinhança (mediana de 21 colunas): textura cheia de
+    # bordas (cabelo, folhagem) não vira costura
+    base = cv2.medianBlur(np.round(cov * 255).astype(np.uint8)[None, :], 21)[0].astype(np.float32) / 255.0
+    score = cov - base
+    lo, hi = int(0.2 * W), int(0.8 * W)
+    c = lo + int(np.argmax(score[lo:hi]))
+    if cov[c] >= 0.7 and score[c] >= 0.4:
+        return c + 1
+    return None
+
+
+def _find_split(samples, fs, box):
+    """Tela dividida do vídeo original: (coluna da costura em px da análise,
+    lado da imagem, lado da câmera, imagem parada?) ou None.
+
+    Achado real (corte do Maicon Küster, "analisando perfis do tinder"): a
+    edição põe a foto do perfil de um lado e a câmera dele do outro enquanto
+    ele comenta ("essa moça aqui que botou a foto do casamento"). O recorte
+    seguia o rosto dele e a foto sumia -- ou pulava pro rosto DA FOTO.
+    Sem IA: a costura vertical reta e fixa no plano inteiro, um rosto VIVO
+    (mexe) de um lado e, do outro, a imagem (sem rosto, rosto parado de foto
+    ou rosto bem menor, de um vídeo reagido)."""
+    bx0, by0, bx1, by1 = box
+    if len(samples) < 2:
+        return None
+    cols = []
+    for smp in samples:
+        c = _seam(smp[2][by0:by1, bx0:bx1])
+        if c is not None:
+            cols.append(bx0 + c)
+    if len(cols) < max(2, 0.7 * len(samples)):
+        return None
+    seam = int(np.median(cols))
+    if sum(abs(c - seam) <= 3 for c in cols) < 0.7 * len(samples):
+        return None
+    # rostos de cada lado (o maior de cada lado, por quadro analisado)
+    side = {"L": [], "R": []}
+    for _, g in fs:
+        for key, sel in (("L", [f for f in g if f[0] + 0.3 * f[2] < seam]),
+                         ("R", [f for f in g if f[0] - 0.3 * f[2] > seam])):
+            if sel:
+                side[key].append(max(sel, key=lambda f: f[3]))
+    n = max(len(fs), 1)
+
+    def stats(lst):
+        if not lst:
+            return 0.0, 0.0, 0.0
+        arr = np.array(lst, dtype=np.float64)
+        h = float(np.median(arr[:, 3]))
+        # o quanto o rosto anda (x + y, relativo ao tamanho dele). Medido no
+        # teste: pessoa falando calma 0,009-0,04; rosto de FOTO 0,0000-0,0004
+        jit = float(np.median(np.abs(arr[:, 0] - np.median(arr[:, 0])))
+                    + np.median(np.abs(arr[:, 1] - np.median(arr[:, 1])))) / max(h, 1e-3)
+        return len(lst) / n, h, jit
+    pl, hl, jl = stats(side["L"])
+    pr, hr, jr = stats(side["R"])
+    # câmera = lado com rosto quase sempre e o rosto maior
+    # câmera = lado com rosto VIVO (que mexe) quase sempre; o rosto de uma
+    # foto fica parado (achado no teste: com a pessoa fora do quadro, o
+    # rosto da foto do perfil virava "a câmera" e a foto ia pra baixo)
+    live = getattr(config, "SPLIT_MIN_FACE_JITTER", 0.003)
+    okl, okr = pl >= 0.5 and jl >= live, pr >= 0.5 and jr >= live
+    if okl and (hl >= hr or not okr):
+        cam, content, hc, pk, hk, jk = "L", "R", hl, pr, hr, jr
+    elif okr:
+        cam, content, hc, pk, hk, jk = "R", "L", hr, pl, hl, jl
+    else:
+        return None
+    # do lado da imagem: nada de rosto, rosto parado (foto) ou rosto bem
+    # menor (vídeo reagido). Dois rostos vivos do mesmo tamanho = duas
+    # pessoas lado a lado numa chamada -- aí é conversa, não imagem.
+    if pk >= 0.3 and hk >= 0.75 * hc and jk >= live:
+        return None
+    width = (seam - bx0) if content == "L" else (bx1 - seam)
+    if width < 0.25 * (bx1 - bx0):
+        return None
+    # o lado da imagem está PARADO (foto, print)? Mede a mudança entre as
+    # amostras (borradas: a compressão do vídeo não conta). Foto: ~0;
+    # estante com a facecam de um react passando: bem mais.
+    x0, x1 = (bx0, seam - 2) if content == "L" else (seam + 2, bx1)
+    blur = [cv2.GaussianBlur(smp[2][by0:by1, x0:x1], (0, 0), 2.0).astype(np.float32) for smp in samples]
+    change = float(np.median([np.mean(np.abs(p - q)) for p, q in zip(blur, blur[1:])])) if len(blur) > 1 else 0.0
+    return seam, content, cam, change < getattr(config, "SPLIT_STILL_MAX_CHANGE", 1.5)
+
+
+def _trim(samples, x0, x1, y0, y1):
+    """Tira bordas lisas (moldura/fundo de cor única) em volta da imagem."""
+    g = np.median(np.stack([s[2][y0:y1, x0:x1].astype(np.float32) for s in samples]), axis=0)
+    cs, rs = g.std(axis=0), g.std(axis=1)
+    a, b = 0, len(cs)
+    while a < b - 10 and cs[a] < 6:
+        a += 1
+    while b > a + 10 and cs[b - 1] < 6:
+        b -= 1
+    c, d = 0, len(rs)
+    while c < d - 10 and rs[c] < 6:
+        c += 1
+    while d > c + 10 and rs[d - 1] < 6:
+        d -= 1
+    return x0 + a, y0 + c, x0 + b, y0 + d
+
+
+def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None, confirm_split=None) -> Shot:
     samples = _shot_samples(scene, a, b)
     (bx0, by0, bx1, by1), clip_bounds = an_bounds
     bw, bh = bx1 - bx0, by1 - by0
@@ -375,6 +522,26 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None) -> Shot:
         fs.append((k, good))
     with_face = [(k, g) for k, g in fs if g]
     presence = len(with_face) / max(len(fs), 1)
+
+    # tela dividida no vídeo original (imagem de um lado, pessoa do outro)
+    split = _find_split(samples, fs, (bx0, by0, bx1, by1)) \
+        if getattr(config, "SPLIT_LAYOUT_ENABLED", True) else None
+    if split and confirm_split is not None and not confirm_split(split[0], a, b, split[3]):
+        split = None
+    if split:
+        seam, cside = split[0], split[1]
+        if cside == "L":
+            cx0, cx1, mx0, mx1 = bx0, seam - 2, seam + 2, bx1
+        else:
+            cx0, cx1, mx0, mx1 = seam + 2, bx1, bx0, seam - 2
+        tx0, ty0, tx1, ty1 = _trim(samples, cx0, cx1, by0, by1)
+        cam_faces = [max((f for f in g if mx0 <= f[0] <= mx1), key=lambda f: f[3])
+                     for _, g in with_face if any(mx0 <= f[0] <= mx1 for f in g)]
+        arr = np.array(cam_faces, dtype=np.float64)
+        face = (float(np.median(arr[:, 0])) * sx, float(np.median(arr[:, 1])) * sy, float(np.median(arr[:, 3])) * sy)
+        return Shot(a, b, "split", bounds,
+                    content=(int(round(tx0 * sx)), int(round(ty0 * sy)), int(round(tx1 * sx)), int(round(ty1 * sy))),
+                    cam=(int(round(mx0 * sx)), bounds[1], int(round(mx1 * sx)), bounds[3]), face=face)
 
     # texto grande (cartela/título)
     text_hits, big_text_hits = 0, 0

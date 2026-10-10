@@ -84,3 +84,37 @@ def find_reference_times(words, clip_start: float, clip_end: float,
         if not hits or t_rel - hits[-1] >= min_gap:
             hits.append(t_rel)
     return hits
+
+
+# --- Apontando pra uma IMAGEM na tela ("essa moça aqui que botou a foto") ---
+# Usado pela tela dividida (src/shot_plan.py, "split"): uma borda reta e fixa
+# de cima a baixo pode ser só um móvel (lateral de estante, batente); com a
+# fala apontando pra imagem, é a foto/print que a edição pôs do lado.
+_IMAGE_REF_PATTERNS = _REFERENCE_PATTERNS + [
+    r"\b(ess[ae]s?|est[ae]s?)\s+(foto|fotos|imagem|imagens|print|prints|perfil|perfis|post|postagem|"
+    r"mensagem|mensagens|tweet|bio|descri[çc][ãa]o|v[íi]deo|manchete|not[íi]cia|meme|desenho|placa|"
+    r"conversa|coment[áa]rio|story|stories)\b",
+    # "essa moça aqui", "esse perfil aqui" -- pessoa ou imagem; objeto ("esse
+    # óculos aqui", achado num react real: ele apontava pros próprios óculos) não
+    r"\b(ess[ae]|est[ae]|aquel[ae])\s+(mo[çc]a|menina|mulher|mina|garota|gata|cara|rapaz|menino|homem|"
+    r"maluco|mano|velho|velha|senhor|senhora|casal|gente|fam[íi]lia|crian[çc]a|beb[êe]|noiva|noivo|"
+    r"foto|imagem|print|perfil|post|frase|bio|mensagem)\s+(\w+\s+)?aqui\b",
+    r"\bt[aá]\s+vendo\b",
+    r"\bvoc[êe]s?\s+(t[aã]o\s+)?vendo\b",
+    r"\bolh[ae]m?\s+(s[oó]|ess[ae]s?|est[ae]s?|que|como)\b",
+    r"\bn[ao]\s+(foto|imagem|tela|bio|print|perfil)\b",
+    # canais em inglês (Theo Von, Lex Fridman, DrDonut)
+    r"\blook\s+at\s+(this|that|these|him|her|his|the)\b",
+    r"\b(this|that)\s+(picture|photo|pic|image|post|tweet|profile|screenshot|meme|headline|bio)\b",
+    r"\b(this|that)\s+(guy|girl|woman|man|dude|lady|chick|couple|kid|baby)\s+(right\s+)?here\b",
+    r"\bcheck\s+(this|that)\s+out\b",
+    r"\byou\s+see\s+(this|that|the|him|her|his)\b",
+]
+_IMAGE_REF_RE = re.compile("|".join(_IMAGE_REF_PATTERNS), re.IGNORECASE)
+
+
+def points_at_image(words, t0: float, t1: float) -> bool:
+    """A fala entre t0 e t1 (mesmo tempo das palavras) aponta pra uma
+    imagem na tela?"""
+    text = " " + " ".join((w.text or "").strip().lower() for w in words if t0 <= w.start < t1) + " "
+    return bool(_IMAGE_REF_RE.search(text))

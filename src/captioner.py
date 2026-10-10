@@ -217,13 +217,16 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
                   video_width: int = None, video_height: int = None,
                   hook_text: Optional[str] = None,
                   margin_v: Optional[int] = None,
-                  hook_bottom_y: Optional[int] = None) -> str:
+                  hook_bottom_y: Optional[int] = None,
+                  margin_at=None) -> str:
     """Gera um arquivo .ass com legendas estilo karaokê, com timestamps
     relativos ao início do clipe (clip_offset = tempo de início no vídeo
     original). Se `clip_duration` for informado, descarta/corta palavras
     que ultrapassem o fim do clipe (evita legendas "vazando" de além do
     trecho selecionado). `hook_text`: título mostrado num balão no topo nos
-    primeiros HOOK_SECONDS (None/vazio = sem título)."""
+    primeiros HOOK_SECONDS (None/vazio = sem título). `margin_at(t)`: margem
+    de baixo de um grupo que começa em t (None = a de sempre) -- a legenda
+    sobe pra divisória nos trechos em tela dividida (src/shot_plan.py)."""
     video_width = video_width or config.TARGET_WIDTH
     video_height = video_height or config.TARGET_HEIGHT
 
@@ -326,6 +329,11 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
         # dezenas de vezes por segundo (o "piscar" estroboscópico).
         n = len(clean_group)
         cursor = max(clean_group[0].start, 0.0)
+        gy = base_y
+        if margin_at is not None:
+            m = margin_at(clean_group[0].start)
+            if m is not None:
+                gy = video_height - max(int(round(m * scale)), 0)
         for i, w in enumerate(clean_group):
             start = cursor
             if i < n - 1:
@@ -343,11 +351,11 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
             last_of_run = i == n - 1 and (g_idx + 1 >= len(groups)
                                           or groups[g_idx + 1][0].start - group_end[g_idx] > 0.05)
             if i == 0 and fresh:
-                tags += (rf"\move({base_x},{base_y + rise},{base_x},{base_y},0,110)"
+                tags += (rf"\move({base_x},{gy + rise},{base_x},{gy},0,110)"
                          rf"\fscx{pop}\fscy{pop}\t(0,90,\fscx100\fscy100)")
                 tags += r"\fad(40,0)" if not last_of_run else r"\fad(40,60)"
             else:
-                tags += rf"\pos({base_x},{base_y})"
+                tags += rf"\pos({base_x},{gy})"
                 if last_of_run:
                     tags += r"\fad(0,60)"
             tag_block = f"{{{tags}}}" if tags else ""

@@ -1233,6 +1233,57 @@ def _compose_card_frame(card, out_w: int, out_h: int, soft: bool = True) -> np.n
     return canvas
 
 
+def _compose_split_frame(frame, shot, out_w: int, out_h: int, zoom: float = 1.0) -> np.ndarray:
+    """Tela dividida do vídeo original (src/shot_plan.py, "split"): a imagem
+    em cima, inteira (sobre fundo borrado dela mesma quando o formato não
+    bate), e a pessoa embaixo, recortada no rosto -- o mesmo layout dos
+    cortes de react."""
+    frac = float(np.clip(getattr(config, "REACT_CONTENT_FRAC", 0.5), 0.3, 0.7))
+    top_h = int(round(out_h * frac / 2.0)) * 2
+    bot_h = out_h - top_h
+    x0, y0, x1, y1 = shot.content
+    content = frame[y0:y1, x0:x1]
+    ch, cw = content.shape[:2]
+    panel_aspect = out_w / float(top_h)
+    if cw < 4 or ch < 4:
+        top = np.zeros((top_h, out_w, 3), np.uint8)
+    elif 0.85 <= (cw / float(ch)) / panel_aspect <= 1.18:
+        # quase o mesmo formato: preenche o painel (corta uma lasquinha)
+        if cw / float(ch) > panel_aspect:
+            nw = int(round(ch * panel_aspect))
+            content = content[:, (cw - nw) // 2:(cw - nw) // 2 + nw]
+        else:
+            nh = int(round(cw / panel_aspect))
+            content = content[(ch - nh) // 2:(ch - nh) // 2 + nh]
+        top = cv2.resize(content, (out_w, top_h), interpolation=cv2.INTER_AREA
+                         if content.shape[1] > out_w else cv2.INTER_LINEAR)
+    else:
+        top = _compose_card_frame(content, out_w, top_h)
+
+    mx0, my0, mx1, my1 = shot.cam
+    fcx, fcy, fh = shot.face
+    aspect = out_w / float(bot_h)
+    face_frac = getattr(config, "REACT_CAM_FACE_FRAC", 0.30)
+    crop_h = float(np.clip(fh / face_frac, fh * 2.2, my1 - my0)) / max(zoom, 1.0)
+    crop_w = crop_h * aspect
+    if crop_w > mx1 - mx0:
+        crop_w = float(mx1 - mx0)
+        crop_h = crop_w / aspect
+    cx0 = int(np.clip(fcx - crop_w / 2, mx0, mx1 - crop_w))
+    cy0 = int(np.clip(fcy - crop_h * 0.42, my0, my1 - crop_h))
+    cam = frame[cy0:cy0 + max(int(crop_h), 2), cx0:cx0 + max(int(crop_w), 2)]
+    up = out_w / float(max(cam.shape[1], 1))
+    bot = cv2.resize(cam, (out_w, bot_h), interpolation=cv2.INTER_CUBIC if up > 1.5 else
+                     (cv2.INTER_AREA if up < 1 else cv2.INTER_LINEAR))
+
+    out = np.empty((out_h, out_w, 3), np.uint8)
+    out[:top_h] = top
+    out[top_h:] = bot
+    sep = max(int(round(out_h * 0.002)), 2)
+    out[top_h - sep // 2: top_h + (sep - sep // 2)] = (18, 18, 18)
+    return out
+
+
 def render_vertical_clip(source_path: str, start: float, end: float,
                           src_w: int, src_h: int, fps: float,
                           output_path: str,
@@ -1245,7 +1296,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                           audio_energy_hop: float = 0.1,
                           reference_times: Optional[List[float]] = None,
                           keep_segments: Optional[List[tuple]] = None,
-                          fx=None, react_plan=None) -> str:
+                          fx=None, react_plan=None, shot_plan_obj=None) -> str:
     """Gera o clipe vertical final (9:16) em um único passe: decodifica só o
     trecho necessário do vídeo original, recorta seguindo o rosto do
     orador (com fallback para plano aberto quando não há rosto em quadro),
@@ -1382,8 +1433,8 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     # plano por cena (src/shot_plan.py): cortes, barras pretas e o layout de
     # cada plano do vídeo original decididos ANTES de renderizar. Só os planos
     # de conversa (2+ pessoas) usam o rastreamento quadro a quadro abaixo.
-    plan = None
-    if getattr(config, "SHOT_PLAN_ENABLED", True):
+    plan = shot_plan_obj  # já feito antes (video_editor.py, com a transcrição)
+    if plan is None and getattr(config, "SHOT_PLAN_ENABLED", True):
         from . import shot_plan
         try:
             plan = shot_plan.build_plan(source_path, start, duration, src_w, src_h, fps,
@@ -1870,7 +1921,11 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                 if fx is not None and getattr(fx, "intro", False) and \
                         t < getattr(config, "FX_INTRO_ZOOM_SECONDS", 0.7):
                     broll_zoom = 1.0 + (fx_zoom - 1.0) * getattr(config, "ZOOM_AMOUNT_SCALE", 1.0)
-                if shot.kind in ("text", "facefit"):
+                if shot.kind == "split":
+                    # imagem em cima, pessoa embaixo; os zooms de edição só na pessoa
+                    sz = 1.0 + (zoom_factor - 1.0) * 0.6
+                    out_frame = _compose_split_frame(frame, shot, out_w, out_h, sz)
+                elif shot.kind in ("text", "facefit"):
                     # cartela/print: o texto inteiro (ampliado até a largura
                     # dele, quando dá), sem cortar nada; close gigante: o
                     # rosto inteiro (ver shot_plan.py)

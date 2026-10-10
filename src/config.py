@@ -940,6 +940,14 @@ SPEAKER_MIN_ACTIVITY = 1.5          # boca mexendo (abaixo disso ninguém fala c
 REACT_MIN_FACE_JITTER = 0.06        # rosto da facecam tem que MEXER (boneco/quadro na parede: <0,05)
 REACT_MIN_FACE_CHANGE = 6.0         # ... e a imagem dele mudar (expressão; boneco/foto: <2)
 REACT_MIN_CLIP_PRESENCE = 0.85      # tela dividida só se a facecam está em 85%+ do clipe -- e aí no clipe inteiro
+# Tela dividida NO VÍDEO ORIGINAL (foto/print de um lado, pessoa do outro --
+# ex.: Maicon Küster analisando perfis do Tinder): sai com a imagem em cima e
+# a pessoa embaixo. Precisa da costura reta e fixa de cima a baixo + rosto
+# vivo de um lado + uma 2ª prova: a imagem trocou sem a pessoa trocar, ou a
+# fala aponta pra imagem ("essa moça aqui", "olha essa foto"). Ver shot_plan.py.
+SPLIT_LAYOUT_ENABLED = True
+SPLIT_MIN_FACE_JITTER = 0.003       # rosto da câmera mexe pelo menos isso (rosto de foto: ~0)
+SPLIT_STILL_MAX_CHANGE = 1.5        # lado da imagem "parado como foto" (pra valer a prova pela fala)
 
 # --- Gameplay com facecam (src/gameplay.py) ---
 # Liga sozinho pros canais marcados com "|game" na AUTOPILOT_CHANNELS (o

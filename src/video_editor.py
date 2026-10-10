@@ -170,6 +170,33 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                 caption_margin_v = react_layout_mod.caption_margin_v(config.TARGET_HEIGHT)
                 hook_bottom_y = react_layout_mod.hook_bottom_y(config.TARGET_HEIGHT)
 
+    # plano por cena (src/shot_plan.py) feito AQUI, com a transcrição: a tela
+    # dividida do vídeo original (imagem + pessoa) é confirmada pela fala
+    # ("essa moça aqui") e a legenda desses trechos sobe pra divisória
+    shot_plan_obj, margin_at = None, None
+    if react_plan is None and getattr(config, "SHOT_PLAN_ENABLED", True):
+        from . import shot_plan as shot_plan_mod
+        from .reframer import _new_yunet
+        try:
+            shot_plan_obj = shot_plan_mod.build_plan(source_path, candidate.start, candidate.end - candidate.start,
+                                                     src_w, src_h, src_fps, _new_yunet(), words=transcript_words)
+        except Exception as e:  # o reframer tenta de novo sozinho
+            print(f"    [aviso] análise das cenas falhou ({e.__class__.__name__}: {e})")
+            shot_plan_obj = None
+        if shot_plan_obj is not None:
+            spans = [(jumpcut.remap_time(sh.start / src_fps, keep_segments),
+                      jumpcut.remap_time(sh.end / src_fps, keep_segments))
+                     for sh in shot_plan_obj.shots if sh.kind == "split"]
+            if spans:
+                split_m = react_layout_mod.caption_margin_v(config.TARGET_HEIGHT)
+                total = sum(b - a for a, b in spans)
+                print(f"    -> Clip {clip_index}: tela dividida no original (imagem + pessoa) em "
+                      f"{total / max(out_duration, 0.1) * 100:.0f}% do clipe -- imagem em cima, pessoa embaixo")
+
+                def _split_margin(t, spans=spans, m=split_m):
+                    return m if any(a - 0.05 <= t < b for a, b in spans) else None
+                margin_at = _split_margin
+
     print(f"[5/6] Clip {clip_index}: gerando legendas e mixando música...")
     ass_path = work / "captions.ass"
     # título = a frase-gancho que originou o clipe (a mesma no balão do topo
@@ -180,7 +207,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     hook_text = title if getattr(config, "HOOK_ENABLED", True) else None
     generate_ass(clip_words, clip_offset=0.0, output_path=str(ass_path),
                  clip_duration=out_duration, hook_text=hook_text,
-                 margin_v=caption_margin_v, hook_bottom_y=hook_bottom_y)
+                 margin_v=caption_margin_v, hook_bottom_y=hook_bottom_y, margin_at=margin_at)
     if hook_text:
         add_whoosh(str(voice_audio), at=0.0)  # marca a entrada do título
 
@@ -241,6 +268,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         keep_segments=keep_segments,
         fx=fx_plan,
         react_plan=react_plan,
+        shot_plan_obj=shot_plan_obj,
     )
 
     # render_vertical_clip só levanta exceção se o ffmpeg terminar com

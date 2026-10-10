@@ -882,6 +882,35 @@ enquadramento normal — sempre em trechos de pelo menos 3s, sem pisca-pisca.
 Ajustes em `REACT_*` (`src/config.py`); `REACT_MODE_AUTO_DETECT = False`
 desliga.
 
+**Tela dividida no vídeo original (imagem + pessoa).** Achado real num corte
+do Maicon Küster ("analisando perfis do tinder"): ele falava "essa moça aqui
+que botou a foto do casamento no tinder", e a edição dele mostrava a foto do
+perfil na metade esquerda e a câmera dele na direita. O recorte seguia o
+rosto dele e a foto sumia (ou pulava pro rosto da foto). Agora
+(`src/shot_plan.py`, plano "split"), sem IA pesada:
+- acha a **costura**: uma linha vertical reta, fixa no plano inteiro, de cima
+  a baixo da tela, onde duas imagens diferentes se encostam;
+- um lado tem um **rosto vivo** (mexe; medido: pessoa falando calma
+  0,009-0,04 do tamanho do rosto, rosto de foto 0,0000-0,0004) e o outro tem
+  a imagem: sem rosto, rosto parado de foto ou rosto bem menor;
+- e precisa de uma **2ª prova**, porque a lateral de uma estante ou um batente
+  também é uma linha reta (achado no teste com um react real):
+  - em algum momento só **metade** da tela trocou de imagem, a foto mudou e
+    a pessoa continuou; ou
+  - a **fala aponta pra imagem** naquele trecho ("essa moça aqui", "olha essa
+    foto", "tá vendo", "esse perfil"; em inglês "look at this", "this picture")
+    e o lado da imagem está parado como uma foto. "Era esse óculos aqui" (um
+    objeto) não conta.
+
+Aí o trecho sai com **a imagem em cima** (inteira, sobre fundo desfocado se o
+formato não bate) e **a pessoa embaixo**, e a legenda sobe pra divisória só
+nesses trechos. Testado com um vídeo montado com as próprias fotos do Tinder
+do vídeo do Maicon ao lado de uma pessoa falando: todos os trechos divididos
+foram achados. Em 10 vídeos reais sem tela dividida (podcasts, reacts,
+gameplay e o react com estante, este com a transcrição real dele), nenhum
+falso alarme.
+`SPLIT_LAYOUT_ENABLED = False` desliga.
+
 **Gameplay com facecam** (canal marcado com `|game` na lista de canais, ex.:
 DrDonut Clips): o jogo na tela inteira com o streamer num canto. Pedido do
 usuário: jogo calmo e o streamer falando, foca nele; ação no jogo (crystal
