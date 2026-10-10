@@ -320,8 +320,15 @@ class App:
             v.pack(anchor="w", padx=12, pady=(8, 0))
             tk.Label(box, text=label, bg=CARD2, fg=MUTED, font=(FONT, 9)).pack(anchor="w", padx=12, pady=(0, 8))
             self.kpi[key] = v
-        self.last_post = tk.Label(body, text="", bg=CARD, fg=TEXT, font=(FONT, 10), anchor="w", cursor="hand2")
-        self.last_post.pack(fill="x", pady=(10, 0))
+        lp = tk.Frame(body, bg=CARD)
+        lp.pack(fill="x", pady=(10, 0))
+        # quadros do vídeo ORIGINAL do último post: quando a câmera sai errada,
+        # dá pra ver (e mandar) o que tinha na tela antes do reenquadramento
+        self.sheet_link = tk.Label(lp, text="", bg=CARD, fg=MUTED, font=(FONT, 9, "underline"), cursor="hand2")
+        self.sheet_link.pack(side="right")
+        self.sheet_link.bind("<Button-1>", lambda e: self._open_sheet())
+        self.last_post = tk.Label(lp, text="", bg=CARD, fg=TEXT, font=(FONT, 10), anchor="w", cursor="hand2")
+        self.last_post.pack(side="left", fill="x", expand=True)
         self.last_post.bind("<Button-1>", lambda e: self._open_last())
         self.doing = tk.Label(body, text="", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w", justify="left")
         self.doing.pack(fill="x", pady=(4, 0))
@@ -621,13 +628,21 @@ class App:
             extra = f"  ·  bloqueado: {p['blocked']}" if p.get("blocked") else ""
             self.last_post.config(text=f"Último post: {p.get('title', '')[:90]}  ({_ago(p.get('at', 0))}){extra}  ↗",
                                   fg="#fca5a5" if p.get("blocked") else TEXT)
+            sheet = Path(p["video"]).with_suffix(".origem.jpg") if p.get("video") else None
+            self._sheet = sheet if sheet is not None and sheet.exists() else None
         else:
             self._last_id = None
+            self._sheet = None
             self.last_post.config(text="Nenhum vídeo postado ainda.", fg=MUTED)
+        self.sheet_link.config(text="ver quadros do original" if self._sheet else "")
 
     def _open_last(self):
         if getattr(self, "_last_id", None):
             webbrowser.open(f"https://youtube.com/shorts/{self._last_id}")
+
+    def _open_sheet(self):
+        if getattr(self, "_sheet", None):
+            _open(self._sheet)
 
     # ------------------------------------------------------ ferramentas ---
     def _cut_link(self):

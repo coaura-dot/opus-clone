@@ -163,7 +163,8 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     min_score = getattr(config, "YUNET_SCORE_THRESHOLD", 0.6)
     tiny_h = max(int(round(an_h * _TINY_W / an_w)), 2)
     diffs, hdist = [], []
-    colprof = []   # quadro -> quanto cada coluna da miniatura mudou (troca de só METADE da tela)
+    colprof = []   # quadro -> quanto cada coluna (640 px) mudou: troca de só METADE da tela
+    prev_g = None
     faces = {}     # quadro -> [(cx, cy, w, h)] em px da análise
     acts = {}      # quadro -> [atividade da boca de cada rosto] (None = sem quadro anterior)
     prev_det = None
@@ -184,12 +185,14 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
             hsv = cv2.cvtColor(tiny, cv2.COLOR_BGR2HSV)
             hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 4, 4], [0, 180, 0, 256, 0, 256])
             cv2.normalize(hist, hist)
+            g_an = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            colprof.append(np.zeros(an_w, np.float32) if prev_g is None else
+                           cv2.absdiff(g_an, prev_g).mean(axis=0).astype(np.float32))
+            prev_g = g_an
             if prev_tiny is None:
                 diffs.append(0.0)
                 hdist.append(0.0)
-                colprof.append(np.zeros(tiny_g.shape[1], np.float32))
             else:
-                colprof.append(np.abs(tiny_g - prev_tiny).mean(axis=0))
                 diffs.append(float(np.mean(np.abs(tiny_g - prev_tiny))))
                 hdist.append(float(cv2.compareHist(prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA)))
                 if _is_cut(diffs[-1], hdist[-1]):
@@ -229,29 +232,83 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
 
     an_bounds = _all_bounds(bounds_list, scene, an_w, an_h)
 
-    def confirm_split(seam: int, a: int, b: int, still: bool) -> bool:
-        """Borda reta de cima a baixo só vira tela dividida com uma 2ª prova:
-        (1) em algum momento do clipe só UM lado dela trocou de imagem de
-        repente (a foto mudou e a pessoa continuou -- isso não acontece com
-        a lateral de uma estante); ou (2) a fala aponta pra imagem nesse
-        plano ("essa moça aqui", "olha essa foto", "tá vendo") E o lado da
-        imagem está parado como uma foto (achado num react real: "era esse
-        óculos aqui" + a lateral de uma estante viravam tela dividida)."""
-        ts = int(round(seam * _TINY_W / an_w))
-        for prof in colprof:
-            if ts - 2 <= 2 or ts + 2 >= len(prof) - 2:
-                break
-            left, right = float(prof[:ts - 1].mean()), float(prof[ts + 2:].mean())
-            hi, lo = max(left, right), min(left, right)
-            if hi > 18.0 and lo < 6.0 and lo < 0.25 * hi:
-                return True
+    # cortes de MEIA tela: num quadro só um lado muda de repente (a foto
+    # trocou, o TikTok cortou) e o outro continua. A coluna onde a mudança
+    # para é a divisa -- mesmo quando ela não aparece na imagem (achado no
+    # teste: TikTok de fundo escuro ao lado de câmera de fundo escuro, sem
+    # borda visível nenhuma). Movimento de gente não conta: tem que ser
+    # corte (de um quadro pro outro), não mudança contínua.
+    events = []  # (coluna em px da análise, lado que mudou, quadro)
+    lo_c, hi_c = int(0.15 * an_w), int(0.85 * an_w)
+    cols = np.arange(lo_c, hi_c)
+    for k in range(1, n - 1):
+        prof = colprof[k]
+        if float(prof.max()) < 18.0:
+            continue
+        pre = np.concatenate([[0.0], np.cumsum(prof, dtype=np.float64)])
+        lm = pre[cols] / cols
+        rm = (pre[-1] - pre[cols]) / (an_w - cols)
+        for side, hi_m, lo_m in (("L", lm, rm), ("R", rm, lm)):
+            ok = (hi_m > 18.0) & (lo_m < 6.0) & (lo_m < 0.25 * hi_m)
+            if not ok.any():
+                continue
+            j = int(np.argmax(np.where(ok, hi_m - lo_m, -1e9)))
+            c = int(cols[j])
+            part = slice(0, c) if side == "L" else slice(c, an_w)
+            here = float(prof[part].mean())
+            if float(colprof[k - 1][part].mean()) < 0.4 * here and float(colprof[k + 1][part].mean()) < 0.4 * here:
+                events.append((c, side, k))
+    clip_seam = None
+    if len(events) >= 2:
+        med = float(np.median([c for c, _, _ in events]))
+        near = [c for c, _, _ in events if abs(c - med) <= 8]
+        if len(near) >= 2:
+            clip_seam = int(round(float(np.median(near))))
+
+    def side_cuts(seam: int, a: int = 0, b: int = 10 ** 9):
+        """Quantos cortes de meia tela em cada lado desta divisa (entre os
+        quadros a e b; o padrão é o clipe inteiro)."""
+        lc = sum(1 for c, sd, k in events if sd == "L" and abs(c - seam) <= 10 and a - 1 <= k <= b + 1)
+        rc = sum(1 for c, sd, k in events if sd == "R" and abs(c - seam) <= 10 and a - 1 <= k <= b + 1)
+        return lc, rc
+
+    def confirm_split(seam: int, a: int, b: int, still: bool, content: str, ambiguous: bool,
+                      visible: bool = True):
+        """Borda reta de cima a baixo só vira tela dividida com uma 2ª prova.
+        Devolve o lado da imagem ("L"/"R") ou None.
+        (1) o lado da imagem trocou de imagem de repente em algum momento do
+            clipe e o outro lado continuou (a foto mudou, o TikTok cortou --
+            isso não acontece com a lateral de uma estante); ou
+        (2) a fala aponta pra imagem nesse plano ("essa moça aqui", "olha
+            essa foto", "tá vendo") E o lado da imagem está parado como uma
+            foto (achado num react real: "era esse óculos aqui" + a lateral
+            de uma estante viravam tela dividida).
+        `ambiguous`: rosto vivo dos DOIS lados, do mesmo tamanho -- um
+        TikTok com gente falando ao lado da câmera do streamer (achado real:
+        orochidois, "influenciadores aos prantos com o fim das bets") ou duas
+        pessoas numa chamada. Só vira tela dividida se só um lado corta: esse
+        é o conteúdo."""
+        # divisa invisível (achada só pelos cortes): o corte de meia tela tem
+        # que acontecer NESTE plano -- senão um plano de câmera cheia do mesmo
+        # clipe virava tela dividida
+        lc, rc = side_cuts(seam) if visible else side_cuts(seam, a, b)
+        if not visible and not (lc or rc):
+            return None
+        if ambiguous:
+            if lc and not rc:
+                return "L"
+            if rc and not lc:
+                return "R"
+            return None
+        if (lc if content == "L" else rc) > 0:
+            return content
         if words and still:
             from .react_detector import points_at_image
             if points_at_image(words, start + a / fps - 1.5, start + b / fps + 1.5):
-                return True
-        return False
+                return content
+        return None
 
-    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts, confirm_split)
+    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts, confirm_split, clip_seam)
              for a, b, bb in zip(bounds_list[:-1], bounds_list[1:], an_bounds)]
     plan = ShotPlan(shots, n, (0, 0, src_w, src_h))
     if verbose:
@@ -412,9 +469,9 @@ def _seam(gray: np.ndarray) -> Optional[int]:
     return None
 
 
-def _find_split(samples, fs, box):
+def _find_split(samples, fs, box, hint: Optional[int] = None):
     """Tela dividida do vídeo original: (coluna da costura em px da análise,
-    lado da imagem, lado da câmera, imagem parada?) ou None.
+    lado da imagem, lado da câmera, imagem parada?, ambíguo?, divisa visível?) ou None.
 
     Achado real (corte do Maicon Küster, "analisando perfis do tinder"): a
     edição põe a foto do perfil de um lado e a câmera dele do outro enquanto
@@ -431,11 +488,14 @@ def _find_split(samples, fs, box):
         c = _seam(smp[2][by0:by1, bx0:bx1])
         if c is not None:
             cols.append(bx0 + c)
-    if len(cols) < max(2, 0.7 * len(samples)):
-        return None
-    seam = int(np.median(cols))
-    if sum(abs(c - seam) <= 3 for c in cols) < 0.7 * len(samples):
-        return None
+    seam = int(np.median(cols)) if cols else None
+    visible = (seam is not None and len(cols) >= max(2, 0.7 * len(samples))
+               and sum(abs(c - seam) <= 3 for c in cols) >= 0.7 * len(samples))
+    if not visible:
+        # divisa achada pelos cortes de meia tela do clipe (sem borda visível)
+        if hint is None or not (bx0 + 0.15 * (bx1 - bx0) < hint < bx1 - 0.15 * (bx1 - bx0)):
+            return None
+        seam = hint
     # rostos de cada lado (o maior de cada lado, por quadro analisado)
     side = {"L": [], "R": []}
     for _, g in fs:
@@ -472,10 +532,17 @@ def _find_split(samples, fs, box):
     # do lado da imagem: nada de rosto, rosto parado (foto) ou rosto bem
     # menor (vídeo reagido). Dois rostos vivos do mesmo tamanho = duas
     # pessoas lado a lado numa chamada -- aí é conversa, não imagem.
-    if pk >= 0.3 and hk >= 0.75 * hc and jk >= live:
-        return None
+    # rosto vivo do mesmo tamanho do outro lado: TikTok com gente falando ao
+    # lado da câmera, ou duas pessoas numa chamada -- quem decide é o corte
+    # de imagem (ver confirm_split)
+    ambiguous = pk >= 0.3 and hk >= 0.75 * hc and jk >= live
+    if ambiguous:
+        # o lado mais estreito é o candidato a conteúdo (TikTok em pé ao lado
+        # da câmera); a confirmação troca se precisar
+        content = "L" if (seam - bx0) < (bx1 - seam) else "R"
+        cam = "R" if content == "L" else "L"
     width = (seam - bx0) if content == "L" else (bx1 - seam)
-    if width < 0.25 * (bx1 - bx0):
+    if width < 0.2 * (bx1 - bx0):
         return None
     # o lado da imagem está PARADO (foto, print)? Mede a mudança entre as
     # amostras (borradas: a compressão do vídeo não conta). Foto: ~0;
@@ -483,7 +550,7 @@ def _find_split(samples, fs, box):
     x0, x1 = (bx0, seam - 2) if content == "L" else (seam + 2, bx1)
     blur = [cv2.GaussianBlur(smp[2][by0:by1, x0:x1], (0, 0), 2.0).astype(np.float32) for smp in samples]
     change = float(np.median([np.mean(np.abs(p - q)) for p, q in zip(blur, blur[1:])])) if len(blur) > 1 else 0.0
-    return seam, content, cam, change < getattr(config, "SPLIT_STILL_MAX_CHANGE", 1.5)
+    return seam, content, cam, change < getattr(config, "SPLIT_STILL_MAX_CHANGE", 1.5), ambiguous, visible
 
 
 def _trim(samples, x0, x1, y0, y1):
@@ -503,7 +570,8 @@ def _trim(samples, x0, x1, y0, y1):
     return x0 + a, y0 + c, x0 + b, y0 + d
 
 
-def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None, confirm_split=None) -> Shot:
+def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None, confirm_split=None,
+               clip_seam=None) -> Shot:
     samples = _shot_samples(scene, a, b)
     (bx0, by0, bx1, by1), clip_bounds = an_bounds
     bw, bh = bx1 - bx0, by1 - by0
@@ -524,10 +592,14 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None, confirm_sp
     presence = len(with_face) / max(len(fs), 1)
 
     # tela dividida no vídeo original (imagem de um lado, pessoa do outro)
-    split = _find_split(samples, fs, (bx0, by0, bx1, by1)) \
+    split = _find_split(samples, fs, (bx0, by0, bx1, by1), clip_seam) \
         if getattr(config, "SPLIT_LAYOUT_ENABLED", True) else None
-    if split and confirm_split is not None and not confirm_split(split[0], a, b, split[3]):
-        split = None
+    if split:
+        if confirm_split is not None:
+            side = confirm_split(split[0], a, b, split[3], split[1], split[4], split[5])
+            split = None if side is None else (split[0], side)
+        elif split[4] or not split[5]:
+            split = None  # sem como confirmar qual lado é o conteúdo
     if split:
         seam, cside = split[0], split[1]
         if cside == "L":

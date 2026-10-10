@@ -4,6 +4,7 @@ o rosto, legendas estilo karaokê, música de fundo com ducking e efeitos de
 zoom — tudo em um único passe de encode de vídeo, gerando um arquivo .mp4
 pronto para publicar.
 """
+import subprocess
 from pathlib import Path
 
 from .audio import audio_energy
@@ -19,6 +20,7 @@ from .react_detector import find_reference_times
 from . import react_layout as react_layout_mod
 from .utils import run, ensure_dir, sanitize_filename
 from . import config
+from .version import VERSION
 
 
 FONTS_DIR = str(Path(__file__).resolve().parent.parent / "assets" / "fonts")
@@ -100,6 +102,20 @@ def _write_context_dump(transcript_words, candidate, txt_path: str,
                                         "provavelmente é o fim do vídeo)",
     ]
     Path(txt_path).write_text("\n".join(lines), encoding="utf-8")
+
+
+def _source_sheet(source_path: str, start: float, end: float, out_path) -> None:
+    """8 quadros do trecho ORIGINAL (antes do reenquadramento) numa imagem
+    ao lado do corte: quando um corte sai com a câmera errada, dá pra ver
+    o que tinha na tela do vídeo original sem precisar baixar ele de novo."""
+    dur = max(end - start, 0.5)
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", f"{max(start, 0):.3f}", "-t", f"{dur:.3f}",
+           "-i", str(source_path), "-vf", f"fps={8 / dur:.5f},scale=320:-2,tile=4x2", "-frames:v", "1",
+           "-q:v", "5", str(out_path)]
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
@@ -256,7 +272,9 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                            "laughs_per_min": getattr(candidate, "laughs_per_min", 0.0),
                            "ends_on_laugh": getattr(candidate, "ends_on_laugh", False),
                            # título-gancho + whoosh queimados no arquivo? (src/hook_check.py)
-                           "hook_burned": bool(hook_text)})
+                           "hook_burned": bool(hook_text),
+                           # qual versão do programa editou (clipe da fila pode ser antigo)
+                           "versao": VERSION})
 
     print(f"[6/6] Clip {clip_index}: reenquadrando + legendas + áudio "
           f"(passe único de encode)...")
@@ -273,6 +291,7 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         react_plan=react_plan,
         shot_plan_obj=shot_plan_obj,
     )
+    _source_sheet(source_path, candidate.start, candidate.end, final_path.with_suffix(".origem.jpg"))
 
     # render_vertical_clip só levanta exceção se o ffmpeg terminar com
     # código de erro -- mas um código de sucesso não garante por si só que

@@ -911,6 +911,31 @@ gameplay e o react com estante, este com a transcrição real dele), nenhum
 falso alarme.
 `SPLIT_LAYOUT_ENABLED = False` desliga.
 
+**Vídeo reagido num painel ao lado (estilo TikTok) — v36.** Achado num corte
+do orochidois ("influenciadores aos prantos com o fim das bets"): o vídeo
+reagido ficava num painel do lado da câmera dele, e o recorte só tirava um
+pouco do zoom do rosto. Dois casos que a versão anterior não pegava:
+- **gente falando dos dois lados** (o vídeo reagido também tem um rosto
+  vivo): o lado do conteúdo é o que **troca de cena sozinho** (corte só na
+  metade da tela) enquanto a câmera do streamer continua igual;
+- **costura invisível** (dois fundos escuros encostados, sem linha): a
+  divisória é achada pelos próprios cortes de meia tela, desde que
+  aconteçam dentro daquele trecho.
+Testado com um vídeo montado no formato do TikTok (painel com pessoa
+falando + câmera): todos os trechos saíram divididos; nos 13 vídeos sem tela
+dividida, nenhum falso alarme.
+
+**Quando um corte sair com a câmera errada.** Cada corte agora grava:
+- `"versao"` no `.meta.json`: qual versão do programa editou. Clipes que já
+  estavam na fila (o modo "só postar" posta esses) foram editados pela
+  versão de quando entraram, então uma correção nova só vale pros cortes
+  feitos depois dela;
+- `clip_XX_....origem.jpg`: 8 quadros do trecho ORIGINAL, antes do
+  reenquadramento. Na interface, ao lado do último post, o link **ver
+  quadros do original** abre essa imagem: mande ela junto com o link do
+  Short que dá pra ver exatamente o que tinha na tela. A faxina apaga junto
+  com o resto dos arquivos do corte.
+
 **Gameplay com facecam** (canal marcado com `|game` na lista de canais, ex.:
 DrDonut Clips): o jogo na tela inteira com o streamer num canto. Pedido do
 usuário: jogo calmo e o streamer falando, foca nele; ação no jogo (crystal
@@ -1088,6 +1113,7 @@ opus-clip-clone/
 │   ├── emoji_map.py           # palavra falada -> emoji
 │   ├── opener.py              # a frase de abertura se sustenta sozinha?
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
+│   ├── version.py             # versão do programa (vai no .meta.json de cada corte)
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
 │   ├── voices.py              # de quem é a voz? (streamer x outro jogador no voice chat)

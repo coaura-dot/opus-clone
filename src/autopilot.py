@@ -956,7 +956,9 @@ def _run_forever(upload: bool = True):
     keep_awake(True)
 
     log("=" * 60)
-    log("  PILOTO AUTOMÁTICO LIGADO -- pra parar: botão Desligar na interface (ou feche a janela do .bat)")
+    from .version import VERSION
+    log(f"  PILOTO AUTOMÁTICO LIGADO ({VERSION}) -- pra parar: botão Desligar na interface "
+        "(ou feche a janela do .bat)")
     log(f"  canais: {', '.join(getattr(config, 'AUTOPILOT_CHANNELS', [])) or '(nenhum)'}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
     log(f"  postagem: {'LIGADA' if upload else 'DESLIGADA (só gera os clipes)'} -- até "
