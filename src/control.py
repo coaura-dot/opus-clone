@@ -17,6 +17,8 @@ Como a interface fala com o piloto (que roda em outro processo):
   - autopilot_data/modo_trabalho.txt: "postar" = modo SÓ POSTAR (não baixa
     nem edita nada: só posta a fila, do maior score pro menor); "completo"
     = acha, edita e posta. Também vale na hora.
+  - autopilot_data/posts_por_dia.txt: quantos Shorts por dia (a interface
+    muda; vale na hora).
 """
 import _thread
 import json
@@ -31,6 +33,7 @@ DATA_DIR = ROOT / "autopilot_data"
 HEARTBEAT = DATA_DIR / "piloto_ligado.json"
 STOP = DATA_DIR / "parar.pedido"
 WORK = DATA_DIR / "modo_trabalho.txt"
+POSTS = DATA_DIR / "posts_por_dia.txt"
 _BEAT_EVERY = 5.0
 _FRESH = 20.0
 
@@ -99,6 +102,20 @@ def post_only() -> bool:
 def set_post_only(on: bool) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     WORK.write_text("postar\n" if on else "completo\n", encoding="utf-8")
+
+
+def posts_per_day() -> Optional[int]:
+    """Posts por dia escolhidos na interface (vale na hora), ou None."""
+    try:
+        n = int(POSTS.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return n if 1 <= n <= 48 else None
+
+
+def set_posts_per_day(n: int) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    POSTS.write_text(f"{int(n)}\n", encoding="utf-8")
 
 
 def request_stop() -> None:

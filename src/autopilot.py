@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import config
+from . import reach
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "autopilot_data"
@@ -326,13 +327,16 @@ def _in_post_window() -> bool:
 
 
 def daily_limit() -> int:
-    """Posts por dia (AUTOPILOT_POSTS_PER_DAY). Pedido do usuário: 24 por dia
-    "independente da cota da API" -- o piloto tenta até o próprio YouTube
-    recusar (se a cota for aumentada, já posta mais sem mudar nada) e o que
-    passar vai pra pasta "postar à mão" (src/manual_post.py).
+    """Posts por dia: o que foi escolhido na interface (autopilot_data/
+    posts_por_dia.txt) ou AUTOPILOT_POSTS_PER_DAY (6). O piloto tenta até o
+    próprio YouTube recusar (se a cota for aumentada, já posta mais sem
+    mudar nada) e o que passar vai pra pasta "postar à mão"
+    (src/manual_post.py). Já foi 24 por pedido do usuário; voltou a 6 porque
+    com 1 post por hora o YouTube parou de entregar os Shorts (src/reach.py).
     AUTOPILOT_LIMIT_BY_QUOTA = True volta ao limite calculado pela cota
     (1.600 por upload)."""
-    want = getattr(config, "AUTOPILOT_POSTS_PER_DAY", 20)
+    from . import control
+    want = control.posts_per_day() or getattr(config, "AUTOPILOT_POSTS_PER_DAY", 6)
     if not getattr(config, "AUTOPILOT_LIMIT_BY_QUOTA", False):
         return max(want, 0)
     reserve = getattr(config, "AUTOPILOT_RELEASE_PER_DAY", 3) * 50 + 100
@@ -345,15 +349,22 @@ def _window_hours() -> float:
     return float((end - start) % 24 or 24)
 
 
-def post_gap_seconds() -> float:
+def post_gap_seconds(state=None) -> float:
     """Intervalo entre posts: espalha o limite do dia pela janela de
     postagem inteira (com 6/dia em 24h: 1 a cada 4h; com 24/dia: 1 por
     hora), nunca menos que AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS. Sem isso,
-    "1 por hora" com cota de 6 postava tudo de madrugada e parava."""
+    "1 por hora" com cota de 6 postava tudo de madrugada e parava.
+    Com o freio de alcance ligado (src/reach.py), no máximo 1 a cada
+    AUTOPILOT_REACH_BRAKE_HOURS. `state`: State ou o dict do state.json."""
+    from . import reach
     minimum = getattr(config, "AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS", 60) * 60
     limit = daily_limit()
     spread = _window_hours() * 3600 / limit if limit else minimum
-    return max(minimum, spread)
+    gap = max(minimum, spread)
+    data = getattr(state, "data", state)
+    if data is not None and reach.braked(data):
+        gap = max(gap, reach.brake_hours() * 3600)
+    return gap
 
 
 def can_post_now(state: State, ignore_schedule: bool = False) -> tuple:
@@ -365,7 +376,7 @@ def can_post_now(state: State, ignore_schedule: bool = False) -> tuple:
         return False, _next_pacific_midnight()
     if ignore_schedule:
         return True, now
-    nxt = state.data.get("last_post_at", 0) + post_gap_seconds()
+    nxt = state.data.get("last_post_at", 0) + post_gap_seconds(state)
     if now < nxt:
         return False, nxt
     if not _in_post_window():
@@ -643,7 +654,7 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     if queue:
         _, nxt = can_post_now(state)
         log(f"    próxima postagem às {datetime.fromtimestamp(max(nxt, time.time())):%H:%M} "
-            f"(1 a cada {post_gap_seconds() / 60:.0f} min, até {daily_limit()} por dia)")
+            f"(1 a cada {post_gap_seconds(state) / 60:.0f} min, até {daily_limit()} por dia)")
     if getattr(config, "AUTOPILOT_DELETE_POSTED_FILES", False):
         for f in (item["video"], item.get("video_sem_musica")):
             if f and Path(f).exists():
@@ -962,10 +973,14 @@ def _run_forever(upload: bool = True):
     log(f"  canais: {', '.join(getattr(config, 'AUTOPILOT_CHANNELS', [])) or '(nenhum)'}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
     log(f"  postagem: {'LIGADA' if upload else 'DESLIGADA (só gera os clipes)'} -- até "
-        f"{daily_limit()}/dia, 1 a cada {post_gap_seconds() / 60:.0f} min, "
+        f"{daily_limit()}/dia, 1 a cada {post_gap_seconds(state) / 60:.0f} min, "
         f"das {getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[0]}h às "
         f"{getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[1]}h")
     log(f"  fila atual: {len(state.data['queue'])} clipe(s) | já postados: {len(state.data['posted'])}")
+    if reach.braked(state.data):
+        b = state.data["reach_brake"]
+        log(f"  [alcance] FREIO LIGADO: os últimos Shorts tiveram {', '.join(map(str, b.get('recent', [])))} "
+            f"views (antes ~{b.get('base', 0):.0f}) -- 1 post a cada {reach.brake_hours():.0f} h até voltar.")
     log("=" * 60)
 
     prune_blocked(state, log)
@@ -1036,6 +1051,9 @@ def _run_forever(upload: bool = True):
             # postar não chega clipe novo: posta o melhor que tiver)
             waiting_pool = False
             if service is not None and state.data["queue"]:
+                # o YouTube está entregando os últimos Shorts? (freio
+                # automático, src/reach.py -- confere a cada 2 h)
+                reach.check(service, state, log)
                 ok, _ = can_post_now(state)
                 waiting_pool = ok and not only_post and not pool_ready(state, log)
                 if ok and not waiting_pool:

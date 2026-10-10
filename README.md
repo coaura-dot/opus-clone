@@ -224,14 +224,26 @@ crédito do vídeo original e da música.
   ["YouTube API Services - Audit and Quota Extension"](https://support.google.com/youtube/contact/yt_api_form).
   Até sair, os vídeos sobem privados e você pode torná-los públicos no
   YouTube Studio.
-- **Cota e meta de 24 por dia:** a cota padrão é de 10.000 unidades por dia,
-  e cada upload gasta 1.600, então a API aceita ~6 postagens por dia. A
-  meta é de 24 por dia (`AUTOPILOT_POSTS_PER_DAY`, 1 por hora).
+- **Quantos por dia: 6 (1 a cada 4 h).** Na interface, clique em "Postados
+  hoje / por dia" pra mudar (vale na hora). **Não poste 1 por hora.** Achado
+  real no canal: com 1 post a cada 4 h os Shorts iam de 369 a ~1.300 views
+  cada. No mesmo dia em que o piloto passou a postar 1 por hora (20 e
+  depois 24 por dia), todos os seguintes ficaram com 0 a 6 views: o YouTube
+  parou de entregar. Canal pequeno despejando cortes em série é o que os
+  filtros de spam do YouTube seguram.
+- **Freio automático** (`src/reach.py`): a cada 2 h o piloto confere as
+  views dos próprios Shorts (1 unidade de cota). Se os 3 últimos com 8 h ou
+  mais de vida tiveram quase nada (menos de 5% da mediana dos anteriores),
+  ele posta no máximo 1 a cada 8 h até um Short novo voltar a pegar views.
+  A interface mostra o aviso em amarelo. `AUTOPILOT_REACH_BRAKE = False`
+  desliga.
+- **Cota:** a cota padrão é de 10.000 unidades por dia, e cada upload gasta
+  1.600, então a API aceita ~6 postagens por dia.
   - **Pela API:** o piloto posta até o próprio YouTube recusar. Com a cota
     aumentada, ele já posta mais sem mudar nada. Peça 40.000 unidades no
     mesmo formulário da auditoria; é grátis.
   - **Pasta "postar à mão":** quando o YouTube recusa, os melhores clipes da
-    fila (o que falta pra chegar em 24) vão para
+    fila (o que falta pra chegar na meta do dia) vão para
     `output\postar_a_mao\<data>\`, com o `.mp4` e um `.txt` com título,
     descrição e hashtags, do mais viral pro menos (`src/manual_post.py`).
     Saem da fila automática pra não serem postados duas vezes. A pasta de
@@ -410,10 +422,11 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_EXPERT_BONUS` | 1.3 | título com convidado especialista (cientista, médico, economista, CEO, delegado...) ganha na escolha |
 | `AUTOPILOT_WEAK_TOPIC_FACTOR` | 0.7 | título de desafio, zoeira ou pegadinha perde na escolha |
 | `AUTOPILOT_QUEUE_TARGET` / `AUTOPILOT_POOL_MIN` / `AUTOPILOT_POOL_MIN_SOURCES` | 15 / 6 / 3 | banco de clipes: quantos gera e o mínimo (de quantos podcasts) pra escolher o mais viral |
-| `AUTOPILOT_POSTS_PER_DAY` | 24 | meta do dia; posta pela API até o YouTube recusar (cota padrão: ~6/dia), o resto vai pra `output\postar_a_mao` |
+| `AUTOPILOT_POSTS_PER_DAY` | 6 | meta do dia (a interface muda); posta pela API até o YouTube recusar (cota padrão: ~6/dia), o resto vai pra `output\postar_a_mao`. Com 24/dia o canal parou de receber views |
+| `AUTOPILOT_REACH_BRAKE` / `AUTOPILOT_REACH_BRAKE_HOURS` | True / 8 | freio automático: Shorts recentes sem views → no máximo 1 post a cada 8 h até voltar |
 | `AUTOPILOT_LIMIT_BY_QUOTA` | False | True = nem tenta passar do que `YOUTUBE_DAILY_QUOTA` comporta |
 | `AUTOPILOT_MANUAL_EXPORT` | True | cota acabou: os melhores clipes do dia vão pra pasta "postar à mão" |
-| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha a meta do dia pela janela (24/dia em 24h = 1 por hora) |
+| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha a meta do dia pela janela (6/dia em 24h = 1 a cada 4 h) |
 | `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
 | `AUTOPILOT_QUEUE_TARGET` | 30 | clipes prontos esperando na fila |
 | `AUTOPILOT_MIN_QUALITY` | 45 | nota mínima (0-100) pra um clipe ser postado; ver "Nota de qualidade" abaixo |
@@ -1158,6 +1171,7 @@ opus-clip-clone/
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
 │   ├── version.py             # versão do programa (vai no .meta.json de cada corte)
 │   ├── content_window.py      # janela de conteúdo por cima da câmera (TikTok, tweet, vídeo...)
+│   ├── reach.py               # freio automático: Shorts sem views → posta mais devagar
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
 │   ├── voices.py              # de quem é a voz? (streamer x outro jogador no voice chat)

@@ -1137,8 +1137,16 @@ AUTOPILOT_MIN_QUALITY = 45
 # (vazio = padrão: gancho 22, picos 12, ritmo 12, conteudo 16, fechamento 8,
 # imagem 12, duracao 10, titulo 8). Ex.: {"gancho": 30} dá mais peso ao começo.
 VIRAL_WEIGHTS = {}
-AUTOPILOT_POSTS_PER_DAY = 24            # meta do dia (1 por hora). Posta pela API até o YouTube recusar
-                                        # (cota padrão: ~6/dia); o resto vai pra output/postar_a_mao
+# Shorts por dia (a interface muda: clique em "Postados hoje"). Achado real
+# (9-10/out): com 6/dia (1 a cada 4 h) os Shorts iam de 369 a ~1.300 views;
+# com 20-24/dia (1 por hora) TODOS os seguintes ficaram com 0-6 views -- o
+# YouTube parou de entregar. Posta pela API até o YouTube recusar (cota
+# padrão: ~6/dia); o resto vai pra output/postar_a_mao
+AUTOPILOT_POSTS_PER_DAY = 6
+# freio automático (src/reach.py): se os últimos Shorts param de pegar views,
+# posta no máximo 1 a cada AUTOPILOT_REACH_BRAKE_HOURS até voltar
+AUTOPILOT_REACH_BRAKE = True
+AUTOPILOT_REACH_BRAKE_HOURS = 8
 AUTOPILOT_LIMIT_BY_QUOTA = False        # True = nem tenta passar do que a cota YOUTUBE_DAILY_QUOTA comporta
 AUTOPILOT_MANUAL_EXPORT = True          # cota acabou: os melhores clipes do dia vão pra pasta "postar à mão"
 AUTOPILOT_MANUAL_KEEP_DAYS = 3          # a pasta de cada dia é apagada depois disso

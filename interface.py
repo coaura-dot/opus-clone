@@ -311,15 +311,20 @@ class App:
         grid = tk.Frame(body, bg=CARD)
         grid.pack(fill="x")
         self.kpi = {}
-        for i, (key, label) in enumerate([("today", "Postados hoje"), ("queue", "Clipes na fila"),
+        for i, (key, label) in enumerate([("today", "Postados hoje / por dia  ✎"), ("queue", "Clipes na fila"),
                                           ("next", "Próximo post"), ("manual", "Pra postar à mão hoje")]):
             box = tk.Frame(grid, bg=CARD2)
             box.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
             grid.columnconfigure(i, weight=1, uniform="k")
             v = tk.Label(box, text="—", bg=CARD2, fg=TEXT, font=(FONT, 18, "bold"))
             v.pack(anchor="w", padx=12, pady=(8, 0))
-            tk.Label(box, text=label, bg=CARD2, fg=MUTED, font=(FONT, 9)).pack(anchor="w", padx=12, pady=(0, 8))
+            lab = tk.Label(box, text=label, bg=CARD2, fg=MUTED, font=(FONT, 9))
+            lab.pack(anchor="w", padx=12, pady=(0, 8))
             self.kpi[key] = v
+            if key == "today":  # clique: quantos Shorts por dia
+                for w in (box, v, lab):
+                    w.configure(cursor="hand2")
+                    w.bind("<Button-1>", lambda e: self._posts_click())
         lp = tk.Frame(body, bg=CARD)
         lp.pack(fill="x", pady=(10, 0))
         # quadros do vídeo ORIGINAL do último post: quando a câmera sai errada,
@@ -330,6 +335,10 @@ class App:
         self.last_post = tk.Label(lp, text="", bg=CARD, fg=TEXT, font=(FONT, 10), anchor="w", cursor="hand2")
         self.last_post.pack(side="left", fill="x", expand=True)
         self.last_post.bind("<Button-1>", lambda e: self._open_last())
+        # freio de alcance (src/reach.py): o YouTube parou de entregar os Shorts
+        self.alert = tk.Label(body, text="", bg=CARD, fg=AMBER, font=(FONT, 9, "bold"), anchor="w", justify="left",
+                              wraplength=820)
+        self.alert.pack(fill="x", pady=(4, 0))
         self.doing = tk.Label(body, text="", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w", justify="left")
         self.doing.pack(fill="x", pady=(4, 0))
 
@@ -619,7 +628,7 @@ class App:
             elif uploads >= target:
                 ts = ap._next_pacific_midnight()
             else:
-                ts = max(st.get("last_post_at", 0) + ap.post_gap_seconds(), now)
+                ts = max(st.get("last_post_at", 0) + ap.post_gap_seconds(st), now)
             nxt = _when(ts)
         self.kpi["next"].config(text=nxt, font=(FONT, 18 if len(nxt) <= 6 else 13, "bold"))
         if posted:
@@ -635,6 +644,25 @@ class App:
             self._sheet = None
             self.last_post.config(text="Nenhum vídeo postado ainda.", fg=MUTED)
         self.sheet_link.config(text="ver quadros do original" if self._sheet else "")
+        b = st.get("reach_brake")
+        self.alert.config(text=(f"⚠ O YouTube parou de entregar os Shorts: os últimos tiveram "
+                                f"{', '.join(map(str, b.get('recent', [])))} views (antes ~{b.get('base', 0):.0f}). "
+                                f"Freio ligado: 1 post a cada {ap.reach.brake_hours():.0f} h até voltar.")
+                          if b and getattr(config, "AUTOPILOT_REACH_BRAKE", True) else "")
+
+    def _posts_click(self):
+        cur = ap.daily_limit()
+        n = simpledialog.askinteger(
+            "Shorts por dia",
+            "Quantos Shorts postar por dia?\n\n"
+            "Recomendado: 6 (1 a cada 4 h). Com 1 por hora o YouTube parou de\n"
+            "entregar os vídeos do canal (0-6 views cada).\n\nVale na hora, sem desligar.",
+            parent=self.root, minvalue=1, maxvalue=24, initialvalue=cur)
+        if n:
+            control.set_posts_per_day(n)
+            gap = ap.post_gap_seconds() / 3600
+            self._note(f"Agora: até {n} Shorts por dia (1 a cada {gap:.1f} h).")
+            self._fill_stats()
 
     def _open_last(self):
         if getattr(self, "_last_id", None):
