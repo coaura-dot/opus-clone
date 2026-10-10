@@ -402,7 +402,8 @@ WIDE_MODE_MEDIUM_CROP_SCALE = 2.5   # multiplica o crop height por este fator (2
 # só 0.1s, um corte quase instantâneo, que por si só já parecia um "pulo" de
 # zoom mesmo nas trocas de modo genuínas). 0.6s é suave o bastante pra não
 # chamar atenção quando o modo realmente precisa mudar.
-MODE_BLEND_SECONDS = 1.5
+MODE_BLEND_SECONDS = 0.0             # 0 = corte seco. Era 1,5 s: o usuário achou "muito ruim e lenta"
+                                    # (duas imagens misturadas por 1,5 s num corte do DrDonut)
 FALLBACK_BG_BLUR_SIGMA = 25.0       # intensidade do desfoque do fundo no modo "plano aberto"
 FALLBACK_BG_DARKEN = 0.55           # 0-1: quanto o fundo desfocado é escurecido
 WIDE_FIT_ZOOM = 1.12                # layout fit: amplia o quadro central 12% (corta só as bordas laterais)
@@ -959,7 +960,9 @@ GAMEPLAY_ACTION_RELATIVE = 1.8      # ... ou 1,8x o normal deste clipe (desde qu
 GAMEPLAY_MIN_HOLD_SECONDS = 2.0     # cada plano fica pelo menos isso na tela (sem pisca-pisca)
 GAMEPLAY_FACE_FRAC = 0.34           # rosto do streamer ~1/3 da altura da tela no close
 GAMEPLAY_MAX_UPSCALE = 3.5          # ampliação máx. da facecam (mais que isso borra: vira painel com fundo desfocado)
-GAMEPLAY_VOICE_CHAT = True          # outra pessoa falando (boca do streamer parada) = mostra o jogo
+GAMEPLAY_VOICE_CHAT = True          # outra pessoa falando (voz diferente ou boca do streamer parada) = mostra o jogo
+GAMEPLAY_OTHER_VOICE_MAX_SIM = 0.30 # voz com semelhança abaixo disso com a voz principal = outra pessoa (src/voices.py)
+GAMEPLAY_MIN_CAM_PRESENCE = 0.10    # a facecam pequena aparece em pelo menos 10% do vídeo (o resto pode ser câmera cheia)
 
 # --- Facecam pequena (layout típico de react: reator numa caixinha
 # pequena sobre a tela reagida, às vezes com chat do lado) ---

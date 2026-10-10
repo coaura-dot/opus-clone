@@ -16,3 +16,6 @@ whisper.cpp/
 # login do YouTube (segredo!) e estado do piloto automático
 credentials/
 autopilot_data/
+
+# modelos baixados pelo programa (vozes)
+models/

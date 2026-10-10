@@ -157,9 +157,12 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         react_plan = gameplay.plan_clip(react_layout, source_path, candidate.start, candidate.end,
                                         config.TARGET_WIDTH, config.TARGET_HEIGHT, words=transcript_words)
         if react_plan is not None:
+            extra = f", {react_plan.n_voice} fala(s) de outra pessoa (voice chat)" if react_plan.n_voice else ""
+            cheia = (f"; {(1 - react_plan.active_fraction) * 100:.0f}% em câmera cheia (enquadramento normal)"
+                     if react_plan.active_fraction < 0.98 else "")
             print(f"    -> Clip {clip_index}: gameplay -- streamer {react_plan.streamer_fraction * 100:.0f}% / "
                   f"jogo {(1 - react_plan.streamer_fraction) * 100:.0f}% do clipe, "
-                  f"{react_plan.switches} corte(s) de câmera")
+                  f"{react_plan.switches} corte(s) de câmera{extra}{cheia}")
     elif react_layout is not None:
         react_plan = react_layout_mod.plan_clip(react_layout, source_path, candidate.start,
                                                 candidate.end, config.TARGET_WIDTH, config.TARGET_HEIGHT)

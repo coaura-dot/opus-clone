@@ -222,6 +222,33 @@ def _find_cam_box(E, V, face, W, H, relaxed: bool = False):
     return (left, top, right - left, bottom - top), kl[0] + kr[0] + ku[0] + kd[0]
 
 
+def _refine_vertical(E, box, face):
+    """Gameplay: texto parado colado na facecam ("total subs", "subs today")
+    era engolido pela caixa (achado no teste com o SMP). A borda de cima e
+    de baixo de verdade é a linha horizontal mais perto do rosto que
+    atravessa a caixa de lado a lado."""
+    bx, by, bw, bh = box
+    cx, cy, fw, fh = face
+    H = E.shape[0]
+    x0, x1 = int(bx + 0.05 * bw), int(bx + 0.95 * bw)
+    if x1 - x0 < 10:
+        return box
+    cov = (E[:, x0:x1] > 0.5).mean(axis=1)
+    cov = np.maximum(cov, np.maximum(np.roll(cov, 1), np.roll(cov, -1)))  # linha de 1-2 px tremida
+    # 40%: o texto da live tapa parte da borda e roupa escura some contra
+    # jogo escuro (medido no SMP: 0,40-0,54 na borda, 0 no resto)
+    top, bottom = by, by + bh
+    for y in range(int(cy - 0.9 * fh), int(by) + 2, -1):
+        if 0 <= y < H and cov[y] >= 0.4:
+            top = float(y)
+            break
+    for y in range(int(cy + 0.6 * fh), int(by + bh) - 2):
+        if 0 <= y < H and cov[y] >= 0.4:
+            bottom = float(y)
+            break
+    return (bx, top, bw, bottom - top)
+
+
 def _sides_covered(E, box, sides, min_cov: float = 0.8) -> bool:
     """As bordas 'line' da caixa cobrem o lado inteiro (de canto a canto)?"""
     bx, by, bw, bh = box
@@ -282,6 +309,11 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
     a prova falhava em facecam de verdade (SMP do Tommyinnit) -- desde que o
     rosto vivo fique fora do miolo do quadro, onde facecam fica sempre."""
     n = int(n_samples or getattr(config, "REACT_LAYOUT_SAMPLES", 48))
+    if relaxed:
+        # gameplay: o streamer passa boa parte da live em tela cheia (câmera
+        # grande + chat) e a facecam pequena só aparece nos trechos de jogo
+        # (achado real: DrDonut, "HAVE I BEEN CLONED???") -- mais amostras
+        n = max(n, 96)
     if duration < 10:
         return None
     W, H = _analysis_size(src_w, src_h)
@@ -315,6 +347,8 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
                 clusters.append([cx, cy, fh, [(i, face)]])
 
     min_presence = getattr(config, "REACT_MIN_PRESENCE", 0.25)
+    if relaxed:
+        min_presence = min(min_presence, getattr(config, "GAMEPLAY_MIN_CAM_PRESENCE", 0.10))
     cands = []
     for c in clusters:
         idx = sorted({i for i, _ in c[3]})
@@ -341,6 +375,11 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
         jit_min = getattr(config, "REACT_MIN_FACE_JITTER", 0.06)
         live = (jitter >= jit_min and appearance >= getattr(config, "REACT_MIN_FACE_CHANGE", 6.0)) or \
             (jitter >= 0.66 * jit_min and appearance >= 12.0)
+        if relaxed and not live:
+            # gameplay: streamer concentrado no jogo mexe pouco (medido: SMP,
+            # mexe 0,040 e muda 7,2); boneco/foto/desenho mudam 1,4-1,8 e
+            # coisas paradas do jogo, 0
+            live = jitter >= 0.02 and appearance >= 4.0
         if not live:
             if verbose:
                 print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) PARADO demais "
@@ -351,6 +390,8 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
         E = np.mean([cv2.Canny(grays[i], 60, 150) > 0 for i in idx], axis=0).astype(np.float32)
         E = cv2.dilate(E, np.ones((3, 3), np.uint8))
         box, sides = _find_cam_box(E, V, face, W, H, relaxed=relaxed)
+        if relaxed:
+            box = _refine_vertical(E, box, face)
         bx, by, bw, bh = box
         # webcam fechada no rosto (comum em gameplay) é estreita: 1,5x o rosto basta
         if bw < 1.5 * face[2] or bh < 1.4 * face[3] or bw * bh > 0.35 * W * H:
@@ -383,7 +424,7 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
                   and bw * bh <= 0.15 * W * H and presence >= 0.7
                   and _sides_covered(E, box, sides) and len(sides) == 4)
         off_center = not (0.3 * W < face[0] < 0.7 * W and 0.3 * H < face[1] < 0.7 * H)
-        ok = independence >= 0.25 or framed or (relaxed and off_center and presence >= 0.35)
+        ok = independence >= 0.25 or framed or (relaxed and off_center and presence >= min_presence)
         if verbose:
             print(f"    [react] rosto fixo presença={presence:.2f} caixa={tuple(int(v) for v in box)} "
                   f"lados={sides} independência={independence:.2f} -> {'REACT' if ok else 'não'}")

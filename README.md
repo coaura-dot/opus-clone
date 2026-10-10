@@ -920,16 +920,32 @@ instante do clipe, entre dois planos em tela cheia:
 - **jogo:** recorte em pé centrado na mira, sem pegar a facecam. Entra
   quando o jogo "mexe" muito (`GAMEPLAY_ACTION_MOTION`; medido em speedrun
   de Minecraft: andando 8-20, luta e explosão 26-46) ou quando quem fala é
-  outra pessoa: tem fala e a boca do streamer está parada. Essa regra do voice
-  chat só liga quando a boca dele separa bem fala de silêncio naquele clipe;
-  sem isso ela fica desligada pra não errar;
+  **outra pessoa** (voice chat do jogo). A outra voz é achada pela
+  "impressão digital" da voz (`src/voices.py`), não pelo tom: o mesmo
+  streamer vai de 130 Hz calmo a 350 Hz gritando. Um modelo pequeno
+  (WeSpeaker, 26 MB, baixado uma vez pra `models/voz/`) roda no processador
+  pelo onnxruntime que já vem com a transcrição, em ~6 s por 5 min de áudio.
+  A voz principal do clipe é a do streamer, e trecho com voz bem diferente
+  vira jogo. Testado: numa conversa real, todas as falas da outra pessoa
+  ficaram em 0,12-0,21 de semelhança, e as do convidado principal em
+  0,66-0,96. Grito do próprio streamer também muda a voz; se a boca dele
+  está claramente mexendo ali, vale ele. Voz muito parecida com a do
+  streamer (outro jovem com a mesma idade) pode passar como ele;
 - **streamer:** close dele quando o jogo está calmo e ele está falando. Se a
   facecam é pequena (o normal), ampliar até a tela cheia passaria de 5-7x e
   borrava: aí ela vira um painel nítido com o rosto em destaque sobre um
   fundo desfocado dela mesma (`GAMEPLAY_MAX_UPSCALE`, 3,5x).
 
 Cada plano fica pelo menos 2 s na tela (`GAMEPLAY_MIN_HOLD_SECONDS`), com
-corte seco. O corte pro jogo entra um pouquinho antes da ação. A detecção da
+corte seco. O corte pro jogo entra um pouquinho antes da ação. Quando a live
+troca pra câmera em tela cheia (chat + rosto grande, sem a facecam pequena),
+aquele trecho sai com o enquadramento normal. Achado real: o DrDonut alterna
+as duas cenas, e antes a facecam pequena nem era achada, porque aparecia em
+menos de 25% do vídeo; agora basta 10% (`GAMEPLAY_MIN_CAM_PRESENCE`).
+
+**Trocas de câmera em corte seco** (`MODE_BLEND_SECONDS = 0`): a troca
+entre o close e o plano aberto misturava as duas imagens por 1,5 s ("muito
+ruim e lenta", num corte do DrDonut). A detecção da
 facecam é mais solta nesses canais: aceita facecam colada na borda do quadro
 e cortada no queixo (achado no SMP do Tommyinnit, que o detector de react
 recusava). Pra marcar outro canal: `"@canal|game"` ou `"link|en|game"`.
@@ -1074,6 +1090,7 @@ opus-clip-clone/
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
+│   ├── voices.py              # de quem é a voz? (streamer x outro jogador no voice chat)
 │   ├── throttle.py            # modos de GPU 25/50/70%: pausa whisper.cpp/encode parte de cada segundo
 │   ├── control.py             # liga/desliga o piloto por fora (interface); modo só postar
 │   ├── channel_check.py       # antes de postar: o vídeo já está no canal?

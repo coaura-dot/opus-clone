@@ -101,10 +101,13 @@ class GameplayClipPlan:
     """Plano de um clipe de gameplay: em cada instante, STREAMER ou JOGO."""
     split_screen = False
 
-    def __init__(self, layout: ReactLayout, times, views, faces, game_window, analysis_w: int):
+    def __init__(self, layout: ReactLayout, times, views, faces, game_window, analysis_w: int, present=None):
         self.layout = layout
         self.times = np.asarray(times, dtype=np.float64)
         self.views = np.asarray(views, dtype=np.int8)
+        # onde o layout de jogo + facecam está na tela (no resto -- câmera
+        # cheia, tela de "volto já" -- o reframer comum cuida)
+        self.present = np.ones(len(self.times), bool) if present is None else np.asarray(present, bool)
         self.faces = faces                    # (cx, cy, fh) na fonte, travado por plano
         self.game_window = game_window        # (x, y, w, h) na fonte
         self._s = layout.src_w / float(analysis_w)
@@ -115,22 +118,24 @@ class GameplayClipPlan:
         return int(np.clip(np.searchsorted(self.times, t, side="right") - 1, 0, len(self.times) - 1))
 
     def active(self, t: float) -> bool:
-        return len(self.times) > 0
+        return len(self.times) > 0 and bool(self.present[self._i(t)])
 
     @property
     def active_fraction(self) -> float:
-        return 1.0 if len(self.times) else 0.0
+        return float(self.present.mean()) if len(self.times) else 0.0
 
     def view_at(self, t: float) -> int:
         return int(self.views[self._i(t)]) if len(self.views) else GAME
 
     @property
     def streamer_fraction(self) -> float:
-        return float(np.mean(self.views == STREAMER)) if len(self.views) else 0.0
+        v = self.views[self.present]
+        return float(np.mean(v == STREAMER)) if len(v) else 0.0
 
     @property
     def switches(self) -> int:
-        return int(np.sum(self.views[1:] != self.views[:-1])) if len(self.views) > 1 else 0
+        v = np.where(self.present, self.views, -1)
+        return int(np.sum(v[1:] != v[:-1])) if len(v) > 1 else 0
 
     def compose(self, frame, t: float, out_w: int, out_h: int, zoom: float = 1.0) -> np.ndarray:
         if self.view_at(t) == STREAMER:
@@ -254,7 +259,7 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     up = 2.0 if (c1x - c0x) < 360 else 1.0
     det = _new_yunet()
 
-    motion, faces, mouth = [], [], []
+    motion, faces, mouth, cam_bg = [], [], [], []
     smalls, prev_det = [], []
     for f in _iter_frames(source_path, start, end - start, RATE, W, H):
         small = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(f, (mw, mh), interpolation=cv2.INTER_AREA),
@@ -267,7 +272,8 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
         cam = f[c0y:c1y, c0x:c1x]
         if up != 1.0:
             cam = cv2.resize(cam, None, fx=up, fy=up, interpolation=cv2.INTER_LINEAR)
-        found = [fc for fc in _faces(det, cam) if fc[3] >= 0.25 * bh * up] if det is not None else []
+        found = [fc for fc in _faces(det, cam) if 0.25 * bh * up <= fc[3] <= 1.1 * bh * up] if det is not None else []
+        cam_bg.append(layout.cam_matches(cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)))
         if found:
             fc = max(found, key=lambda v: v[3])
             fc = (c0x + fc[0] / up, c0y + fc[1] / up, fc[2] / up, fc[3] / up)
@@ -338,13 +344,66 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
                 other[i0:i1] = True
                 n_other += 1
 
-    # facecam sumiu (streamer tirou a câmera / tela de transição): jogo
+    # voz de OUTRA pessoa (voice chat do jogo) pela "impressão digital" da
+    # voz -- ver src/voices.py. Pedido do usuário: "os players no game estão
+    # falando com ele e a câmera está focada no rosto dele"
+    n_voice = 0
+    # trechos de fala pra comparar a voz: cortados em pontuação, pausa curta
+    # e no máximo 4 s -- a resposta do outro jogador vem colada na fala do
+    # streamer e, numa frase só, a voz dele "ganhava" (achado no teste)
+    chunks = []
+    if words:
+        for w in sorted((w for w in words if w.end > start and w.start < end), key=lambda w: w.start):
+            a, b = w.start - start, w.end - start
+            if chunks and a - chunks[-1][1] <= 0.3 and b - chunks[-1][0] <= 4.0 and not chunks[-1][3]:
+                chunks[-1][1], chunks[-1][2] = b, chunks[-1][2] + 1
+            else:
+                chunks.append([a, b, 1, False])
+            chunks[-1][3] = (w.text or "").strip()[-1:] in ".?!"
+    if chunks and getattr(config, "GAMEPLAY_VOICE_CHAT", True):
+        try:
+            from . import voices
+            audio = voices.load_audio(source_path, start, end)
+            sims = voices.who_speaks(audio, [(a, b) for a, b, _, _ in chunks], log) if audio is not None else None
+        except Exception as e:  # nunca derruba o clipe
+            log(f"    [voz] não consegui comparar as vozes ({e.__class__.__name__}: {e})")
+            sims = None
+        if sims:
+            lim = getattr(config, "GAMEPLAY_OTHER_VOICE_MAX_SIM", 0.30)
+            for (a, b, nw, _), sim in zip(chunks, sims):
+                if sim is not None and sim < lim and nw >= 2:
+                    i0, i1 = int(a * RATE), int(np.ceil(b * RATE))
+                    # grito do próprio streamer também muda a "impressão" da voz
+                    # (medido: "It blew up my bed!", 0,16). Se a boca dele está
+                    # claramente mexendo ali (e a boca é confiável neste
+                    # clipe), é ele.
+                    if reliable:
+                        vals = mo[i0:i1]
+                        vals = vals[~np.isnan(vals)]
+                        if len(vals) >= 4 and float(np.median(vals)) >= 1.5 * base:
+                            continue
+                    if not other[i0:i1].any():
+                        n_voice += 1
+                    other[i0:i1] = True
+
+    # onde o layout de jogo + facecam está na tela: rosto dentro da caixa
+    # da facecam (até 1 s atrás/à frente) ou o fundo dela batendo com o de
+    # referência. Fora disso (câmera cheia, chat em tela cheia) o plano de
+    # gameplay não vale -- o reframer comum enquadra (achado real: DrDonut
+    # alterna jogo com facecam pequena e câmera em tela cheia)
     seen_face = np.array([fc is not None for fc in faces])
     near = np.convolve(seen_face.astype(float), np.ones(int(2 * RATE) + 1), mode="same") > 0  # rosto a até 1 s
+    thr = getattr(config, "REACT_CAM_MATCH_MAX_DIFF", 22.0)
+    bg_ok = np.array([d is not None and d < thr for d in cam_bg])
+    from .react_layout import _smooth_runs
+    present = _smooth_runs(near | bg_ok, int(RATE))
+    if present.mean() < 0.15:
+        return None
 
     lab = np.full(n, -1, np.int8)
     lab[speech] = STREAMER
-    lab[action | other | ~near] = GAME
+    # facecam na tela mas sem ninguém nela (streamer saiu da cadeira): jogo
+    lab[action | other | (present & ~near)] = GAME
     # corte pro jogo entra 0,25 s antes da ação e sai 0,5 s depois dela
     g = lab == GAME
     gd = g.copy()
@@ -354,16 +413,23 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     for j in range(1, tail + 1):
         gd[j:] |= g[:-j]
     lab[gd] = GAME
-    # calmo e ninguém falando: segura o plano que estava
-    if (lab == -1).all():
-        lab[:] = GAME
-    for i in range(n):
-        if lab[i] == -1 and i > 0:
-            lab[i] = lab[i - 1]
-    first = next((i for i in range(n) if lab[i] != -1), None)
-    if first:
-        lab[:first] = lab[first]
-    lab = _enforce_hold(lab, max(int(round(getattr(config, "GAMEPLAY_MIN_HOLD_SECONDS", 2.0) * RATE)), 1))
+    # calmo e ninguém falando: segura o plano que estava. Cada trecho com a
+    # facecam na tela é decidido separado (o plano mínimo de 2 s não vaza
+    # pra dentro de uma cena de câmera cheia)
+    hold = max(int(round(getattr(config, "GAMEPLAY_MIN_HOLD_SECONDS", 2.0) * RATE)), 1)
+    for a, b in _runs(present.astype(np.int8)):
+        if not present[a]:
+            lab[a:b] = GAME  # não usado: ali o reframer comum enquadra
+            continue
+        sub = lab[a:b].copy()
+        if (sub == -1).all():
+            sub[:] = GAME
+        for i in range(1, len(sub)):
+            if sub[i] == -1:
+                sub[i] = sub[i - 1]
+        first = next((i for i in range(len(sub)) if sub[i] != -1), 0)
+        sub[:first] = sub[first]
+        lab[a:b] = _enforce_hold(sub, hold)
 
     # rosto do streamer: TRAVADO por plano (câmera parada no close)
     s = layout.src_w / float(W)
@@ -384,12 +450,13 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     locked = [(cx * s, cy * s, fh * s) for cx, cy, fh in locked]
 
     window = _game_window(layout, W, H, out_w, out_h)
-    plan = GameplayClipPlan(layout, times, lab, locked, window, W)
+    plan = GameplayClipPlan(layout, times, lab, locked, window, W, present=present)
     plan.n_action = int(_count_runs(action))
-    plan.n_other = n_other
+    plan.n_other = n_other + n_voice
+    plan.n_voice = n_voice
     plan.mouth_reliable = reliable
     plan.debug = {"motion": ms, "speech": speech, "mouth": mo, "other": other, "action": action,
-                  "face": seen_face, "base": base}
+                  "face": seen_face, "base": base, "present": present}
     return plan
 
 
