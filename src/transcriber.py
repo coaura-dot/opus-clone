@@ -275,12 +275,46 @@ def snap_to_speech(words: List[Word], audio) -> List[Word]:
     return out
 
 
+# frases que o Whisper "inventa" em trecho de música/silêncio (vêm das
+# legendas de internet com que ele foi treinado) -- nunca são fala do vídeo
+_HALLUCINATION_RE = re.compile(
+    r"(legendas? (pela|da) comunidade|amara\.?org|legendado por|legendas? por|"
+    r"transcri[çc][ãa]o e legendas|subtitles by|subtitled by|"
+    r"www\.\w+\.com\.br|\bpt-br\b)", re.IGNORECASE)
+
+
+def _drop_hallucinations(words: List[Word]) -> List[Word]:
+    """Tira as palavras de uma frase-fantasma (até 8 palavras em volta do
+    trecho reconhecido)."""
+    if not words:
+        return words
+    text, spans, pos = [], [], 0
+    for w in words:
+        spans.append((pos, pos + len(w.text)))
+        text.append(w.text)
+        pos += len(w.text) + 1
+    full = " ".join(text)
+    drop = set()
+    for m in _HALLUCINATION_RE.finditer(full):
+        hit = [i for i, (a, b) in enumerate(spans) if a < m.end() and b > m.start()]
+        if not hit:
+            continue
+        lo, hi = hit[0], hit[-1]
+        # "Legendado por <nome>": a frase continua com o nome (até 3 palavras)
+        if re.search(r"(por|by|comunidade|pela)\s*$", m.group(0), re.IGNORECASE):
+            while hi + 1 < len(words) and hi - hit[-1] < 3 and words[hi + 1].start - words[hi].end < 0.4 \
+                    and not words[hi].text.strip().endswith((".", "!", "?")):
+                hi += 1
+        drop.update(range(lo, hi + 1))
+    return [w for i, w in enumerate(words) if i not in drop]
+
+
 def _clean_transcript(t: "Transcript") -> "Transcript":
     # o filtro roda na sequência de palavras do vídeo INTEIRO (um loop
     # costuma atravessar vários segmentos do Whisper) e depois devolve cada
     # palavra mantida ao seu segmento de origem
     owner = {id(w): i for i, seg in enumerate(t.segments) for w in seg.words}
-    kept = {id(w) for w in _drop_repetition_loops(t.words)}
+    kept = {id(w) for w in _drop_hallucinations(_drop_repetition_loops(t.words))}
     segments = []
     for i, seg in enumerate(t.segments):
         words = _attach_symbols([w for w in seg.words if id(w) in kept and owner[id(w)] == i])

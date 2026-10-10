@@ -70,34 +70,99 @@ def _is_emphasis(word: str, emphasis: set) -> bool:
     return bool(re.search(r"\d", bare)) or "%" in word or "$" in word or bare in emphasis
 
 
+_EDGE_JUNK = "\"'“”‘’«»()[]<>*_~-–—♪♫#"
+
+
 def _display(word: str) -> str:
-    """Texto que aparece na tela: sem chaves (quebrariam o ASS), sem
-    pontuação solta no fim (vírgula/ponto poluem a legenda de corte), em
-    caixa alta se configurado."""
+    """Texto que aparece na tela: sem chaves (quebrariam o ASS), sem aspas,
+    parênteses, travessão ou pontuação solta nas pontas (achado real:
+    "AMIGA\"" na tela -- a fala tinha uma citação: tipo: "Ai, amiga"), em
+    caixa alta se configurado. Só "?" e "!" ficam (mudam o sentido).
+    Palavra sem letra nem número (♪, ..., "-") some."""
     w = word.replace("{", "").replace("}", "").strip()
-    w = re.sub(r"[,.;:…]+$", "", w)
+    if re.fullmatch(r"[(\[].*[)\]]", w):
+        return ""  # anotação do Whisper: (risos), [música], (aplausos)
+    for _ in range(3):
+        w = w.strip(_EDGE_JUNK + " ")
+        w = re.sub(r"[,.;:…]+$", "", w)
+    w = re.sub(r'["“”«»]', "", w)
+    if not re.search(r"[\wÀ-ÿ%$]", w):
+        return ""
     if getattr(config, "CAPTION_UPPERCASE", True):
         w = w.upper()
     return w
 
 
+def _group_chars(group: List[Word]) -> int:
+    return len(" ".join(_display(w.text) for w in group))
+
+
 def _group_words(words: List[Word], group_size: int) -> List[List[Word]]:
-    """Agrupa palavras consecutivas em pequenos blocos exibidos juntos na tela,
-    quebrando também ao fim de frases para respeitar a pontuação — e numa
-    pausa longa, pra um grupo não ficar na tela "esperando" a próxima frase."""
-    groups = []
+    """Grupos de 2-3 palavras que FICAM na tela tempo bastante pra ler.
+
+    Achado real ("legenda completamente insana", corte de podcast falado
+    rápido): medido em 4 transcrições reais, 14-33% dos grupos tinham UMA
+    palavra e 15-30% ficavam menos de 0,35 s na tela -- cada vírgula fechava
+    um grupo e cada grupo entrava com animação: a legenda piscava sem parar.
+    Agora: fecha o grupo no tamanho (palavras/caracteres), no fim de frase,
+    ou numa vírgula só se já tem 2+ palavras; e grupo de 1 palavra curta
+    junta com o vizinho."""
+    max_chars = getattr(config, "CAPTION_MAX_CHARS", 18)
+    min_dur = getattr(config, "CAPTION_MIN_GROUP_SECONDS", 0.6)
+    words = [w for w in words if _display(w.text)]
+    groups: List[List[Word]] = []
     cur: List[Word] = []
     for i, w in enumerate(words):
         cur.append(w)
         nxt = words[i + 1] if i + 1 < len(words) else None
-        long_pause = nxt is not None and nxt.start - w.end > 0.6
-        if (len(cur) >= group_size or long_pause
-                or w.text.strip().endswith((".", "!", "?", "…", ","))):
+        if nxt is None:
+            break
+        t = w.text.strip()
+        long_pause = nxt.start - w.end > 0.6
+        too_long = (len(cur) >= group_size
+                    or _group_chars(cur) + 1 + len(_display(nxt.text)) > max_chars)
+        sentence_end = t.endswith((".", "!", "?", "…"))
+        comma = t.endswith((",", ";", ":"))
+        if long_pause or too_long or ((sentence_end or comma) and len(cur) >= 2) or \
+                (sentence_end and w.end - cur[0].start >= min_dur):
             groups.append(cur)
             cur = []
     if cur:
         groups.append(cur)
-    return groups
+    # grupo de 1 palavra rápida: junta com o vizinho (sem pausa no meio)
+    out: List[List[Word]] = []
+    for g in groups:
+        short = len(g) == 1 and g[-1].end - g[0].start < min_dur
+        if short and out and g[0].start - out[-1][-1].end < 0.35 and \
+                len(out[-1]) < group_size + 1 and _group_chars(out[-1] + g) <= max_chars + 6:
+            out[-1] = out[-1] + g
+        else:
+            out.append(g)
+    merged: List[List[Word]] = []
+    i = 0
+    while i < len(out):
+        g = out[i]
+        if (len(g) == 1 and g[-1].end - g[0].start < min_dur and i + 1 < len(out)
+                and out[i + 1][0].start - g[-1].end < 0.35 and len(out[i + 1]) < group_size + 1
+                and _group_chars(g + out[i + 1]) <= max_chars + 6):
+            merged.append(g + out[i + 1])
+            i += 2
+            continue
+        merged.append(g)
+        i += 1
+    # grupo que ficaria menos de 0,35 s na tela (fala muito rápida): junta
+    # com o próximo se ainda cabe numa linha
+    final: List[List[Word]] = []
+    for g in merged:
+        if final:
+            prev = final[-1]
+            shown = g[0].start - prev[0].start
+            if shown < 0.35 and len(prev) + len(g) <= group_size + 1 and \
+                    _group_chars(prev + g) <= max_chars + 4 and g[0].start - prev[-1].end < 0.35:
+                final[-1] = prev + g
+                continue
+        final.append(g)
+    return final
 
 
 def _line_with_highlight(group: List[Word], active_idx: int, emphasis: set) -> str:
@@ -225,10 +290,32 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
     tilt = abs(getattr(config, "CAPTION_TILT_DEGREES", 1.5))
     rise = int(round(getattr(config, "CAPTION_RISE_PX", 18) * scale))
     base_x, base_y = video_width // 2, video_height - marginv
+    # quando cada grupo SAI da tela: emenda no próximo se o vão é curto
+    # (antes a legenda sumia e voltava em 28-50% das trocas -- pisca-pisca)
+    # e fica pelo menos CAPTION_MIN_SHOW_SECONDS
+    min_show = getattr(config, "CAPTION_MIN_SHOW_SECONDS", 0.45)
+    group_end = []
+    for g_idx, group in enumerate(groups):
+        end = group[-1].end
+        nxt_start = groups[g_idx + 1][0].start if g_idx + 1 < len(groups) else None
+        if end - group[0].start < min_show:
+            end = group[0].start + min_show
+        if nxt_start is not None:
+            if nxt_start - group[-1].end < 0.5:
+                end = nxt_start
+            end = min(end, nxt_start)
+        if clip_duration is not None:
+            end = min(end, clip_duration)
+        group_end.append(max(end, group[0].start + 0.05))
+
     for g_idx, group in enumerate(groups):
         clean_group = [w for w in group if _display(w.text)]
         if not clean_group:
             continue
+        # animação de entrada só quando a legenda VOLTA depois de uma pausa
+        # (grupo emendado no anterior só troca o texto -- sem pular a cada
+        # 0,5 s, que deixava a tela "insana")
+        fresh = g_idx == 0 or clean_group[0].start - group_end[g_idx - 1] > 0.05
         # cada palavra do grupo vira uma linha .ass (pra destacar a palavra
         # certa em cada instante), mas as linhas precisam ser CONTÍGUAS: o
         # fim da linha da palavra i tem que ser exatamente o início da
@@ -244,7 +331,7 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
             if i < n - 1:
                 end = max(clean_group[i + 1].start, start + 0.05)
             else:
-                end = max(w.end, start + 0.05)
+                end = max(group_end[g_idx], start + 0.05)
             text = _line_with_highlight(clean_group, i, emphasis)
             # o grupo entra com "pop" (só na primeira palavra) e sai com um
             # fade curto (só na última) — entre palavras do mesmo grupo não
@@ -252,14 +339,16 @@ def generate_ass(words: List[Word], clip_offset: float, output_path: str,
             # inclinação alternada por grupo (±CAPTION_TILT_DEGREES) e borda
             # levemente suavizada; o grupo entra subindo alguns px com bounce
             # (70% -> 108% -> 100%)
-            tags = rf"\blur0.8\frz{tilt if g_idx % 2 else -tilt}"
-            if i == 0:
+            tags = r"\blur0.8" + (rf"\frz{tilt if g_idx % 2 else -tilt}" if tilt else "")
+            last_of_run = i == n - 1 and (g_idx + 1 >= len(groups)
+                                          or groups[g_idx + 1][0].start - group_end[g_idx] > 0.05)
+            if i == 0 and fresh:
                 tags += (rf"\move({base_x},{base_y + rise},{base_x},{base_y},0,110)"
-                         rf"\fscx{pop}\fscy{pop}\t(0,70,\fscx106\fscy106)\t(70,140,\fscx100\fscy100)")
-                tags += r"\fad(40,0)" if i != n - 1 else r"\fad(40,60)"
+                         rf"\fscx{pop}\fscy{pop}\t(0,90,\fscx100\fscy100)")
+                tags += r"\fad(40,0)" if not last_of_run else r"\fad(40,60)"
             else:
                 tags += rf"\pos({base_x},{base_y})"
-                if i == n - 1:
+                if last_of_run:
                     tags += r"\fad(0,60)"
             tag_block = f"{{{tags}}}" if tags else ""
             line = (f"Dialogue: 0,{fmt_time(start)},{fmt_time(end)},Caption,,0,0,0,,"

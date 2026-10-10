@@ -443,6 +443,9 @@ VIDEO_IN_VIDEO_ACTIVITY_MIN = 3.0     # piso de atividade de pixel pra considera
 
 # --- Legendas estilo "karaokê" (efeito Opus Clip / CapCut) ---
 CAPTION_WORDS_PER_GROUP = 3           # grupos curtos = leitura rápida (padrão de corte viral)
+CAPTION_MAX_CHARS = 18                # ... e no máximo isso de letras por grupo (cabe numa linha)
+CAPTION_MIN_GROUP_SECONDS = 0.6       # grupo de 1 palavra mais rápido que isso junta com o vizinho
+CAPTION_MIN_SHOW_SECONDS = 0.45       # cada grupo fica pelo menos isso na tela
 CAPTION_UPPERCASE = True
 # "Anton" (Google Fonts, licença OFL livre) vem embutida em assets/fonts/ e é
 # carregada via "fontsdir" no filtro `ass` do ffmpeg — funciona em qualquer
@@ -458,9 +461,9 @@ CAPTION_FONT_SIZE = 104              # pt de referência para vídeo de 1080px d
 CAPTION_OUTLINE_WIDTH = 8            # pt de referência p/ 1080px; escala junto com a fonte
 CAPTION_SHADOW = 4                   # sombra preta semitransparente atrás do contorno
 CAPTION_LETTER_SPACING = 1
-CAPTION_POP_START_SCALE = 79         # cada grupo entra crescendo de 79% -> 106% -> 100% ("bounce")
-CAPTION_TILT_DEGREES = 1.0          # inclinação alternada entre grupos (0 = reto)
-CAPTION_RISE_PX = 13                # quanto o grupo "sobe" ao entrar
+CAPTION_POP_START_SCALE = 90         # a legenda entra crescendo de 90% -> 100% (só quando volta depois de uma pausa)
+CAPTION_TILT_DEGREES = 0.0          # inclinação alternada entre grupos (0 = reto; inclinar a cada grupo cansava)
+CAPTION_RISE_PX = 8                 # quanto a legenda "sobe" ao entrar (depois de uma pausa)
 CAPTION_PRIMARY_BGR = "FFFFFF"      # branco (formato BGR usado pelo ASS)
 CAPTION_HIGHLIGHT_BGR = "00D7FF"    # dourado/amarelo (BGR) — palavra sendo falada
 CAPTION_EMPHASIS_BGR = "5BFF3C"     # verde (BGR) — números, dinheiro, palavras de impacto

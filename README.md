@@ -831,6 +831,29 @@ máquina com acesso à internet.
 
 ## Legendas e título-gancho
 
+**Legenda calma, sem pisca-pisca.** Achado real: num corte de podcast
+falado rápido, a legenda ficou "completamente insana". Medido em 4
+transcrições reais:
+- 14-33% dos grupos tinham uma palavra só;
+- 15-30% ficavam menos de 0,35 s na tela;
+- a legenda sumia e voltava em 28-50% das trocas;
+- cada grupo entrava pulando e inclinando (~70 animações por minuto);
+- apareciam aspas soltas ("AMIGA\"").
+
+O que mudou:
+- **Grupos de 2-3 palavras** (até `CAPTION_MAX_CHARS` letras). Uma vírgula
+  só fecha o grupo se ele já tem 2+ palavras, e palavra rápida sozinha
+  junta com a vizinha.
+- **Sem sumir e voltar:** a legenda emenda direto no grupo seguinte e fica
+  pelo menos 0,45 s na tela.
+- **Animação só depois de uma pausa** (~8 por minuto), sem inclinar.
+- **Limpeza do texto:** sem aspas, parênteses e travessão. Anotação do
+  Whisper ("(risos)", "[música]") e frase que ele inventa em música
+  ("Legendas pela comunidade Amara.org") não aparecem.
+
+Depois da mudança: 0-11% de grupos de uma palavra, nenhum "some e volta" e
+~8 animações por minuto.
+
 Estilo corte viral: grupos de 3 palavras em CAIXA ALTA, cada grupo entra com
 um "pop", a palavra falada acende em amarelo e cresce, e números / dinheiro /
 palavras de impacto ficam em verde (`CAPTION_*` em `config.py`). O clipe
