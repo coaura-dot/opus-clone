@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""
+Auto Clipper — gerador automático de cortes virais (estilo Opus Clip)
+======================================================================
+Baixa um vídeo do YouTube, transcreve, seleciona automaticamente os
+melhores trechos, reenquadra para vertical seguindo o rosto do orador,
+adiciona legendas estilo karaokê, música de fundo com ducking e
+pequenos efeitos de zoom — tudo automaticamente.
+
+Uso:
+    python main.py
+    python main.py --url URL --clips N
+"""
+import argparse
+import ctypes
+import os
+import sys
+import threading
+import time
+import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from src import config
+from src import hwaccel
+from src import long_video
+from src import react_layout
+from src import aspect_fix
+from src.utils import ensure_ffmpeg, ensure_dir, check_dependency, video_info
+from src.downloader import download_youtube_video, get_video_title
+from src.transcriber import transcribe
+from src.clip_selector import select_clips
+from src.video_editor import extract_audio, build_clip
+
+
+def _force_exit(code: int):
+    """Encerra o processo IMEDIATAMENTE — usado tanto no fim normal do
+    programa quanto pelo watchdog (ver _start_watchdog) se algo travar no
+    meio do processamento.
+
+    HISTÓRICO (pra quem ler isso depois): a v1 dessa função usava só
+    os._exit(code) — resolvia em teoria (mata o processo sem esperar o
+    shutdown "educado" do interpretador), mas foi reportado continuar
+    travando mesmo assim. Isso aponta pra uma causa mais funda que
+    os._exit() não cobre: no Windows, tanto o encerramento normal quanto
+    os._exit() (que por baixo dos panos chama a mesma ExitProcess do
+    Windows) ainda esperam o sistema notificar TODAS as DLLs carregadas no
+    processo (DLL_PROCESS_DETACH) antes de morrer de verdade — e se
+    alguma DLL nativa carregada (driver de GPU é o suspeito clássico;
+    aqui você tá usando AMD AMF) tiver uma rotina de finalização travada/
+    em deadlock, o processo INTEIRO fica preso exatamente nesse ponto,
+    depois de já ter impresso tudo, sem responder a Ctrl+C (é uma trava
+    dentro do carregador de DLL do próprio Windows, não em código Python
+    que o interpretador consiga interromper).
+
+    CORREÇÃO (v2): TerminateProcess (API do Windows, chamada direto via
+    ctypes, não a função _exit()/os._exit() do C) mata o processo no
+    nível do sistema operacional SEM notificar nenhuma DLL — é o mesmo
+    mecanismo que o Gerenciador de Tarefas usa pra "Finalizar tarefa".
+    Não tem como ficar mais forçado que isso sem ser de fora do processo.
+
+    HONESTIDADE: continuo sem conseguir reproduzir esse travamento aqui
+    (sem Windows real, sem AMD AMF, sem faster-whisper/whisper.cpp
+    instalados neste ambiente) — é a correção mais forte disponível pra
+    esse tipo de sintoma (processo Windows preso na hora de sair), não
+    uma confirmação de que era exatamente isso. Se ainda travar depois
+    dessa versão, o travamento não é mais no ENCERRAMENTO do processo (já
+    que isso mata até isso) — seria durante o PROCESSAMENTO em si (ver
+    _start_watchdog abaixo, que cobre esse caso também).
+    """
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":
+        try:
+            kernel32 = ctypes.windll.kernel32
+            kernel32.TerminateProcess(kernel32.GetCurrentProcess(), code)
+            # TerminateProcess mata o processo antes desta linha rodar --
+            # esse "return" só existe pra deixar claro que a função não
+            # continua (e como fallback se, por algum motivo, a chamada
+            # acima falhar silenciosamente em vez de matar o processo).
+            return
+        except Exception:
+            pass  # ctypes indisponível/falhou por algum motivo -- cai pro os._exit abaixo
+    os._exit(code)
+
+
+def _start_watchdog(timeout_seconds: float, scale_with_gpu: bool = False):
+    """Rede de segurança contra QUALQUER travamento (não só na saída) —
+    inclusive um processo ffmpeg/whisper.cpp que nunca retorna no meio do
+    processamento. Se o programa inteiro não terminar sozinho dentro de
+    `timeout_seconds`, essa thread força o encerramento com _force_exit().
+
+    Roda numa thread daemon=True (não segura a saída sozinha; se o
+    programa terminar normalmente antes do timeout, essa thread morre
+    junto com o processo sem nunca disparar). timeout_seconds vem de
+    config.WATCHDOG_TIMEOUT_SECONDS — ajuste lá se o seu conteúdo real
+    (vídeos muito longos, muitos clipes) legitimamente demorar mais que
+    o padrão."""
+    def _watchdog():
+        if scale_with_gpu:
+            # modo de GPU limitada (src/throttle.py) deixa tudo mais lento, e
+            # o modo pode mudar no meio: confere o limite a cada 15 s
+            from src.throttle import slowest_factor
+            t0 = time.time()
+            while time.time() - t0 < timeout_seconds * slowest_factor():
+                time.sleep(15)
+        else:
+            time.sleep(timeout_seconds)
+        print(f"\n[watchdog] o programa passou de {timeout_seconds/60:.0f} min sem terminar "
+              "sozinho -- isso não é normal, forçando encerramento agora (provável softlock; "
+              "ver RELATORIO_PROXIMOS_PASSOS.txt, item 11). Se o seu vídeo/quantidade de clipes "
+              "legitimamente precisa de mais tempo que isso, suba "
+              "config.WATCHDOG_TIMEOUT_SECONDS.")
+        _force_exit(1)
+    threading.Thread(target=_watchdog, daemon=True).start()
+
+
+def ask_int(prompt: str, default: int, min_v: int = 1, max_v: int = 20) -> int:
+    while True:
+        raw = input(f"{prompt} [{default}]: ").strip()
+        if not raw:
+            return default
+        if raw.isdigit() and min_v <= int(raw) <= max_v:
+            return int(raw)
+        print(f"   Digite um número entre {min_v} e {max_v}.")
+
+
+def _write_results(path: str, url: str, source_title, results) -> None:
+    """Lista dos clipes gerados, pro autopilot.py saber o que postar."""
+    import json
+    clips = []
+    for final_path, cand in results:
+        p = Path(final_path)
+        clips.append({
+            "video": str(p.resolve()),
+            "meta": str(p.with_suffix(".meta.json").resolve()),
+            "start": round(cand.start, 2), "end": round(cand.end, 2),
+            "score": round(float(cand.score), 2),
+        })
+    Path(path).write_text(json.dumps({"url": url, "source_title": source_title, "clips": clips},
+                                     ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def main():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--url", default=None)
+    parser.add_argument("--clips", type=int, default=None)
+    # usados pelo autopilot.py (que roda este programa como "operário"):
+    # pasta de saída própria e um .json com a lista dos clipes gerados
+    parser.add_argument("--out", default=None)
+    parser.add_argument("--results", default=None)
+    # idioma da fala (ex.: "en" pra canal gringo); padrão: WHISPERCPP_LANGUAGE
+    parser.add_argument("--lang", default=None)
+    # canal de gameplay com facecam ("...|game" na lista de canais): câmera
+    # alterna entre o streamer e o jogo (ver src/gameplay.py)
+    parser.add_argument("--game", action="store_true")
+    cli_args, _ = parser.parse_known_args()
+    if cli_args.game:
+        config.GAMEPLAY_MODE = True
+    if cli_args.lang:
+        config.WHISPERCPP_LANGUAGE = cli_args.lang
+        config.CONTENT_LANGUAGE = cli_args.lang
+    if cli_args.out:
+        config.OUTPUT_DIR = cli_args.out
+
+    print("=" * 62)
+    print("  AUTO CLIPPER — Cortes virais automáticos (estilo Opus Clip)")
+    print("=" * 62)
+
+    # modo de GPU (25/50/70/sem limite, ver src/throttle.py): o modo salvo
+    # (pode ser trocado na interface com a edição rodando)
+    from src import throttle
+    gpu = throttle.install()
+    if gpu < 100:
+        print(f"  Modo: {throttle.describe(gpu)} (transcrição e encode pausam parte de cada segundo)")
+    _start_watchdog(getattr(config, "WATCHDOG_TIMEOUT_SECONDS", 90 * 60), scale_with_gpu=True)
+
+    ensure_ffmpeg()
+    from src.downloader import ytdlp_cmd
+    if ytdlp_cmd() == ("yt-dlp",) and not check_dependency("yt-dlp"):
+        print("[ERRO] yt-dlp não encontrado. Instale com: pip install yt-dlp")
+        sys.exit(1)
+
+    print(f"  Encode de vídeo: {hwaccel.describe()}")
+
+    if cli_args.url:
+        url = cli_args.url.strip()
+        print(f"\nCole o link do vídeo do YouTube: {url}")
+    else:
+        url = input("\nCole o link do vídeo do YouTube (ou o caminho de um arquivo de vídeo): ").strip()
+    if not url:
+        print("Nenhum link informado. Encerrando.")
+        sys.exit(1)
+
+    if cli_args.clips is not None:
+        n_clips = cli_args.clips
+        print(f"Quantos clipes você quer gerar? [3]: {n_clips}")
+    else:
+        n_clips = ask_int("Quantos clipes você quer gerar?", default=3, min_v=1, max_v=15)
+
+    work_dir = ensure_dir(config.WORK_DIR)
+    output_dir = ensure_dir(config.OUTPUT_DIR)
+
+    t0 = time.time()
+    try:
+        local = Path(url.strip('"'))
+        if local.is_file():
+            # arquivo do próprio PC no lugar do link: usa direto
+            print(f"[1/6] Usando o arquivo local: {local}")
+            source_path, source_title = local, local.stem
+            url = None
+        else:
+            source_path = download_youtube_video(url, str(work_dir))
+            # título do vídeo original, só pro crédito no .post.txt de cada
+            # clipe -- se falhar (rede, vídeo privado...), segue sem ele
+            try:
+                source_title = get_video_title(url)
+            except Exception:
+                source_title = None
+        # dica de vocabulário pro Whisper: nomes próprios do título
+        from src import transcriber as _tr
+        from src import ai_judge as _aj
+        _tr.set_context(source_title)
+        _aj.set_context(source_title)
+        info = video_info(source_path)
+        print(f"    Duração: {info['duration']/60:.1f} min | "
+              f"{info['width']}x{info['height']} | {info['fps']:.1f}fps")
+        # vídeo salvo esticado (ex.: gravado no celular em pé e salvo em
+        # 16:9): corrige a proporção antes de tudo -- ver src/aspect_fix.py
+        source_path, info = aspect_fix.fix_squeezed_source(str(source_path), info, str(work_dir))
+
+        # Modo REACT: o vídeo é um streamer com facecam sobreposta ao vídeo
+        # que ele está reagindo? Se for, os clipes saem em tela dividida
+        # (conteúdo em cima, streamer embaixo) em vez de a câmera ficar
+        # pulando entre o rosto do vídeo reagido e o do streamer.
+        react = None
+        gameplay = getattr(config, "GAMEPLAY_MODE", False)
+        if gameplay:
+            print("    Canal de gameplay: procurando a facecam do streamer...")
+            react = react_layout.detect_react_layout(
+                str(source_path), info["duration"], info["width"], info["height"], relaxed=True)
+            if react is not None:
+                x, y, w, h = react.cam_box
+                print(f"    -> Facecam em x={x} y={y} ({w}x{h}) -- câmera alterna entre o streamer "
+                      f"(jogo calmo, ele falando) e o jogo (ação, voice chat).")
+            else:
+                print("    -> Sem facecam fixa neste vídeo: reenquadramento comum.")
+        elif getattr(config, "REACT_MODE_AUTO_DETECT", True):
+            print("    Analisando se o vídeo é um react (facecam sobreposta)...")
+            react = react_layout.detect_react_layout(
+                str(source_path), info["duration"], info["width"], info["height"])
+            if react is not None:
+                x, y, w, h = react.cam_box
+                print(f"    -> REACT detectado: facecam em x={x} y={y} ({w}x{h}) -- "
+                      f"clipes em tela dividida (conteúdo em cima, streamer embaixo).")
+            else:
+                print("    -> Vídeo comum (sem facecam sobreposta).")
+
+        if long_video.is_long_video(info["duration"]):
+            # Vídeo longo (> LONG_VIDEO_THRESHOLD_SECONDS): não transcreve o
+            # vídeo inteiro de uma vez — transcreve por blocos aleatórios,
+            # montando o clipe de cada bloco bom assim que ele fica pronto,
+            # enquanto o bloco seguinte já é transcrito em segundo plano.
+            # Ver src/long_video.py para os detalhes do pipeline.
+            print(f"\n    Vídeo longo detectado ({info['duration']/60:.1f} min > "
+                  f"{config.LONG_VIDEO_THRESHOLD_SECONDS/60:.0f} min) — transcrevendo por "
+                  f"blocos de {config.CHUNK_DURATION_SECONDS/60:.0f} min em vez do vídeo "
+                  "inteiro de uma vez.\n")
+            chunk_work_dir = ensure_dir(work_dir / "chunks")
+            results = []
+            clip_index = 0
+            # Construído sequencialmente (um clipe de cada vez) por
+            # simplicidade/robustez: o ganho de eficiência pedido já vem do
+            # bloco seguinte sendo transcrito em segundo plano ENQUANTO este
+            # clipe é montado (ver long_video.iter_long_video_clip_batches);
+            # paralelizar também a montagem dos clipes entre si (como no
+            # ramo de vídeo curto abaixo, via hwaccel) é possível de somar
+            # depois, mas não é necessário para o pedido original.
+            for batch in long_video.iter_long_video_clip_batches(
+                    str(source_path), info["duration"], n_clips, chunk_work_dir):
+                for cand in batch:
+                    clip_index += 1
+                    final_path = build_clip(
+                        str(source_path), cand, clip_index, cand.words,
+                        str(work_dir), str(output_dir),
+                        info["width"], info["height"], info["fps"],
+                        source_title=source_title, source_url=url, react_layout=react,
+                    )
+                    results.append((final_path, cand))
+        else:
+            full_audio = work_dir / "full_audio.wav"
+            extract_audio(str(source_path), str(full_audio))
+
+            transcript = transcribe(
+                str(full_audio),
+                model_size=config.WHISPER_MODEL_SIZE,
+                device=config.WHISPER_DEVICE,
+                compute_type=config.WHISPER_COMPUTE_TYPE,
+            )
+
+            candidates = select_clips(transcript, str(full_audio), info["duration"], n_clips)
+
+            n_workers = hwaccel.resolve_parallel_clips(len(candidates))
+            hwaccel.set_parallel_workers(n_workers)
+            results = [None] * len(candidates)
+
+            if n_workers > 1:
+                print(f"\nProcessando {len(candidates)} clipe(s) — até {n_workers} em paralelo "
+                      f"(aproveitando os núcleos da CPU)...\n")
+                with ThreadPoolExecutor(max_workers=n_workers) as pool:
+                    futures = {
+                        pool.submit(
+                            build_clip, str(source_path), cand, i + 1,
+                            transcript.words, str(work_dir), str(output_dir),
+                            info["width"], info["height"], info["fps"],
+                            source_title=source_title, source_url=url, react_layout=react,
+                        ): i
+                        for i, cand in enumerate(candidates)
+                    }
+                    for fut in as_completed(futures):
+                        idx = futures[fut]
+                        results[idx] = (fut.result(), candidates[idx])
+            else:
+                for i, cand in enumerate(candidates, 1):
+                    final_path = build_clip(
+                        str(source_path), cand, i, transcript.words, str(work_dir), str(output_dir),
+                        info["width"], info["height"], info["fps"],
+                        source_title=source_title, source_url=url, react_layout=react,
+                    )
+                    results[i - 1] = (final_path, cand)
+
+        if cli_args.results:
+            _write_results(cli_args.results, url, source_title, results)
+
+        elapsed = time.time() - t0
+        # watchdog CURTO (independente do de _start_watchdog(90min) lá em
+        # cima, que cobre travas durante o PROCESSAMENTO) — o usuário
+        # relatou o processo ficando preso bem AQUI, depois de já ter
+        # impresso tudo, sem responder Ctrl+C/Enter, mesmo já existindo o
+        # _force_exit(0) logo abaixo com TerminateProcess. Não consigo
+        # confirmar a causa raiz exata sem reproduzir num Windows real com
+        # essa GPU/driver — mas essa rede de segurança curta (poucos
+        # segundos, não os 90min do watchdog de processamento) garante que,
+        # não importa o que trave depois deste ponto (o próprio
+        # TerminateProcess incluso), o processo morre logo em seguida em
+        # vez de ficar preso indefinidamente.
+        _start_watchdog(getattr(config, "EXIT_WATCHDOG_SECONDS", 6))
+        total_clip_seconds = sum(cand.duration for _, cand in results)
+        speed = total_clip_seconds / elapsed if elapsed > 0 else 0.0
+        print("\n" + "=" * 62)
+        print(f"  CONCLUÍDO em {elapsed/60:.1f} min — {len(results)} clipe(s) gerado(s)")
+        print(f"  Velocidade média: {speed:.1f}x tempo real "
+              f"({total_clip_seconds:.0f}s de clipes em {elapsed:.0f}s de processamento)")
+        print("=" * 62)
+        for path, cand in results:
+            print(f"  • {Path(path).name}")
+            print(f"      {cand.start:.1f}s -> {cand.end:.1f}s  |  score {cand.score:.1f}")
+            print(f"      \"{cand.title}\"")
+        print(f"\nArquivos salvos em: {output_dir.resolve()}")
+
+    except Exception as e:
+        print(f"\n[ERRO] {e}")
+        traceback.print_exc()
+        _force_exit(1)
+    else:
+        _force_exit(0)
+
+
+if __name__ == "__main__":
+    main()

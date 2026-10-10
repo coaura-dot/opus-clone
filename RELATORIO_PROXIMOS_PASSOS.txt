@@ -1,0 +1,1148 @@
+RELATÓRIO DE PROGRESSO E PRÓXIMOS PASSOS — Auto Clipper
+==========================================================
+(Gerado como dump de progresso. Contém o que já foi feito, o que foi
+tentado e não funcionou, e o plano recomendado para continuar.)
+
+>>> ADENDO — CICLO SEGUINTE: as 3 pendências abaixo (item 2, e os dois
+>>> pedidos do item 3) foram implementadas. Ver seção 6 no final deste
+>>> arquivo para o que mudou, o que foi validado de verdade e o que
+>>> ainda precisa da SUA validação com um clipe real (principalmente o
+>>> item 2 — a calibração numérica não pôde ser refeita nos mesmos dados
+>>> porque o clipe de teste original não está disponível neste ambiente).
+
+>>> ADENDO 2 — ver item 16 (final do arquivo): fim/início de assunto
+>>> ganhou um terceiro sinal (coesão lexical/TextTiling), pra pegar
+>>> virada de assunto sem pausa nem palavra-chave, em resposta direta à
+>>> cobrança de que a v. anterior só cobria bug mecânico, não "entender o
+>>> contexto". Ação sua: rodar scripts/validate_topic_lexical.py com
+>>> transcrições reais e calibrar TOPIC_LEXICAL_BOUNDARY_MIN.
+
+
+1) O QUE ESTE ZIP JÁ TEM APLICADO (e testado)
+----------------------------------------------
+
+a) config.py e reframer.py foram sincronizados com a última versão
+   validada (a que você colou no chat). O zip que você enviou estava
+   DESATUALIZADO em relação a essa versão — especificamente, o bug da
+   histerese abaixo ainda não tinha sido corrigido nele.
+
+b) BUG CORRIGIDO — histerese de troca de rosto 4x mais lenta que
+   configurado (src/reframer.py, classe _FaceActivityTracker.__init__):
+   `min_switch_frames` estava calculado como `switch_s * fps` (unidade:
+   FRAMES), mas o contador que ele limita (`candidate_streak`, em
+   `choose_active`) só incrementa uma vez por CHECAGEM de detecção (a
+   cada FACE_DETECT_EVERY_N_FRAMES=4 frames), não uma vez por frame.
+   Corrigido para `switch_s / check_interval` (mesma unidade que
+   `max_missed_checks`, linha acima, já usava corretamente).
+   Verificado numericamente neste zip: com fps=30 e detect_interval=4,
+   FACE_SWITCH_MIN_SECONDS=0.7 agora dá min_switch_frames=5 checagens
+   (~0.7s reais), não mais ~15 checagens (~2s reais) como antes.
+
+c) BUG CORRIGIDO — whisper.cpp, 3 problemas em
+   src/transcriber_whispercpp.py:
+   - Flag `-dev` não existe no whisper-cli (confirmado contra o -h
+     oficial). Seleção de GPU no backend Vulkan é por variável de
+     ambiente `GGML_VK_VISIBLE_DEVICES`, não por flag de CLI. Trocado.
+   - `WHISPERCPP_THREADS=0` virava sempre `8` fixo (`threads or 8`),
+     contrariando o comentário em config.py que promete detectar os
+     núcleos da CPU. Trocado para usar `os.cpu_count()` de verdade
+     quando threads=0.
+   - Faltava `import os` (necessário pelas duas correções acima).
+
+d) Rodei `python3 -c "import ast; ..."` em todos os .py do projeto:
+   sintaxe OK em todos. NÃO rodei o pipeline completo ponta-a-ponta
+   neste ciclo (sem vídeo de teste longo disponível aqui e para não
+   gastar tokens) — recomendo rodar `test_pipeline.py` na sua máquina
+   antes de usar em produção.
+
+
+2) PROBLEMA ABERTO — discriminador de "quem está falando" é fraco
+--------------------------------------------------------------------
+
+Contexto: a câmera prioriza, entre os rostos visíveis, quem tem mais
+"atividade" (movimento perto da boca). Um problema real encontrado: uma
+pessoa OUVINDO leva a mão ao queixo/rosto (gesto comum de quem está
+pensando) e isso gera uma variação de pixel parecida ou maior que a
+boca de quem fala de verdade — a câmera pula pra quem só fez esse gesto.
+
+Tentativa 1 (já no código, `FACE_OCCLUSION_CONTRAST_MIN` em config.py e
+o bloco "1. desconta oclusão" em `sample_motion`, reframer.py):
+descontar o score de movimento quando o CONTRASTE em escala de cinza do
+recorte é baixo (ideia: pele lisa = contraste baixo; boca com lábio/
+dentes/sombra = contraste alto).
+
+RESULTADO DA VALIDAÇÃO (com o clipe real enviado — ver comando abaixo):
+essa métrica NÃO discrimina bem. Razão de atividade entre a janela
+"mão no queixo" (~23-25s do clipe) e a janela "fala real" (~9-12s)
+ficou em apenas ~1.11x — praticamente não separa os dois casos. O
+motivo provável: uma mão bem iluminada, com dedos e sombras entre eles,
+também tem contraste de luminância razoável — a métrica em escala de
+cinza confunde "textura" com "boca".
+
+Tentativa 2 (investigada, NÃO implementada — é o próximo passo):
+usar o desvio-padrão do MATIZ (hue, no espaço de cor HSV), não da
+luminância, do mesmo recorte. Lógica: uma boca real tem cores bem
+variadas (vermelho dos lábios, branco/creme dos dentes, tons escuros da
+sombra interna) — matiz variado. Uma mão cobrindo é essencialmente pele
+uniforme — matiz quase constante, mesmo com textura/sombra de
+luminância. Testado nos MESMOS dados reais (mesmas duas janelas): razão
+subiu para ~2.2x — bem melhor, ainda não perfeito, mas um sinal
+consideravelmente mais forte.
+
+COMANDO USADO PARA VALIDAR (reproduza a fase de teste em ambos os
+scripts, o "winA/winB" abaixo, comparando os discriminadores):
+
+    ffmpeg -y -v error -i "<clipe>.mp4" -ss 9.0 -t 3.0 -vsync 0 winA_%04d.png
+    ffmpeg -y -v error -i "<clipe>.mp4" -ss 23.0 -t 2.2 -vsync 0 winB_%04d.png
+
+  winA = trecho em que ela está falando (esperado: atividade alta)
+  winB = trecho em que ela está com a mão no queixo, ELE fala (esperado:
+         atividade baixa — mas com o filtro de contraste, saiu quase
+         igual a winA)
+
+PLANO RECOMENDADO PARA A PRÓXIMA SESSÃO:
+  1. Em `_FaceActivityTracker.sample_motion` (reframer.py), além do
+     patch em escala de cinza já usado para o score de movimento, tirar
+     TAMBÉM um patch em HSV do mesmo recorte (`cv2.cvtColor(crop,
+     cv2.COLOR_BGR2HSV)`) e calcular `hue_std = np.std(patch_hsv[:,:,0])`.
+  2. Substituir (ou combinar) `occlusion_factor` — hoje baseado em
+     `contrast` (desvio-padrão de cinza) — por uma versão baseada em
+     `hue_std`, recalibrando `FACE_OCCLUSION_CONTRAST_MIN` para a nova
+     escala (o valor 9.0 atual foi calibrado para desvio de LUMINÂNCIA
+     0-255; hue em OpenCV vai de 0-179, a faixa "boca real" vs "pele
+     lisa" precisa ser remedida nos mesmos dados de validação).
+  3. Como o hue é ruidoso em regiões pequenas/escuras (baixa saturação
+     -> hue não é confiável), considere ponderar por saturação média do
+     recorte (`np.mean(patch_hsv[:,:,1])`) — descontar ainda mais o
+     score quando saturação também for baixa (pele muito clara/sombra
+     forte tem hue instável independente de ser boca ou não).
+  4. RE-VALIDAR com o mesmo comando/janelas acima antes de considerar
+     resolvido — a razão 2.2x já é bem melhor que 1.11x, mas vale testar
+     se combinar hue + o filtro de sustentação (`_burst_factor`, que já
+     existe e funciona por um princípio diferente — oscilação no tempo,
+     não cor) fecha o buraco que sobrar.
+  5. Sanity check adicional útil: testar em pelo menos 2-3 clipes reais
+     diferentes (tons de pele, iluminação e ângulos diferentes) antes de
+     considerar a calibração final — os números acima vêm de UM clipe.
+
+
+3) PEDIDOS AINDA NÃO INICIADOS (mencionados na conversa, zero código
+   escrito para eles neste projeto)
+------------------------------------------------------------------------
+
+a) "Se o youtuber estiver assistindo um vídeo, focar no vídeo (não no
+   rosto) enquanto ele estiver rodando ou enquanto alguém estiver
+   falando nele."
+   Não há nenhuma detecção de "tela dentro da tela" no projeto hoje.
+   Abordagem sugerida para uma futura sessão: detectar uma região
+   retangular de alto contraste/movimento consistente (candidato a tela
+   de vídeo) via análise de bordas (Canny + contornos retangulares) ou,
+   mais simples/robusto: pedir a região manualmente por clipe não é
+   viável (pipeline é automático) — então provavelmente vale um
+   classificador leve ou heurística de "retângulo estável com bastante
+   variação de pixel interna e pouca fora dele". É trabalho novo, não
+   uma extensão do que já existe.
+
+b) "Identificar o desfecho do assunto/piada e encerrar o clipe no
+   momento certo" (o clipe testado cortou em cima de uma pergunta-gancho
+   "Sabe qual é o durão?", sem a resposta).
+   `src/clip_selector.py` hoje NÃO tem nenhuma lógica de "achar o fim
+   natural de uma piada/resposta" — ele escolhe janelas de duração-alvo
+   (MIN/MAX/IDEAL_CLIP_DURATION) por pontuação de "gancho" no INÍCIO,
+   mas não olha para o fim de forma semântica. Grep confirma: não há
+   nenhuma menção a "desfecho", "punchline" ou lógica de fechamento no
+   arquivo atual.
+   Abordagem sugerida: usar os próprios timestamps de palavra do Whisper
+   e heurísticas de fim de frase (pontuação final, pausa longa após uma
+   palavra, ou até pedir para o próprio Whisper/um modelo de texto
+   pequeno apontar o fim de uma resposta) para esticar/encolher o fim do
+   clipe alguns segundos além do corte por duração-alvo, procurando o
+   próximo silêncio/fim-de-frase natural em vez de cortar em um ponto
+   fixo. Também é trabalho novo.
+
+
+4) SOBRE A DEMORA NO WHISPER (pergunta feita antes deste ciclo)
+------------------------------------------------------------------
+Resumo do que já está no projeto pra isso (config.py):
+  - TRANSCRIBE_ENGINE="whispercpp": motor alternativo via whisper.cpp
+    compilado com Vulkan, único caminho que usa a RX 580 de fato na
+    transcrição (o motor padrão faster-whisper/CTranslate2 NUNCA usa
+    GPU AMD, em nenhum SO — só CPU ou CUDA/NVIDIA). Requer compilar o
+    whisper-cli.exe você mesmo (ver README.md) e apontar
+    WHISPERCPP_BIN/WHISPERCPP_MODEL para os caminhos certos — já
+    ajustados no config.py deste zip para os seus caminhos
+    (C:\Users\igo\Desktop\opus2\...), confirme se ainda são válidos.
+  - WHISPER_BATCHED=True / WHISPER_BEAM_SIZE=1: otimizações do motor
+    padrão (faster-whisper), usadas como fallback se whispercpp não
+    estiver configurado/disponível.
+  - NÃO TESTADO NESTE CICLO NEM NO ANTERIOR: se o whisper.cpp compilado
+    com Vulkan de fato acelera na RX 580 real (exige a GPU física, que
+    não existe neste ambiente de desenvolvimento). Teste na sua máquina
+    e meça o tempo antes/depois.
+
+
+5) COMO RETOMAR
+------------------
+Meça de novo a razão de discriminação (seção 2) depois de trocar
+contraste-de-cinza por desvio-padrão-de-matiz em `sample_motion`. Se a
+razão subir o suficiente (teste em 2-3 clipes, não só 1) para a câmera
+parar de pular para quem só gesticula perto do rosto, o pedido original
+("capriche mais no enquadramento, em quem está falando") fica resolvido.
+Os itens da seção 3 (foco em vídeo-dentro-do-vídeo, detecção de
+desfecho) são pedidos independentes, ainda não iniciados — tratar como
+próxima etapa separada, não bloqueiam o item da seção 2.
+
+
+6) O QUE FOI FEITO NESTE CICLO (aplicando as 3 pendências acima)
+------------------------------------------------------------------
+
+a) ITEM 2 — discriminador de "quem fala" trocado de contraste (cinza)
+   para desvio-padrão de matiz (hue), como planejado na seção 2/5.
+   Arquivos: src/reframer.py (`_FaceActivityTracker.sample_motion`),
+   src/config.py (FACE_OCCLUSION_USE_HUE/HUE_STD_MIN/SAT_FLOOR).
+   O que FOI validado aqui: a mecânica da fórmula (patch HSV, hue_std,
+   ponderação por saturação, clipping) responde corretamente a variação
+   de matiz num teste sintético controlado (cor única -> fator no piso;
+   cores variadas e saturadas -> fator perto de 1.0).
+   O que NÃO foi (e não podia ser) validado aqui: a discriminação real
+   mão-vs-boca no MESMO clipe do relatório (~1.11x contraste / ~2.2x hue)
+   — esse vídeo não está disponível neste ambiente, e um teste sintético
+   de "boca desenhada à mão" não reproduz tons de pele/lábio reais o
+   bastante pra significar algo (tentei, o resultado saiu invertido por
+   causa das cores que escolhi à mão, não por erro na fórmula).
+   AÇÃO NECESSÁRIA SUA: rode
+     python3 scripts/validate_occlusion_hue.py <clipe.mp4> \
+         --winA <inicio_fala> <duracao> --winB <inicio_oclusao> <duracao>
+   (novo script incluído, reproduz a metodologia da seção 2 usando os
+   valores atuais de config.py) com o clipe real e as janelas originais.
+   Se o ratio hue sair bem acima de 1x (idealmente perto do ~2.2x medido
+   antes), a calibração default (HUE_STD_MIN=10.0, SAT_FLOOR=40.0) está
+   ok; senão, ajuste os dois valores e rode de novo — o script foi feito
+   pra iterar rápido sem tocar no pipeline principal.
+
+b) ITEM 3b — desfecho de pergunta-gancho/piada sem resposta.
+   Arquivo: src/clip_selector.py (`_ends_on_open_question`,
+   DANGLING_QUESTION_PENALTY em config.py).
+   Abordagem: penalidade de pontuação quando a ÚLTIMA frase da janela
+   candidata termina em "?" ou casa um padrão de "setup" (PT/EN) E existe
+   uma frase seguinte no vídeo que poderia ter sido incluída — o próprio
+   loop de janelas (que já testa +1, +2 frases) passa a preferir
+   naturalmente a versão com a resposta, sem precisar de busca nova.
+   VALIDADO com um transcript sintético reproduzindo o caso relatado
+   ("Sabe qual é o durão?" + resposta na frase seguinte): a janela
+   escolhida passou a incluir a resposta automaticamente.
+   Limitação conhecida: só cobre perguntas/ganchos explícitos (via regex
+   + "?"); não detecta desfecho semântico sem marcador textual óbvio
+   (ex.: uma afirmação que só "fecha" pelo tom, sem pergunta antes).
+
+c) ITEM 3a — foco em vídeo dentro do vídeo. NOVO, não uma correção.
+   Arquivos: src/reframer.py (`_detect_screen_region`, `_ScreenTracker`,
+   `_compose_screen_frame`, modo "screen" no loop principal de
+   render_vertical_clip), src/config.py (VIDEO_IN_VIDEO_*).
+   Abordagem: detecção geométrica (Canny + contorno de 4 vértices +
+   proporção plausível de tela) + confirmação por estabilidade (mesma
+   região por tempo suficiente) + atividade de pixel sustentada (pra não
+   confundir com foto/quadro parado) — só então a câmera passa a seguir a
+   tela, com o mesmo crossfade suave já usado nas outras trocas de modo.
+   DESLIGADO POR PADRÃO (VIDEO_IN_VIDEO_ENABLED=False) — não testado
+   contra nenhum clipe real de "vídeo reagindo a vídeo" (não tinha nenhum
+   disponível). Testei só a mecânica: (1) com a flag desligada, o
+   comportamento é idêntico a antes (regressão OK); (2) com a flag ligada,
+   roda sem erro num clipe sintético até o fim, gera arquivo válido — mas
+   isso NÃO confirma que a detecção geométrica funciona bem em conteúdo
+   real (um vídeo sintético não tem uma "tela" de verdade pra detectar).
+   AÇÃO NECESSÁRIA SUA: ligue VIDEO_IN_VIDEO_ENABLED=True num clipe real
+   com tela-dentro-da-tela e avalie visualmente antes de considerar
+   pronto; ajuste VIDEO_IN_VIDEO_ACTIVITY_MIN se estiver pegando objetos
+   parados como "tela" ou perdendo uma tela real de baixo movimento.
+
+Rodei `python3 -c "import ast; ..."` em todos os .py do projeto (17
+arquivos) depois das mudanças: sintaxe OK em todos. Não rodei o
+`test_pipeline.py` nem o pipeline ponta-a-ponta com um vídeo real (mesma
+limitação do ciclo anterior — sem vídeo de teste longo nem GPU AMD
+disponível neste ambiente); recomendo rodar antes de usar em produção.
+
+
+7) VALIDAÇÃO FEITA NA SESSÃO SEGUINTE (aplicando este zip + testando com
+   um clipe real disponível naquele ambiente)
+------------------------------------------------------------------------
+
+a) Zip adotado como base nova, sem regressão: diff completo contra a versão
+   anterior confirmou que config.py/reframer.py preservam TODAS as
+   correções já em produção (câmera contínua, legenda sem vãos, zoom punch
+   desligado, limiar de fallback/mode-blend em segundos) — as mudanças
+   deste zip são só adições em cima disso, nada foi revertido.
+
+b) src/music.py: a versão deste zip resolve o MESMO bug que já estava
+   sendo corrigido em paralelo (acentos quebrados tipo '#U00e3' e
+   remixes com 'ft. Fulano' encaixado no meio do título), com uma
+   abordagem até mais robusta (subsequência ordenada de palavras, em vez
+   de substring/token-set). Adotada. Testada contra o lote real de 62 mp3
+   baixados pelo usuário: 50 aceitas (título batendo + áudio de verdade
+   confirmado por ffprobe), 12 rejeitadas corretamente (vídeos de
+   conserto de carro, aula de direito, notícia, dica de concurso —
+   nenhuma delas é música) — copiadas para assets/music/.
+
+c) `test_pipeline.py` (vídeo sintético) rodou OK de ponta a ponta, com as
+   50 músicas reais presentes.
+
+d) `render_vertical_clip` também rodado contra um clipe REAL (não só o
+   sintético) — sem erro, saída visualmente correta. Esse clipe real
+   disponível já era uma SAÍDA anterior do pipeline (um recorte vertical
+   de um locutor por vez, legenda já queimada), não a gravação bruta
+   original com os dois participantes lado a lado — então não dá pra
+   validar o rastreamento multi-rosto de verdade com ele (só 1 rosto por
+   vez already-cropped).
+
+e) Histerese (item 1b) re-verificada numericamente com os valores atuais
+   de config.py (fps=30, detect_interval=4, FACE_SWITCH_MIN_SECONDS=0.7):
+   deu 5 checagens = 0.667s reais, bate com os 0.7s configurados.
+
+f) Desfecho de pergunta-gancho (item 3b) testado com 5 frases (PT e EN,
+   pergunta-gancho e frase neutra): todos os casos classificados
+   corretamente.
+
+g) transcriber_whispercpp.py: sem binário/GPU disponível nesse ambiente
+   também (mesma limitação de sempre), mas confirmei que falha de forma
+   clara e acionável (FileNotFoundError com instrução do que configurar)
+   em vez de travar com um erro obscuro quando WHISPERCPP_BIN/MODEL não
+   existem — importante porque é exatamente o que vai acontecer na
+   primeira vez que alguém rodar isso sem compilar o whisper.cpp ainda.
+
+h) ITEM 2 (discriminador hue) — tentativa de fechar a "AÇÃO NECESSÁRIA
+   SUA": o clipe disponível não é o vídeo bruto original do relatório
+   (ver 'd' acima), então os timestamps winA=9s/winB=23s sugeridos NÃO
+   reproduzem o teste original (rodar com eles dá 4.27x, mas é só uma
+   comparação "duas pessoas falando em momentos diferentes", não
+   "mão-no-queixo vs fala real" — não significa nada em relação ao
+   problema real).
+   Em vez de forçar isso, procurei dentro do próprio clipe um par de
+   janelas genuinamente comparável (mesmo locutor, mesma iluminação,
+   poucos segundos de diferença): ~12.0-13.5s (rindo/falando, boca
+   visível, sem mão) vs ~13.8-15.1s (mão cobrindo boca/queixo, mesmo
+   locutor, momentos depois). Resultado real:
+     hue:       ratio A/B = 1.70x
+     contraste: ratio A/B = 1.54x
+   Hue continua vencendo o contraste na mesma direção do relatório
+   original (confirma a conclusão qualitativa), mas a margem é bem mais
+   fraca que o ~2.2x medido no clipe original, e fica abaixo do limiar
+   "bom" (1.8x) do próprio script de validação. É um SEGUNDO ponto de
+   dado real (clipe/iluminação/tom de pele diferentes do primeiro) — e
+   reforça exatamente a recomendação que já estava no item 2/passo 5:
+   testar em 2-3 clipes reais diferentes antes de considerar a
+   calibração fechada. Ainda não está — continua sendo uma ação sua
+   (rodar scripts/validate_occlusion_hue.py nos SEUS clipes reais, com
+   os dois casos: o do relatório original E este novo, e ajustar
+   FACE_OCCLUSION_HUE_STD_MIN/SAT_FLOOR se a margem continuar fraca).
+
+i) NÃO validado nesta sessão (mesma limitação de ambiente, sem mudança de
+   status): item 3a (vídeo dentro do vídeo — precisa de um clipe real de
+   reação/tela-na-tela, que não estava disponível) e a velocidade real do
+   whisper.cpp+Vulkan na RX 580 física (precisa da GPU de verdade).
+
+
+8) NOVO CICLO — vídeo longo por blocos, fim de assunto e volume da música
+------------------------------------------------------------------------
+Três pedidos novos, sem relação com o item do "hue" (esse já estava
+implementado e resolvido antes desta sessão — só confirmado, nada
+alterado em reframer.py/detecção de rosto neste ciclo).
+
+a) VÍDEO LONGO POR BLOCOS (novo arquivo src/long_video.py)
+   Pedido: vídeo > 39min é dividido em blocos de 20min; um bloco aleatório
+   é transcrito por vez; se o melhor candidato do bloco não tiver viral
+   score alto o bastante, transcreve o próximo enquanto monta o clipe do
+   bloco anterior (pipeline).
+
+   Implementação: LONG_VIDEO_THRESHOLD_SECONDS/CHUNK_DURATION_SECONDS/
+   CHUNK_VIRAL_SCORE_MIN em config.py. main.py detecta vídeo longo
+   (long_video.is_long_video) e usa long_video.iter_long_video_clip_batches
+   em vez do fluxo de transcrição única. Blocos são RECORTES DE TEMPO sobre
+   o arquivo já baixado (via extract_audio_segment, sem recodificar vídeo
+   nem gerar arquivos separados por bloco) — funcionalmente equivalente ao
+   "dividir em 5 partes" descrito no pedido, mais barato. Pipeline
+   implementado com uma thread de fundo + fila (queue.Queue(maxsize=1)):
+   a transcrição do bloco seguinte começa assim que o bloco atual sai da
+   fila para o consumidor (main.py), então nunca fica mais de 1 bloco à
+   frente (não desperdiça transcrição em blocos que talvez nem sejam
+   necessários) nem ociosa esperando a montagem do clipe terminar.
+   Fallback: se NENHUM bloco do vídeo bater CHUNK_VIRAL_SCORE_MIN, usa os
+   melhores candidatos vistos mesmo abaixo do limiar (avisando no
+   console), em vez de terminar sem gerar nenhum clipe.
+
+   VALIDADO nesta sessão (com transcribe_fn injetável, sem depender de
+   faster-whisper/whisper.cpp reais — nenhum dos dois está disponível
+   neste ambiente, mesma limitação de sempre):
+   - build_chunks()/is_long_video(): matemática de divisão em blocos
+     (inclusive último bloco mais curto, não descartado).
+   - Early-stop: parou de transcrever assim que o PRIMEIRO bloco
+     processado já era bom o bastante, sem tocar nos outros 4.
+   - Sobreposição real: com transcrição e montagem simuladas em ~0.5s
+     cada, 3 blocos ficaram em ~2.5s de tempo total (contra ~3.0s
+     rodando em sequência estrita) — confirma que a transcrição do
+     próximo bloco de fato começa DURANTE a montagem do clipe atual, não
+     depois.
+   - Fallback: com um limiar de score impossível (999), devolveu o
+     melhor candidato mesmo assim, em vez de falhar.
+   - Caso vazio de verdade (nenhum candidato possível em nenhum bloco):
+     RuntimeError levantado corretamente, com mensagem acionável.
+   - test_pipeline.py (regressão do pipeline "curto") continua passando.
+
+   NÃO validado (mesma limitação de sempre — sem GPU/whisper.cpp
+   compilado nem yt-dlp/rede neste ambiente): a integração ponta-a-ponta
+   com download real + whisper real num podcast de horas de verdade.
+   AÇÃO NECESSÁRIA SUA: rode com um vídeo real > 39min e confirme que os
+   clipes saem coerentes; ajuste CHUNK_VIRAL_SCORE_MIN (comentário em
+   config.py explica por quê — a escala de score não foi calibrada contra
+   vídeo longo real) se estiver vendo muitos avisos de "completando com
+   candidato abaixo do limiar".
+
+b) FIM DE ASSUNTO (src/clip_selector.py)
+   Pedido: o clipe deve terminar quando o ASSUNTO acaba, não só quando a
+   frase acaba (a fronteira de frase já era respeitada antes disso).
+
+   Implementação: três sinais (qualquer um basta) — pausa longa após a
+   última frase da janela (TOPIC_BOUNDARY_PAUSE_SECONDS), a última frase
+   soa como fechamento ("e é isso", "resumindo" — _ends_on_topic_conclusion),
+   ou a frase seguinte já puxa outro assunto ("mudando de assunto", "anyway"
+   — _starts_new_topic). Quando um desses bate, a janela ganha
+   TOPIC_BOUNDARY_BONUS de score, e a busca (que já testa várias durações
+   via sliding window) passa a preferir esse ponto de parada. Candidatos
+   acima de MAX_CLIP_DURATION só são considerados quando alcançam um fim de
+   assunto (até MAX_CLIP_DURATION + TOPIC_BOUNDARY_GRACE_SECONDS) — não
+   incham a busca com opções ruins, só abrem espaço pras boas.
+
+   HONESTO: é uma heurística de padrão de texto + pausa, não segmentação
+   semântica de tópico de verdade (isso exigiria embeddings/um modelo de
+   linguagem, fora do escopo desta mudança). Cobre bem virada de assunto
+   com marcador textual ou pausa clara; não pega uma virada silenciosa sem
+   sinalização nenhuma.
+
+   VALIDADO com transcrição sintética (sem vídeo real disponível, mesma
+   limitação de sempre): construí um cenário com um "assunto 1" que termina
+   numa pausa longa + marcador de transição ("mudando de assunto") seguido
+   de um "assunto 2" neutro (sem gancho) e mais uma frase depois (pra não
+   cair no caso trivial de "é a última frase do vídeo"). A janela vencedora
+   parou exatamente no fim do assunto 1 (9.88s), e o score dessa janela
+   subiu exatamente TOPIC_BOUNDARY_BONUS (de 15.94 para 18.44) com o bônus
+   ligado vs desligado — confirma que o mecanismo dispara no ponto certo e
+   soma o valor certo. NÃO testado em conteúdo real (podcast/entrevista de
+   verdade) — vale rodar num clipe seu e ajustar TOPIC_BOUNDARY_PAUSE_SECONDS
+   /TOPIC_BOUNDARY_BONUS se a busca não estiver parando no lugar certo.
+
+   Efeito colateral encontrado e corrigido: TOPIC_BOUNDARY_GRACE_SECONDS
+   (padrão 12s, pensado para MAX_CLIP_DURATION=75s real) é desproporcional
+   às durações reduzidas que test_pipeline.py usa pro vídeo sintético de
+   20s (MAX_CLIP_DURATION=10 no teste) — sem ajustar, uma janela que
+   alcança o fim do vídeo (sempre conta como "fim de assunto") esticava
+   quase até o fim do vídeo de teste inteiro, reduzindo de 2 pra 1 clipe
+   encontrado. Corrigido escalando TOPIC_BOUNDARY_GRACE_SECONDS também em
+   test_pipeline.py (mesma proporção ~15-16% do MAX_CLIP_DURATION do
+   teste). Comportamento em produção (MAX_CLIP_DURATION=75s real) não é
+   afetado por esse ajuste — ele só existe dentro de test_pipeline.py.
+
+c) VOLUME DA MÚSICA (src/config.py)
+   Pedido: reduzir o volume da música em 60%, deixando 40% do volume
+   ATUAL (não de um "volume normal" hipotético — 40% do que já estava
+   configurado, -16.5dB).
+   MUSIC_VOLUME_DB: -16.5 -> -24.46 (fator de amplitude 0.1496 -> 0.0598,
+   ou seja, 0.1496 * 0.40 = 0.0598, exatamente os 40% pedidos). Testado
+   via test_pipeline.py (mix_with_music rodou sem erro com o novo valor).
+
+Rodei `python3 -c "import ast; ..."` em todos os .py do projeto: sintaxe OK
+em todos. test_pipeline.py (regressão do pipeline curto) passou depois do
+ajuste do item 'b' acima.
+
+PENDÊNCIAS REAIS PARA VOCÊ TESTAR (nenhuma pôde ser validada contra dado
+real neste ambiente — sem GPU, sem whisper.cpp compilado, sem rede/yt-dlp):
+  1. Rodar um vídeo real > 39min e conferir CHUNK_VIRAL_SCORE_MIN.
+  2. Rodar um vídeo real com uma virada de assunto clara e conferir se o
+     clipe agora para no lugar certo (ajustar TOPIC_BOUNDARY_PAUSE_SECONDS/
+     BONUS/GRACE_SECONDS se não parar).
+  3. Ouvir o volume novo da música num clipe real e confirmar que -24.46dB
+     está no nível desejado (é só multiplicar pelo fator que quiser se não
+     estiver — ver comentário em config.py para a conta).
+
+
+9) CORREÇÃO — "fim de assunto" não estava resolvendo na prática (teto de ~1:15)
+--------------------------------------------------------------------------------
+Feedback do usuário: mesmo depois do item 8b, os clipes continuavam sempre
+batendo o teto de MAX_CLIP_DURATION (75s / "1:15"), cortando o contexto pela
+metade.
+
+DIAGNÓSTICO: a v1 (item 8b) só deixava a busca considerar uma janela além de
+75s quando um sinal de fim de assunto (pausa >= 1.1s fixo, ou uma das frases
+regex de marcador textual) disparava — e só numa folga pequena (12s). Na
+prática, em fala real (principalmente conversa corrida, sem pausas de 1.1s
+inteiros nem as frases exatas que eu previ, tipo "mudando de assunto"), esse
+sinal quase nunca disparava — então NENHUM candidato acima de 75s chegava a
+ser criado, e o resultado ficava sempre exatamente no teto de qualquer jeito.
+A v1 tecnicamente "funcionava" (testei e validei o mecanismo com transcrição
+sintética), mas o mecanismo em si era estruturalmente bloqueado demais pra
+disparar em fala real — sintoma idêntico ao original, causa disfarçada.
+
+CORREÇÃO (v2), duas mudanças em src/clip_selector.py + src/config.py:
+  1. Removido o bloqueio que exigia um sinal de fim de assunto pra sequer
+     CRIAR o candidato acima de MAX_CLIP_DURATION. Agora toda janela dentro
+     de MAX_CLIP_DURATION + TOPIC_BOUNDARY_GRACE_SECONDS é gerada e pontuada
+     normalmente — quem decide se vale esticar é o SCORE (a penalidade por
+     se afastar de IDEAL_CLIP_DURATION já cresce com a distância), não um
+     gate binário. O bônus de fim de assunto continua existindo, só que
+     agora é só um empurrão a mais na pontuação, não um requisito pra
+     existir.
+  2. TOPIC_BOUNDARY_GRACE_SECONDS: 12s -> 105s (teto real: 75+105=180s/3min,
+     ajustável). TOPIC_BOUNDARY_BONUS: 2.5 -> 4.0. Detecção de pausa ficou
+     ADAPTATIVA (TOPIC_BOUNDARY_PAUSE_RELATIVE_MULT=1.8x a pausa TÍPICA
+     daquele vídeo específico, calculada automaticamente via mediana — não
+     um número fixo de 1.1s pra qualquer vídeo, já que ritmo de fala varia
+     muito entre conteúdos).
+
+VALIDADO (transcrição sintética, sempre a mesma limitação de ambiente —
+sem GPU/whisper real disponível aqui):
+  - Um "assunto" de ~90s de conteúdo contínuo, SEM nenhuma pausa-outlier e
+    SEM nenhum marcador de texto de transição (simulando fala corrida real
+    -- o cenário exato em que a v1 falhava): o clipe escolhido cobriu
+    quase o assunto inteiro (88.8s), passando bem do antigo teto rígido de
+    75s. Prova que o gate estrutural foi removido de verdade.
+  - Regressão: um cenário com uma pausa REALMENTE fora do padrão (outlier
+    claro, 1.6s contra pausas normais de 0.25s no resto do vídeo) — o
+    algoritmo continua preferindo parar exatamente nesse ponto, em vez de
+    sempre esticar até o teto por padrão. Ou seja, a v2 não é "sempre
+    esticar o máximo possível": ainda prefere um corte limpo quando existe
+    um sinal real de que o assunto realmente terminou ali.
+  - test_pipeline.py (regressão do pipeline curto) e as funções de
+    detecção de pergunta-gancho/fechamento/transição: sem regressão.
+
+HONESTIDADE: o score de cada janela continua vindo da mesma fórmula de
+sempre (hooks/emoção/energia de áudio no texto) — se o CONTEÚDO real do
+seu vídeo depois de 75s for pobre em gancho/emoção segundo essas regras
+(não é uma medida de "faz sentido continuar o assunto", é medida de texto),
+o algoritmo pode ainda preferir parar mais cedo por puro score, não porque
+está proibido de continuar como antes. Se isso acontecer no seu conteúdo
+real, o ajuste mais direto é subir IDEAL_CLIP_DURATION (o alvo que o score
+persegue) e/ou TOPIC_BOUNDARY_BONUS em config.py — não precisa mexer em
+código.
+
+PENDÊNCIA REAL PRA VOCÊ TESTAR: rodar num vídeo de verdade com um assunto
+que genuinamente precise de mais de 75s pra se resolver, e confirmar que o
+clipe agora captura o contexto completo. Se ainda ficar curto, me manda o
+texto/duração do clipe gerado que eu ajusto os pesos.
+
+
+10) Softlock no terminal (Windows) depois de "CONCLUÍDO" — Ctrl+C/Enter não respondem
+---------------------------------------------------------------------------------------
+Relatado com print da tela: depois de gerar os 3 clipes e imprimir "Arquivos
+salvos em: ...", o Command Prompt fica preso — sem aceitar Ctrl+C nem Enter.
+
+INVESTIGAÇÃO: procurei por qualquer thread não-daemon que pudesse estar
+segurando a saída do processo. Os únicos threading.Thread deste programa
+(src/long_video.py, src/reframer.py) já são daemon=True (não deveriam
+travar a saída sozinhos). O ThreadPoolExecutor usado para montar clipes em
+paralelo (main.py) já é fechado via "with" (espera os workers terminarem)
+bem antes dos prints finais. Não achei nenhum thread Python nem subprocess
+pendurado no próprio código do projeto.
+
+DIAGNÓSTICO (não confirmado — ver honestidade abaixo): o suspeito mais
+provável é o faster-whisper/CTranslate2 (biblioteca de transcrição): ela
+mantém um pool de threads NATIVO (C++, fora do controle do interpretador
+Python) pra acelerar a inferência, e há um padrão conhecido desse tipo de
+pool não liberar de forma limpa no Windows na hora do processo encerrar —
+o interpretador fica esperando um shutdown que não termina, e como essa
+espera acontece dentro de código nativo (não Python puro), o Ctrl+C não
+consegue interromper (o handler de sinal do Python só roda entre
+instruções Python).
+
+CORREÇÃO: main.py agora força o encerramento do processo com os._exit()
+(via a função _force_exit()) assim que termina de imprimir o resumo final
+(sucesso) ou o erro (falha) — em vez de deixar o script retornar
+normalmente e esperar o shutdown "educado" do interpretador. os._exit()
+mata o processo na hora, pulando esse shutdown; é seguro fazer isso nesse
+ponto porque não sobra nenhuma escrita em disco pendente (os vídeos já
+foram gerados por processos ffmpeg SEPARADOS, que já retornaram antes de
+chegar nos prints finais).
+
+HONESTIDADE: não consegui reproduzir o travamento neste ambiente (sem
+Windows real, sem faster-whisper instalado aqui) pra confirmar a causa raiz
+com certeza — é o diagnóstico mais provável dado que não sobra nenhum
+thread não-daemon no código até aquele ponto, não uma correção confirmada
+contra o bug real acontecendo. test_pipeline.py não chama main.py (usa
+select_clips/build_clip diretamente), então não foi afetado por essa
+mudança nem serve pra validar o os._exit() de verdade.
+
+AÇÃO NECESSÁRIA SUA: rode de novo com um vídeo real. Se ainda travar, me
+diga qual foi a ÚLTIMA linha impressa antes de travar dessa vez — se for
+DEPOIS de "Arquivos salvos em: ...", o os._exit() não resolveu e o
+travamento é em outro lugar (possivelmente um handle nativo de GPU/AMF do
+próprio ffmpeg, não do Python); se for ANTES disso, o travamento nem é o
+mesmo problema (é durante o processamento, não na saída) e preciso do
+ponto exato onde parou.
+
+
+11) ESCALADA — o softlock do item 10 continuou mesmo com os._exit()
+----------------------------------------------------------------------
+Confirmado pelo usuário (rodando o zip v3, que já tinha o os._exit()): o
+travamento continuou. Detalhe novo: essa run usava whisper.cpp (não
+faster-whisper) — então o suspeito original (CTranslate2) nem se aplicava
+a esse caso, o que já indicava que o diagnóstico do item 10 estava
+incompleto.
+
+DIAGNÓSTICO REVISADO: no Windows, tanto o encerramento normal do processo
+quanto os._exit() acabam passando pela mesma ExitProcess do sistema, que
+espera notificar TODAS as DLLs carregadas no processo (DLL_PROCESS_DETACH)
+antes de matar o processo de fato. Se alguma DLL nativa carregada tiver
+uma rotina de finalização travada (driver de GPU é o suspeito clássico
+nesse tipo de sintoma — aqui o log mostra "Encode de vídeo: GPU AMD via
+AMF"), o processo fica preso exatamente NESSE PONTO — depois de já ter
+impresso tudo, sem responder a Ctrl+C (é uma trava dentro do carregador de
+DLL do próprio Windows, fora do alcance do interpretador Python).
+
+CORREÇÃO (v2 de _force_exit, main.py): troquei os._exit() por
+TerminateProcess — chamada direto via ctypes na API do Windows (o mesmo
+mecanismo que o Gerenciador de Tarefas usa em "Finalizar tarefa"), que
+mata o processo no nível do sistema operacional SEM notificar nenhuma DLL.
+Não tem como ficar mais forçado que isso de dentro do próprio processo.
+Mantém os._exit() como fallback (Linux/Mac, ou se ctypes falhar por algum
+motivo).
+
+NOVO: além de corrigir a saída, adicionei um watchdog (_start_watchdog,
+thread daemon, WATCHDOG_TIMEOUT_SECONDS=90min em config.py) que mata o
+processo à força se ele não terminar sozinho dentro desse tempo — cobre
+não só o travamento na SAÍDA (o bug relatado) mas qualquer travamento no
+MEIO do processamento (ex: um ffmpeg/whisper.cpp que nunca retorna por
+outro motivo). Ajustável se seu conteúdo real legitimamente passar de
+90min.
+
+VALIDADO: testei o watchdog de verdade (não só o mecanismo de leitura de
+código) — rodei main._start_watchdog(2.0) seguido de um sleep(3600)
+forçado (simulando um travamento de verdade) num processo Python
+separado, e o processo morreu sozinho em ~2.7s com exit code 1, sem eu
+precisar matar nada manualmente. Isso confirma que o timer e o
+force-kill funcionam mecanicamente. NÃO testado: o branch específico do
+TerminateProcess via ctypes (só roda em sys.platform=="win32" — este
+ambiente é Linux, então esse branch caiu no fallback os._exit(), que
+também funcionou, mas não é a mesma chamada que vai rodar na sua
+máquina).
+
+HONESTIDADE: continuo sem conseguir reproduzir o travamento original
+(preciso de Windows + AMD AMF + faster-whisper/whisper.cpp reais, nenhum
+disponível aqui) — TerminateProcess é a correção mais forte que existe
+pra esse tipo de sintoma (é literalmente o mesmo botão que "Finalizar
+tarefa" aperta), mas não é uma confirmação de que a causa raiz era
+exatamente a rotina de DLL_PROCESS_DETACH do driver AMD. Se ainda travar
+depois dessa versão, me avisa — mas dessa vez o watchdog de 90min garante
+que, mesmo que trave, o processo morre sozinho depois de um tempo (só
+não instantâneo como antes).
+
+
+12) Início/fim de clipe cortando no meio do assunto, não no meio da frase
+--------------------------------------------------------------------------
+Relatado pelo usuário com casos reais (vídeos de ~15-75min, RedCast e
+similares): clipes começando no meio de uma conversa já em andamento
+("Só que Arturo Duval resolveu...", "E que é qual é a tua mensagem eu
+acho...") e/ou terminando sem fechar o pensamento.
+
+CAUSA: select_clips() (src/clip_selector.py) já validava se o FIM da
+janela caía num limite de assunto de verdade (pausa longa, frase de
+conclusão, etc. — is_topic_boundary), mas nunca validava isso pro INÍCIO
+— qualquer sentença podia virar ponto de partida.
+
+CORREÇÃO V4: exigir que o início também caia logo após um limite de
+assunto. ERRO NESSA PRIMEIRA VERSÃO: virou filtro RÍGIDO (descartava por
+completo qualquer start_idx que não qualificasse) — em vídeo de papo
+solto com poucas pausas longas, isso colapsava o pool de candidatos quase
+inteiro, sobrando 1 opção só (às vezes ruim), confirmado pelo usuário
+rodando de verdade (achou só 1 corte de 2 pedidos, começando em 0.0s,
+score 2.8).
+
+CORREÇÃO V5 (a que ficou): trocado de filtro pra PONTUAÇÃO — prêmio
+(TOPIC_BOUNDARY_BONUS*0.5) quando o início é limpo, penalidade
+(TOPIC_START_PENALTY=6.0, config.py) quando não é. A lista de candidatos
+nunca mais colapsa, mas continua favorecendo fortemente início+fim de
+assunto de verdade. VALIDADO com o usuário rodando de novo (voltou a
+gerar clipes normalmente, com score mais alto).
+
+STATUS: validado com uso real (não só leitura de código) — o usuário
+rodou, viu o bug do filtro rígido acontecer, e confirmou a versão V5
+funcionando depois.
+
+
+13) Fim de clipe em pergunta sem resposta (fallback ignorava conteúdo) +
+    outros ajustes menores do mesmo ciclo
+--------------------------------------------------------------------------
+a) DANGLING_QUESTION_PENALTY (evita terminar em pergunta-gancho sem
+   resposta, ex. "Sabe por quê?") só era aplicada dentro do ramo que já
+   exige fim de assunto — existe um caminho de FALLBACK (usado sempre que
+   nenhum fim de assunto cabe no alcance de tempo permitido, comum em
+   conteúdo de papo corrido) que escolhia o fim só pela duração mais
+   próxima do ideal, sem nenhuma consciência de conteúdo. Confirmado com
+   um clipe real do usuário terminando em "...não tem projeto?" sem a
+   resposta. CORRIGIDO: a mesma penalidade agora também pesa na escolha
+   do fallback.
+
+b) downloader.py reaproveitava (sem avisar) o source.mp4 de uma execução
+   anterior quando a URL colada era outra, porque yt-dlp por padrão não
+   baixa de novo um arquivo já existente com o mesmo nome — confirmado
+   pelo usuário rodando 2 URLs diferentes e recebendo o MESMO vídeo/corte
+   nos dois casos. CORRIGIDO: apaga qualquer source.* residual antes de
+   cada download.
+
+c) Softlock do item 11 (TerminateProcess) relatado pelo usuário
+   acontecendo DE NOVO mesmo com essa correção em vigor. Não foi possível
+   confirmar/reproduzir a causa raiz exata (mesma limitação de ambiente
+   dos itens 10/11 — sem Windows+AMD reais aqui). MITIGAÇÃO adicionada:
+   EXIT_WATCHDOG_SECONDS=6 (config.py), um watchdog CURTO e independente
+   do de 90min, iniciado logo antes do bloco de impressão final — garante
+   que, travando ou não (e não importa ONDE trave depois desse ponto),
+   o processo morre em segundos em vez de ficar preso indefinidamente.
+   HONESTIDADE: é rede de segurança, não correção de causa raiz — ainda
+   não sei explicar por que TerminateProcess sozinho não bastou.
+
+d) video_editor.py: build_clip() confiava só no returncode do ffmpeg pra
+   dizer "Concluído" — usuário relatou um clipe impresso como concluído
+   que não existia de fato em output\. Não achei o bug exato que causa
+   isso, mas adicionei uma verificação explícita (arquivo existe +
+   tamanho mínimo) antes de imprimir sucesso, que pelo menos transforma
+   um "sucesso" falso num erro real e diagnosticável da próxima vez que
+   acontecer.
+
+e) MUSIC_VOLUME_DB ajustado de -24.46 para -20.94 (pedido do usuário,
+   "+50% de volume" = *1.5 em amplitude linear = +3.52dB, não +50% do
+   número em dB, que é escala logarítmica).
+
+STATUS: (a) e (b) validados com uso real. (c) e (d) são mitigação/
+diagnóstico, não confirmados como resolvendo a causa raiz (usuário ainda
+não reportou de volta se o softlock ou o "clipe sumido" voltaram a
+acontecer depois dessas mudanças).
+
+
+14) MODO REACT — câmera segue o vídeo reagido quando ele está tocando
+--------------------------------------------------------------------------
+Pedido do usuário: identificar automaticamente se o vídeo é do tipo
+"reaction" (pessoa comentando conteúdo de tela) vs. vídeo normal de
+pessoa(s) falando — inclusive vídeos que TRANSICIONAM entre os dois ao
+longo do tempo — e, quando for reaction, seguir a tela reagida enquanto
+ela estiver tocando, voltar pro comentador quando pausado/comentando, e
+dar um zoom breve na tela quando o comentador faz referência visual
+explícita a ela ("olha a camisa dele").
+
+ONDE ISSO FOI CONSTRUÍDO EM CIMA: já existia um pipeline de detecção e
+composição de "tela dentro da tela" (_ScreenTracker/_compose_screen_frame
+em reframer.py, ver item 3a em versões anteriores deste relatório — não
+reproduzido aqui por já estar coberto), mas ficava sempre DESLIGADO por
+padrão (VIDEO_IN_VIDEO_ENABLED=False fixo, sem nada que decidisse ligar
+automaticamente). O modo REACT não recria esse pipeline — ele decide
+QUANDO ligá-lo.
+
+O QUE FOI ADICIONADO:
+
+a) src/react_detector.py (novo módulo):
+   - detect_react_video(): reamostra o vídeo INTEIRO a cada
+     REACT_CHECK_INTERVAL_SECONDS (10s, config.py) buscando uma tela
+     plausível (reusa _detect_screen_region já existente) e decide, pela
+     fração de checagens positivas (REACT_MIN_SCREEN_FRACTION=0.25), se o
+     vídeo como um todo é REACT. Roda 1x por vídeo, ANTES de gerar
+     qualquer clipe (main.py) — cobre o pedido de "verificações a cada 10
+     segundos" e o caso de vídeo que alterna entre reagir e ficar em
+     full-cam, já que o critério é uma FRAÇÃO das amostras, não todas.
+   - find_reference_times(): varre o texto transcrito por padrões de
+     referência visual ("olha a camisa dele", "repara ali", "vê aquilo"
+     etc. — lista de regex, deliberadamente heurística/sintática, não
+     entende semântica) e devolve os timestamps pra forçar o zoom na tela
+     reagida mesmo se ela estiver pausada naquele instante.
+
+   BUG ENCONTRADO E CORRIGIDO nesta revisão (achado com um teste sintético
+   rápido, sem precisar de vídeo real — ver comentário na própria
+   função): a implementação original usava uma janela deslizante de N
+   palavras "olhando pra frente" a partir de CADA palavra, o que fazia uma
+   frase-gatilho perto do fim de uma janela "vazar" pro timestamp de uma
+   palavra bem mais cedo (sem relação nenhuma com a frase real), gerando
+   disparos fantasma de zoom em momentos aleatórios do clipe. Corrigido
+   construindo o texto do clipe uma única vez e mapeando cada match do
+   regex de volta pra palavra exata (por offset de caractere) em que ele
+   começa, em vez de testar janela por janela.
+
+b) src/reframer.py:
+   - _FaceActivityTracker.active_face_size(): tamanho (fw, fh) do rosto
+     atualmente ativo.
+   - _ScreenTracker.last_known_region(): última região de tela
+     CONFIRMADA, ignorando o piso de atividade normal — usada só pelo
+     zoom de referência, pra funcionar mesmo com o vídeo reagido parado.
+   - Crop dinâmico por facecam pequena: quando o rosto ativo ocupa menos
+     que FACECAM_SMALL_HEIGHT_FRAC (16%) da altura do frame de origem —
+     típico de facecam pequena sobre uma tela maior, ou com chat do lado,
+     como no print de referência que o usuário mandou — o crop afrouxa
+     suavemente (cresce em direção à altura cheia da fonte) na mesma
+     proporção em que o rosto está abaixo desse limiar, capturando mais
+     contexto ao redor (na prática, o chat ou parte da tela visível perto
+     da facecam) sem precisar detectar essas regiões especificamente.
+     BUG CORRIGIDO ainda dentro desta mesma revisão: a primeira versão da
+     fórmula tinha os limites do clip() invertidos (crop ficava mais
+     APERTADO em vez de mais largo); testado isoladamente depois da
+     correção e o comportamento ficou certo (contínuo na fronteira exata,
+     trava no teto certo em src_h).
+   - render_vertical_clip() ganhou o parâmetro reference_times, que força
+     o modo "screen" por REFERENCE_ZOOM_HOLD_SECONDS (2.5s) depois de cada
+     timestamp retornado por find_reference_times.
+
+c) main.py: roda detect_react_video() logo após o download, antes de
+   gerar qualquer clipe; se REACT, liga config.VIDEO_IN_VIDEO_ENABLED
+   dinamicamente só pra esse vídeo (processo trata 1 vídeo por execução,
+   então não há risco de vazar pra uma próxima run). Imprime o veredito
+   (fração de tela detectada) no console.
+
+d) src/video_editor.py: calcula reference_times do trecho de cada clipe
+   (usando o transcript_words já disponível, mesma base do gerador de
+   legenda) e passa pro render.
+
+e) config.py: REACT_MODE_AUTO_DETECT, REACT_CHECK_INTERVAL_SECONDS,
+   REACT_MIN_SCREEN_FRACTION, FACECAM_SMALL_HEIGHT_FRAC,
+   REFERENCE_ZOOM_HOLD_SECONDS — todos documentados inline com o
+   raciocínio de cada valor.
+
+TESTADO (mecânico, sem vídeo de reação real):
+   - Sintaxe de todos os arquivos tocados.
+   - find_reference_times: testado com dados sintéticos cobrindo hit
+     dentro/fora do intervalo do clipe, texto sem referência nenhuma, e
+     duas referências próximas (dedup por REFERENCE_ZOOM_HOLD_SECONDS) —
+     inclusive o teste que achou e confirmou a correção do bug da janela
+     deslizante acima.
+   - Fórmula do crop dinâmico (facecam pequena) validada isoladamente.
+   - Regressão: com REACT_MODE_AUTO_DETECT desligado (ou vídeo
+     classificado como não-REACT), o comportamento fica idêntico a antes
+     — a mudança inteira é aditiva/condicional.
+
+HONESTIDADE — NÃO TESTADO, precisa da SUA validação com vídeo real:
+   - detect_react_video() de verdade (a geometria de _detect_screen_region
+     que ela reusa também nunca foi validada contra tela real — ver item
+     3a original).
+   - O comportamento de play/pausa (câmera trocando pra comentador quando
+     o vídeo reagido pausa) depende inteiramente do _ScreenTracker
+     existente continuar (ou não) reportando uma região ativa quando o
+     conteúdo pausa — não confirmado com um caso real.
+   - O afrouxamento de crop em facecam pequena, com uma facecam pequena
+     de verdade (só testei a fórmula matemática isolada, não o pipeline
+     completo puxando um tamanho de rosto real dessa situação).
+   - Os padrões de regex de find_reference_times foram escritos por
+     intuição de como brasileiros falam apontando pra tela — quase
+     certamente vão precisar de ajuste depois de ver quais frases reais
+     do seu conteúdo NÃO disparam (falso negativo) ou disparam à toa
+     (falso positivo).
+
+Se o modo REACT reagir errado (focar no comentador quando devia focar na
+tela, ou vice-versa; zoom de referência disparando em frase errada ou não
+disparando numa frase óbvia), me manda o clipe — cada caso real até agora
+neste projeto apontou um bug específico e diferente, então é o jeito mais
+rápido de fechar os buracos que sobraram aqui.
+
+
+15) Início/fim de clipe cortando no meio do assunto — causa raiz mais
+    funda que o item 12 (afeta especificamente vídeo longo/chunked)
+--------------------------------------------------------------------------
+Depois do item 12 (V5) já em produção, usuário reportou o MESMO sintoma
+de novo com outro vídeo: clipe começando com letra minúscula ("minha
+produtividade, faço mais bolo..."), claramente uma frase que já estava em
+andamento. O fim desta vez estava correto (frase completa, com ponto) —
+só o início continuava quebrado, e de um jeito que o V5 não deveria
+permitir (a pontuação deveria ter penalizado um início assim).
+
+DIAGNÓSTICO: is_topic_boundary() e a checagem de início (agora
+starts_clean(), src/clip_selector.py) tratavam a BORDA do transcript
+disponível -- start_idx==0, ou "não tenho mais frase pra olhar" no fim --
+como automaticamente um início/fim de assunto válido. Isso é correto
+quando select_clips() recebe o transcript do VÍDEO INTEIRO (não existe
+nada antes/depois pra comparar mesmo, então a borda É o início/fim
+real). MAS: em vídeo longo (> LONG_VIDEO_THRESHOLD_SECONDS), long_video.py
+divide em blocos de CHUNK_DURATION_SECONDS e chama select_clips() UMA VEZ
+POR BLOCO, cada um com seu próprio transcript ISOLADO. A "borda" do
+transcript de um bloco do meio (ou do início/fim, na ponta que não é
+realmente a ponta do vídeo) é só um corte de tempo arbitrário -- sem
+relação nenhuma com onde um assunto de verdade começa ou termina. Como
+start_idx==0 sempre contava como "início limpo" incondicionalmente, TODO
+bloco processado no meio do vídeo tinha sua primeira frase (por mais
+cortada/incompleta que fosse) tratada como um ótimo início, capaz de
+vencer o V5 mesmo com a pontuação penalizando inícios ruins -- porque,
+tecnicamente, nenhuma penalidade era aplicada a ele.
+
+CORREÇÃO (V7): select_clips() ganhou dois parâmetros opcionais,
+is_first_segment e is_last_segment (default True em ambos -- preserva o
+comportamento antigo pro caminho não-chunked, que é o padrão). Quando
+False, a borda do transcript deixa de contar como início/fim automático e
+passa a exigir o MESMO sinal real (pausa longa, frase de fechamento, troca
+de assunto) que qualquer fronteira NO MEIO do transcript já exigia.
+long_video.py agora passa is_first_segment=(start<=0) e
+is_last_segment=(end>=total_duration) em _transcribe_and_score_chunk --
+ou seja, só o PRIMEIRO bloco do vídeo pode ter um início automático, e só
+o ÚLTIMO bloco pode ter um fim automático; todos os blocos do meio (e as
+pontas "internas" do primeiro/último bloco) precisam de um sinal de
+verdade.
+
+VALIDADO:
+   - Teste sintético (Word/Transcript fake + wav silencioso, sem depender
+     de whisper/YouTube reais): o MESMO candidato (mesmas frases, mesmos
+     timestamps) pontuou 4.0 quando tratado como vídeo inteiro
+     (is_first_segment=is_last_segment=True) e -6.0 quando tratado como
+     bloco do meio (False/False) -- confirma que a pontuação agora reage
+     corretamente à mudança de contexto, sem exigir vídeo real pra provar
+     a lógica.
+   - test_pipeline.py (teste de integração já existente no projeto,
+     ponta-a-ponta com vídeo sintético local) rodou sem erros depois da
+     mudança -- sem regressão no caminho padrão (não-chunked), que é o
+     único que test_pipeline.py cobre.
+
+HONESTIDADE: não testado com um vídeo longo real passando pelo
+long_video.py de ponta a ponta (nenhum disponível neste ambiente) -- a
+validação acima confirma a LÓGICA da pontuação isoladamente, não o
+comportamento do pipeline de blocos completo com Whisper de verdade. Se
+o usuário ainda ver um clipe cortado no meio especificamente vindo de um
+vídeo tratado como longo (aparece "Vídeo longo detectado" no console),
+isso é a próxima coisa a conferir -- me mandar o clipe + confirmar se o
+vídeo original passava de LONG_VIDEO_THRESHOLD_SECONDS (39min).
+
+
+16) COESÃO LEXICAL (TextTiling) — pega troca de assunto SEM pausa nem
+    palavra-chave
+--------------------------------------------------------------------------
+Depois do item 15 (V7), usuário confrontou corretamente: "a única coisa
+que você fez foi fazer ele pegar da palavra com letra maiúscula pra
+frente? isso não resolve o problema. O que resolve é ele ler e entender o
+contexto das frases". Diagnóstico correto — V7 corrigiu um bug mecânico
+real (bloco de vídeo longo tratando sua própria borda como fim de assunto
+de graça), mas todo o sistema de fim/início de assunto (is_topic_boundary,
+_starts_new_topic, _ends_on_topic_conclusion) sempre foi heurística de
+SUPERFÍCIE: pausa OU uma lista fixa de frases de transição via regex.
+Nunca entendeu conteúdo — só pega virada de assunto quando ela vem
+acompanhada de uma dessas duas pistas específicas.
+
+O que resolveria de verdade ("ler e entender") seria um LLM lendo a
+transcrição. Descartado — não por peso de hardware (a API roda no
+servidor da Anthropic, não na RX580/Xeon do usuário; isso foi esclarecido
+explicitamente na conversa), mas por manter o projeto 100% local/offline
+(sem chave de API, sem custo por vídeo, sem depender de rede) — a mesma
+filosofia por trás de todo o resto do projeto (whisper.cpp+Vulkan pra usar
+a GPU local, heurística de texto local em vez de qualquer serviço externo).
+
+IMPLEMENTADO: TextTiling (Hearst, 1997) — técnica clássica de segmentação
+de texto por vocabulário, adaptada aqui a fronteiras de FRASE (em vez dos
+blocos de N palavras do algoritmo original, pra encaixar na arquitetura já
+existente de is_topic_boundary/sentences). Arquivos: src/clip_selector.py
+(_content_words, _cosine_sim, _lexical_boundary_scores — novo terceiro
+sinal dentro de is_topic_boundary, ao lado de pausa e palavra-chave/regex
+já existentes), src/config.py (TOPIC_LEXICAL_TARGET_WORDS/MIN_WORDS/
+BOUNDARY_MIN/FIT_BONUS).
+
+Como funciona: pra cada ponto de corte candidato, acumula ~40 palavras de
+CONTEÚDO (sem stopword — lista PT/EN embutida, sem dependência nova) de
+cada lado e mede similaridade de cosseno entre os dois "sacos de
+palavras". Um "vale" bem cavado (baixa similaridade ali, cercada de picos
+de similaridade dos dois lados — só um MÍNIMO LOCAL de verdade da curva
+conta, não qualquer ponto na encosta descendo até um vale genuíno) indica
+troca de vocabulário real, mesmo sem pausa longa nem nenhuma das frases de
+transição previstas. Normalizado pelo vale mais forte DESTE vídeo/bloco
+(adaptativo, mesmo espírito de _typical_pause já existente).
+
+BUG ENCONTRADO E CORRIGIDO ainda dentro desta mesma revisão (achado com
+teste sintético adversarial, não só o caso feliz): a primeira versão
+marcava pontos com poucas palavras de conteúdo (borda do transcript,
+frase curta) com um valor arbitrário de similaridade "1.0" em vez de
+excluí-los — isso criava um PICO ARTIFICIAL na borda que inflava a
+profundidade de qualquer corte real vizinho (um corte dentro do próprio
+assunto do carro, no teste, saiu com score 0.823 — acima do limiar
+default de 0.55, ou seja, falso positivo). Corrigido: pontos sem dado
+suficiente ficam de fora INTEIRAMENTE da busca de pico/vale (nem contam
+como candidato, nem servem de referência de pico pros vizinhos), e um
+ponto só é candidato se for mínimo local de verdade da curva de
+similaridade. Depois da correção, o mesmo teste adversarial caiu de
+0.823 pra 0.265 (bem abaixo do limiar), sem perder o corte verdadeiro
+(continuou 1.000, o máximo).
+
+VALIDADO (sem vídeo real disponível neste ambiente, mesma limitação de
+sempre — mas testado bem mais a fundo que o de praxe, com DOIS cenários
+sintéticos de texto puro, não precisa de whisper/GPU pra rodar):
+  - Cenário ADVERSARIAL (pior caso de propósito: duas "conversas" — bolo
+    de chocolate, depois carro com problema no motor — cada frase
+    introduzindo vocabulário novo, quase sem repetição nem dentro do
+    mesmo assunto): corte verdadeiro pontuou 1.000 (máximo), segundo
+    colocado 0.265 — bem separado do limiar 0.55.
+  - Cenário REALISTA (vocabulário se repete dentro de cada assunto, como
+    fala real tende a fazer — ex.: "esse jogador" repetido várias vezes
+    antes de mudar pra "eleição"/"prefeito"): separação quase perfeita,
+    corte verdadeiro 1.000, todos os outros 0.000.
+  - select_clips() de ponta a ponta (não só a função isolada): um
+    transcript sintético com as duas "conversas" coladas, MESMA pausa
+    curta o tempo todo (sem outlier) e SEM nenhuma frase de transição —
+    exatamente o caso que pausa/regex sozinhos não pegam. O clipe
+    escolhido parou em 16.44s (assunto do bolo termina em ~16.8s, a
+    diferença é granularidade de timestamp por palavra do teste), sem
+    invadir o assunto do carro — confirma que o sinal novo realmente muda
+    o resultado final, não só o score isolado.
+  - Regressão: test_pipeline.py (integração completa, vídeo sintético)
+    rodou sem erro depois da mudança. `python3 -c "import ast..."` em
+    todos os .py do projeto: sintaxe OK.
+  - Novo script scripts/validate_topic_lexical.py (mesmo padrão de
+    scripts/validate_occlusion_hue.py já existente): aceita um .txt com
+    uma frase por linha (cole qualquer transcrição real sua, sem precisar
+    rodar whisper) e imprime o score de cada corte + quais ultrapassam o
+    limiar atual — pra calibrar TOPIC_LEXICAL_BOUNDARY_MIN com conteúdo
+    seu antes de rodar o pipeline inteiro.
+
+HONESTIDADE — limitações conhecidas, não é um LLM:
+  - Não entende semântica de verdade — é contagem de palavra + cosseno.
+    Duas frases sobre assuntos DIFERENTES que por acaso compartilham muito
+    vocabulário (sinônimos, jargão comum) podem não gerar um vale forte o
+    bastante. O inverso também: um assunto ÚNICO com vocabulário muito
+    variado e pouca repetição (meu cenário "adversarial" foi desenhado
+    assim de propósito) pode gerar vales moderados mesmo sem troca real —
+    mitigado pelo filtro de mínimo-local + normalização adaptativa, mas
+    não eliminado por completo; testado em só 2 cenários sintéticos, não
+    em 2-3 clipes reais diferentes (mesma recomendação já feita pro
+    discriminador de hue no item 2/5 — vale fazer o mesmo aqui).
+  - Precisa de palavras de CONTEÚDO suficientes dos dois lados
+    (TOPIC_LEXICAL_MIN_WORDS=8) — trechos muito curtos ou muito perto da
+    borda do transcript/bloco não arriscam virar fronteira por esse sinal
+    (ficam só com pausa/palavra-chave, como antes).
+  - A lista de stopword PT/EN é curada por mim, não é uma biblioteca de
+    NLP validada — pode faltar alguma palavra funcional comum do seu
+    conteúdo específico (gírias, termos regionais); isso enfraquece um
+    pouco o sinal, não quebra (só reduz precisão, não trava nada).
+
+AÇÃO NECESSÁRIA SUA: rode scripts/validate_topic_lexical.py com 2-3
+transcrições reais suas (pode ser texto colado de um vídeo já processado
+antes, uma frase por linha) e confira se os cortes marcados batem com
+onde VOCÊ diria que o assunto mudou. Ajuste TOPIC_LEXICAL_BOUNDARY_MIN
+(config.py) se estiver disparando cedo demais ou tarde demais antes de
+rodar num vídeo real de produção.
+
+
+17) SESSÃO NA NUVEM — primeiro teste com vídeo REAL ponta a ponta +
+    preparação pra postar (YouTube Shorts / Instagram Reels / TikTok)
+--------------------------------------------------------------------------
+Pela primeira vez o pipeline inteiro rodou com um vídeo real (entrevista
+de 21.8 min em português, 720p, licença CC, do archive.org — o YouTube
+bloqueia download a partir de IP de servidor em nuvem com "Sign in to
+confirm you're not a bot", então o vídeo do YouTube pedido não pôde ser
+usado AQUI; na sua máquina, com IP residencial, isso não acontece).
+Resultado: 3 clipes em 6.8 min numa CPU de 4 núcleos sem GPU (0.4x tempo
+real); na RX 580 + Xeon deve ser bem mais rápido.
+
+O que foi corrigido/adicionado:
+
+a) BUG: clipes saíam em H.264 4:4:4 ("High 4:4:4 Predictive", yuv444p) —
+   os frames vão do Python pro ffmpeg em bgr24 e sem -pix_fmt o libx264
+   (e o NVENC) mantêm a cor cheia. Celular, navegador, QuickTime e
+   decodificador de hardware em geral não tocam isso direito, e as redes
+   podem recusar/converter mal. Agora -pix_fmt yuv420p em libx264, NVENC e
+   AMF (hwaccel.py). O h264_amf aceita yuv420p nativamente; se a GPU
+   falhar, o fallback pra CPU que já existia continua valendo.
+
+b) BUG: TRANSCRIBE_ENGINE="whispercpp" com caminho que não existe (ex.:
+   config.py levado pra outro PC) travava com FileNotFoundError. Agora
+   avisa e usa faster-whisper. NA SUA MÁQUINA NADA MUDA: com o
+   whisper-cli.exe (Vulkan) no caminho configurado, ele continua sendo
+   usado.
+
+c) Legenda fora da zona coberta pelo app: estava em 80-83% da altura
+   (embaixo da descrição/nome da música do TikTok/Reels). Agora
+   CAPTION_MARGIN_V=560 (~68-70% da altura, medido no vídeo final),
+   CAPTION_MARGIN_H=120 (não passa por baixo dos botões da direita) e
+   CAPTION_FONT_SIZE 84 -> 110 (as letras mediam ~44px, ~1/3 da largura).
+
+d) Kit de postagem (src/post_kit.py): ao lado de cada .mp4 sai um
+   clip_XX_....post.txt com título (frase do próprio clipe com mais cara de
+   gancho, curta e completa), descrição, hashtags por rede (assunto do
+   clipe + POST_EXTRA_HASHTAGS + #shorts/#reels/#fyp), crédito da música
+   e link/título do vídeo original. Heurística local, sem LLM — confira o
+   título antes de postar.
+
+e) Música placeholder: 10 faixas do Kevin MacLeod (CC BY 4.0, 128 kbps)
+   em assets/music/, com track_drops.txt (drop detectado automaticamente)
+   e track_credits.txt (crédito obrigatório pela licença — vai pro
+   .post.txt da faixa sorteada). NÃO foram baixados hits virais: música
+   comercial leva Content ID no YouTube e pode ser silenciada no
+   Instagram/TikTok.
+
+f) yt-dlp: o YouTube agora exige resolver um desafio JavaScript; o
+   downloader passa --js-runtimes node quando não há Deno, requirements
+   pede yt-dlp[default] (inclui yt-dlp-ejs). Instale o Deno
+   (winget install DenoLand.Deno) ou tenha o Node no PATH.
+
+g) .mp4 com +faststart (upload começa a processar mais rápido) e
+   .gitignore cobrindo vídeos baixados/gerados.
+
+Observado no teste real e NÃO mexido (vale olhar com os seus vídeos):
+  - Um clipe começou em "Mais de 100 anos no Brasil, só com..." — a frase
+    anterior terminava em "tá?", um limite legítimo; detectar esse tipo de
+    início elíptico por heurística daria mais falso positivo que acerto.
+  - Um clipe terminou logo antes do desfecho ("o único efeito que ele teve
+    ... é um efeito importante" e a explicação veio na frase seguinte).
+  - Um clipe saiu com 83.6s, acima de MAX_CLIP_DURATION=75 (extensão pra
+    fechar o assunto). Serve pro Reels/TikTok/Shorts, mas fica acima do
+    ideal de 30-60s.
+
+
+18) EDIÇÃO PROFISSIONAL — resposta aos clipes reais do Flow Podcast
+    ("o segundo ficou com tela preta, os outros mal editados")
+--------------------------------------------------------------------------
+Testado com um trecho real de 15 min de um episódio do Flow Podcast
+(archive.org, 720p 23.976fps, closes + plano médio + plano aberto de 4
+pessoas na mesa), mesmo estúdio dos clipes enviados.
+
+a) "TELA PRETA" = plano aberto/médio. Nenhum quadro era preto de verdade
+   (medido): o crop usava a ALTURA INTEIRA da fonte, então a pessoa ficava
+   pequena no meio e a cortina escura do estúdio ocupava metade da tela.
+   Agora (reframer.py + SUBJECT_* no config):
+   - crop dimensionado pelo tamanho do rosto (zoom em plano médio, limitado
+     a 3x de ampliação pra não borrar);
+   - plano de GRUPO (2+ rostos pequenos) -> layout "fit" (quadro inteiro
+     sobre fundo desfocado), fixo até o próximo corte de câmera;
+   - troca de modo junto com corte de câmera da fonte = corte seco (antes:
+     crossfade de 1.5s, parecia erro de edição);
+   - Ken Burns: plano aberto longo aproxima devagar em quem fala.
+
+b) Detector de rosto trocado de Haar pra YuNet (rede neural do OpenCV,
+   modelo MIT de 230KB em assets/models/). Achado real: num close de perfil
+   com óculos escuros o Haar via 4 "rostos" (parede de espuma, camisa,
+   microfone) e o programa achava que era plano de grupo. YuNet: 1 rosto,
+   ~0.9 de confiança, e o reenquadramento ficou ~2x mais rápido. Haar
+   continua como fallback (FACE_DETECTOR = "haar").
+
+c) Jump cuts (src/jumpcut.py): corta pausas de silêncio de dentro do clipe
+   (só se o áudio estiver em silêncio de verdade — risada/reação ficam),
+   cortes alinhados à grade de quadros (medido: áudio e vídeo terminam
+   juntos, <1 quadro de diferença), e o enquadramento alterna normal/+8% a
+   cada corte. Em podcast denso tirou 1-2s por clipe (3-5%).
+
+d) Legendas estilo corte viral: 3 palavras em CAIXA ALTA, "pop" de
+   entrada, palavra falada em amarelo crescendo, números/dinheiro/palavras
+   de impacto em verde, contorno 8 + sombra, fonte 135.
+
+e) Título-gancho no topo (balão branco, primeiros 3.2s) + whoosh
+   sintetizado (src/sfx.py).
+
+f) Música: biblioteca trocada por 23 faixas de edit do NCS (Brazilian
+   Phonk, Phonk, Jersey Club, Future Trap — lançamentos 2024-2026), trechos
+   de ~95s a partir do drop, normalizados pra -16 LUFS (as masters do NCS
+   são até 13dB mais altas). NCS libera uso monetizado com crédito (vai no
+   .post.txt). Hits comerciais NÃO foram baixados (Content ID / áudio
+   silenciado): cada clipe sai também como *_sem_musica.mp4 pra postar com
+   som em alta escolhido no próprio app.
+
+g) Duração: ideal 40s, máx 60s + 15s de folga (antes 45 / 75+20 — o clipe
+   3 enviado tinha 80.9s e passava por 5 assuntos).
+
+NÃO testado aqui (precisa da sua máquina): AMF/RX 580 e whisper.cpp
+Vulkan com o código novo, vídeo 1080p60 da fonte original, download do
+YouTube.
+
+
+19) Abertura de clipe que depende do contexto anterior
+------------------------------------------------------
+Achado no teste real: um clipe começava em "Fez uma lavagem cerebral, eles
+viraram louco..." (quem fez? quem são eles?). src/opener.py decide se a
+frase de abertura se sustenta sozinha, com análise gramatical do spaCy
+(pt_core_news_sm, local/CPU): verbo de 3ª pessoa sem sujeito explícito,
+sujeito "ele/isso/aquilo", oração de finalidade solta ("Pra falar que..."),
+conectivo/minúscula no começo ou hesitação curta ("O 1...") = depende;
+pergunta/imperativo pra quem assiste ("Lembra do...?", "Imagina...") e
+existencial ("Tem um cara que...") = se sustenta. Se a abertura depende, o
+clipe avança até a primeira frase que se sustenta antes do gancho (ou
+começa no gancho). Validado em 20 frases reais do podcast (20/20). Sem o
+spaCy instalado, cai pra uma lista de verbos comuns.

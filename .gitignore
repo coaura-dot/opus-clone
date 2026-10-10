@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# vídeos baixados, arquivos temporários e clipes gerados
+.autoclip_work/
+output/
+# whisper.cpp compilado localmente + modelos
+whisper.cpp/
+*.mp4
+*.mkv
+*.webm
+
+# login do YouTube (segredo!) e estado do piloto automático
+credentials/
+autopilot_data/

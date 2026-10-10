@@ -1,0 +1,280 @@
+"""
+Kit de postagem por clipe: título, descrição, hashtags por rede (YouTube
+Shorts, Instagram Reels, TikTok) e crédito da música, gravados num .txt ao
+lado do .mp4 — pronto pra copiar e colar na hora de publicar.
+
+Tudo sai da própria transcrição do clipe, com heurística local (mesma
+filosofia do resto do projeto: sem LLM, sem API, sem custo por vídeo):
+  - título = a frase do clipe com mais cara de gancho (mesma pontuação de
+    `clip_selector._text_score`: perguntas, números, palavras de emoção,
+    padrões de gancho), preferindo as do começo — é o que a pessoa vai ouvir
+    primeiro, então o título "promete" o que o clipe entrega logo de cara;
+  - hashtags de assunto = palavras de conteúdo que mais se repetem no clipe
+    (mesmo filtro de stopwords do TextTiling em clip_selector), mais as tags
+    fixas de cada rede e as do seu canal (config.POST_EXTRA_HASHTAGS).
+"""
+import json
+import re
+from collections import Counter
+from pathlib import Path
+from typing import List, Optional
+
+from . import config
+from .clip_selector import _content_words, _text_score
+
+TITLE_MAX_CHARS = 70          # cabe inteiro no Shorts/TikTok sem ser cortado com "..."
+DESCRIPTION_MAX_CHARS = 220
+
+# Palavras que passam no filtro de stopwords do TextTiling (servem pra medir
+# troca de assunto) mas não dizem nada como hashtag.
+_WEAK_TAG_WORDS = {
+    "porque", "gente", "coisa", "coisas", "fazer", "feito", "sabe", "acho",
+    "tava", "pode", "podia", "tudo", "ainda", "sempre", "nunca", "todo",
+    "toda", "todos", "todas", "outro", "outra", "outros", "outras", "cada",
+    "pouco", "hoje", "agora", "antes", "verdade", "digamos", "quer", "dizer",
+    "falar", "falou", "fala", "olha", "cara", "mano", "tipo", "assim",
+    "sobre", "nada", "algum", "alguma", "alguns", "algumas", "fica", "ficou",
+    "está", "estava", "tinha", "tenho", "temos", "teve", "vezes", "parte",
+    "exemplo", "forma", "maneira", "ponto", "questão", "realmente",
+    "because", "people", "thing", "things", "something", "really", "right",
+    "know", "think", "going", "want", "said", "says", "actually",
+}
+
+PLATFORM_HASHTAGS = {
+    "YouTube Shorts": ["#shorts"],
+    "Instagram Reels": ["#reels"],
+    "TikTok": ["#fyp", "#viral"],
+}
+
+
+def _sentences(text: str) -> List[str]:
+    parts = re.split(r"(?<=[.!?…])\s+", re.sub(r"\s+", " ", text).strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _trim_at_word(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    cut = text[:max_chars + 1].rsplit(" ", 1)[0].rstrip(",;:—-")
+    return cut + "…"
+
+
+def _clean_title(sentence: str) -> str:
+    # conectivos soltos no começo ("E", "Então", "Mas"...) só fazem sentido
+    # com a frase anterior — num título isolado soam como frase cortada
+    # e interjeição/vocativo/palavrão abrindo a frase ("Porra, por que...",
+    # "Cara, ...", "Mano, ...") -- na fala é natural, num título fica feio
+    # (achado real nos primeiros posts do piloto automático)
+    s = sentence
+    for _ in range(3):
+        s = re.sub(r"^(e|então|mas|aí|daí|porque|tipo|né|cara|mano|velho|véi|bicho|po|pô|porra|caralho|"
+                   r"puta merda|nossa|olha|ó|ah|eh|é|ué|bom|enfim|sabe|tá|beleza|and|so|but)\b[,!.\s]*",
+                   "", s.strip(), flags=re.IGNORECASE)
+    # vocativo de quem pergunta ("Walter, quer deixar...", "Fulano, por que
+    # você...") -- achado real nos títulos postados
+    s = re.sub(r"^[A-ZÀ-Ý][\wÀ-ÿ]+(?:\s[A-ZÀ-Ý][\wÀ-ÿ]+)?,\s+(?=(você|vc|tu|quer|queria|conta|fala|explica|"
+               r"me\b|como|por ?que|qual|quais|quanto|o que|e (você|aí)))", "", s.strip())
+    s = re.sub(r",?\s*\b(né|tá ligado|entendeu|sabe)\?*$", "", s, flags=re.IGNORECASE)
+    s = s.strip(" .…,;:")
+    if len(s) > TITLE_MAX_CHARS:
+        # frase longa: fecha na última vírgula que caiba (oração completa)
+        # antes de apelar pro corte seco em palavra com "…"
+        clauses = [m.start() for m in re.finditer(r"[,;:—]", s[:TITLE_MAX_CHARS + 1])]
+        clauses = [c for c in clauses if c >= 25]
+        s = s[:clauses[-1]] if clauses else _trim_at_word(s, TITLE_MAX_CHARS)
+    return s[:1].upper() + s[1:] if s else ""
+
+
+_DEPENDENT_START = re.compile(r"^(ele|ela|eles|elas|isso|isto|aquilo|esse|essa|esses|essas|aquele|aquela|"
+                              r"ali|lá|daí|aí|nisso|disso|he|she|they|this|that|it)\b", re.IGNORECASE)
+_HESITATION = re.compile(r"\b(\w+)(?: \1\b)+|\b(tipo|né|assim|sabe|enfim|meio que|que por isso que)\b",
+                         re.IGNORECASE)
+
+
+def make_title(clip_text: str, hook: Optional[str] = None) -> str:
+    """Título sem IA: a frase do COMEÇO do clipe (o que a pessoa ouve
+    primeiro) que mais funciona sozinha como título -- gancho, pergunta,
+    número, nome próprio, assunto concreto; frase que depende de contexto
+    ("ele...", "isso..."), cheia de hesitação ou que é recado/encerramento
+    perde. Com o juiz de IA ligado (src/ai_judge.py), o título é o dele."""
+    from .clip_selector import _SUBSTANCE_RE
+    from .quality import _CLOSING, _OPENING, _PROMO, _hits
+    sentences = _sentences(clip_text)
+    total = len(clip_text.split())
+    pool, seen = [], 0
+    for i, sent in enumerate(sentences):
+        if i >= 12 or seen > max(total * 0.5, 60):
+            break
+        pool.append((i, sent))
+        seen += len(sent.split())
+    hook = (hook or "").strip()
+    if hook and all(hook != s_ for _, s_ in pool):
+        pool.append((len(pool), hook))
+    best, best_score = None, float("-inf")
+    for i, sent in pool:
+        cand = _clean_title(sent)
+        if len(cand) < 20:
+            continue
+        score = _text_score(cand) + 1.0 / (1 + i)          # desempate: o que é dito primeiro
+        proper = re.findall(r"(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}", cand)
+        score += min(len(proper), 3) * 0.8                    # concreto: cita alguém/algo
+        score += min(len(_SUBSTANCE_RE.findall(cand)), 3) * 0.7
+        if hook and sent.strip() == hook:
+            score += 1.5                                      # a frase-gancho que originou o corte
+        if len(sent) <= TITLE_MAX_CHARS + 5 and len(cand) >= 30:
+            score += 2.0                                      # cabe inteira, sem cortar
+        elif len(sent) > 90:
+            score -= 3.0                                      # sairia truncada
+        if sent[:1].islower():
+            score -= 2.0                                      # pedaço de frase maior
+        if sent.endswith(("...", "…")):
+            score -= 3.0                                      # fala interrompida
+        if _DEPENDENT_START.match(cand):
+            score -= 2.5                                      # "ele/isso..." -- quem? o quê?
+        score -= 0.8 * len(_HESITATION.findall(cand))
+        if cand.endswith("?"):
+            score += 1.0
+        if _hits(_CLOSING, cand) or _hits(_PROMO, cand) or _hits(_OPENING, cand):
+            score -= 10.0
+        if score > best_score:
+            best, best_score = cand, score
+    return best or _clean_title(hook or clip_text) or "Corte"
+
+
+def make_topic_hashtags(clip_text: str, max_tags: int = 4) -> List[str]:
+    counts = Counter(
+        w for w in _content_words(clip_text)
+        if len(w) >= 4 and not w.isdigit() and w not in _WEAK_TAG_WORDS
+    )
+    # repetição pesa mais, mas palavra longa (substantivo/nome próprio)
+    # ganha de palavra curta com a mesma contagem
+    ranked = sorted(counts.items(), key=lambda kv: (kv[1] * (1 + min(len(kv[0]), 12) / 12), len(kv[0])),
+                    reverse=True)
+    return ["#" + w for w, c in ranked if c >= 2][:max_tags]
+
+
+def make_description(clip_text: str) -> str:
+    sentences = _sentences(clip_text)
+    desc = ""
+    for sent in sentences:
+        nxt = f"{desc} {sent}".strip()
+        if len(nxt) > DESCRIPTION_MAX_CHARS:
+            break
+        desc = nxt
+    desc = desc or _trim_at_word(clip_text.strip(), DESCRIPTION_MAX_CHARS)
+    return desc[:1].upper() + desc[1:]
+
+
+def build_post_text(clip_text: str, music_credit: Optional[str] = None,
+                    source_title: Optional[str] = None, source_url: Optional[str] = None,
+                    title: Optional[str] = None) -> str:
+    title = title or make_title(clip_text)
+    description = make_description(clip_text)
+    topic_tags = make_topic_hashtags(clip_text)
+    extra_tags = [t if t.startswith("#") else f"#{t}"
+                  for t in getattr(config, "POST_EXTRA_HASHTAGS", [])]
+
+    lines = [
+        "TÍTULO (YouTube Shorts / legenda de capa)",
+        title,
+        "",
+        "DESCRIÇÃO",
+        description,
+        "",
+    ]
+    for platform, platform_tags in PLATFORM_HASHTAGS.items():
+        tags = list(dict.fromkeys(topic_tags + extra_tags + platform_tags))
+        lines += [f"HASHTAGS — {platform}", " ".join(tags), ""]
+    if music_credit:
+        lines += ["MÚSICA (obrigatório colocar na descrição — licença de atribuição)",
+                  music_credit, ""]
+    if getattr(config, "EXPORT_NO_MUSIC_VERSION", True):
+        lines += ["DICA: quer usar um som em alta? Poste o arquivo *_sem_musica.mp4 e",
+                  "escolha o som pela biblioteca do app (aí não precisa do crédito acima).", ""]
+    if source_title or source_url:
+        src = " — ".join(x for x in (source_title, source_url) if x)
+        lines += ["FONTE (dê crédito ao vídeo original)", f"Corte de: {src}", ""]
+    return "\n".join(lines)
+
+
+def write_post_kit(path: str, clip_text: str, music_credit: Optional[str] = None,
+                   source_title: Optional[str] = None, source_url: Optional[str] = None,
+                   title: Optional[str] = None) -> str:
+    Path(path).write_text(
+        build_post_text(clip_text, music_credit, source_title, source_url, title), encoding="utf-8")
+    return path
+
+
+YT_TITLE_MAX = 100
+YT_DESCRIPTION_MAX = 4800      # limite real: 5000 bytes
+YT_TAGS_MAX_CHARS = 450        # limite real: 500 caracteres somando as tags
+
+
+def _yt_safe(text: str) -> str:
+    # o YouTube recusa título/descrição com "<" ou ">"
+    return text.replace("<", "‹").replace(">", "›")
+
+
+def _full_title(prefix: str, clip_text: str) -> Optional[str]:
+    """A frase do texto que começa com `prefix`, inteira, se couber em 95."""
+    key = re.sub(r"\s+", " ", prefix).strip().lower()[:40]
+    for sent in _sentences(clip_text):
+        if key and key in sent.lower():
+            t = sent[sent.lower().index(key):].strip(" .,;:")
+            if len(t) <= 95:
+                return t[:1].upper() + t[1:]
+            cut = [m.start() for m in re.finditer(r"[,;:—]", t[:96])]
+            cut = [c for c in cut if c >= 40]
+            if cut:
+                return t[:cut[-1]]
+    return None
+
+
+def build_youtube_meta(clip_text: str, music_credit: Optional[str] = None,
+                       source_title: Optional[str] = None, source_url: Optional[str] = None,
+                       title: Optional[str] = None) -> dict:
+    """Título, descrição e tags prontos pra API do YouTube (postagem
+    automática -- ver autopilot.py). As 3 primeiras hashtags da descrição
+    aparecem em cima do título no Shorts."""
+    title = title or make_title(clip_text)
+    if title.endswith("…"):
+        # o título curto (70, pro texto da capa) cortou a frase; no YouTube
+        # cabem 100 -- usa a frase inteira se couber
+        full = _full_title(title[:-1], clip_text)
+        if full:
+            title = full
+    topic_tags = make_topic_hashtags(clip_text)
+    extra_tags = [t if t.startswith("#") else f"#{t}"
+                  for t in getattr(config, "POST_EXTRA_HASHTAGS", [])]
+    hashtags = list(dict.fromkeys(["#shorts"] + topic_tags + extra_tags))
+
+    parts = [make_description(clip_text), "", " ".join(hashtags)]
+    if source_title or source_url:
+        parts += ["", "Corte de: " + " — ".join(x for x in (source_title, source_url) if x)]
+    if music_credit:
+        parts += ["", "Música: " + music_credit]
+    description = _yt_safe("\n".join(parts)).strip()
+    while len(description.encode("utf-8")) > YT_DESCRIPTION_MAX:
+        description = description[:-50]
+
+    tags, used = [], 0
+    for t in [h.lstrip("#") for h in hashtags if h != "#shorts"] + ["shorts", "cortes"]:
+        if t and t not in tags and used + len(t) + 1 <= YT_TAGS_MAX_CHARS:
+            tags.append(t)
+            used += len(t) + 1
+    return {
+        "title": _yt_safe(title)[:YT_TITLE_MAX].strip() or "Corte",
+        "description": description,
+        "tags": tags,
+        "source_title": source_title,
+        "source_url": source_url,
+    }
+
+
+def write_post_meta(path: str, clip_text: str, music_credit: Optional[str] = None,
+                    source_title: Optional[str] = None, source_url: Optional[str] = None,
+                    title: Optional[str] = None, extra: Optional[dict] = None) -> str:
+    meta = build_youtube_meta(clip_text, music_credit, source_title, source_url, title)
+    meta.update(extra or {})
+    Path(path).write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
