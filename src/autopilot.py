@@ -201,22 +201,24 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
                 log(f"    | {line}")
     reader = threading.Thread(target=_pump, daemon=True)
     reader.start()
-    from .throttle import time_factor
-    # com a GPU limitada (modo 25/50/70%) a edição demora mais: o limite cresce junto
-    timeout = getattr(config, "AUTOPILOT_WORKER_TIMEOUT_MINUTES", 150) * 60 * time_factor()
-    deadline = time.time() + timeout
+    from .throttle import slowest_factor
+    # com a GPU limitada (modo 25/50/70%) a edição demora mais: o limite
+    # cresce junto (e o modo pode ser trocado no meio, pela interface)
+    base = getattr(config, "AUTOPILOT_WORKER_TIMEOUT_MINUTES", 150) * 60
+    started = time.time()
     try:
         # espera em passos curtos: no Windows um wait() longo segura o Ctrl+C
         # até a edição acabar (achado real: o piloto "desligou sozinho" logo
         # depois de terminar um vídeo -- era um Ctrl+C apertado bem antes)
         while proc.poll() is None:
-            if time.time() > deadline:
+            timeout = base * slowest_factor()
+            if time.time() - started > timeout:
                 log(f"    [!] edição passou de {timeout // 60:.0f} min -- encerrando esse vídeo e seguindo.")
                 _kill_tree(proc)
                 break
             time.sleep(1)
     except KeyboardInterrupt:
-        log("    Ctrl+C: parando a edição em andamento...")
+        log("    Parando a edição em andamento...")
         _kill_tree(proc)
         raise
     reader.join(timeout=10)
@@ -821,7 +823,9 @@ def _sleep_until(ts: float, log: Log, why: str):
         log(f"  .. {why} -- próxima ação às {datetime.fromtimestamp(ts):%H:%M}")
     end = time.time() + wait
     while time.time() < end:
-        time.sleep(min(30, end - time.time()))
+        # passos curtos: o botão "Desligar" da interface (src/control.py)
+        # para o piloto em ~2 s mesmo no meio de uma espera longa
+        time.sleep(max(min(2.0, end - time.time()), 0))
 
 
 def _get_service(log: Log, upload: bool):
@@ -842,7 +846,24 @@ def _get_service(log: Log, upload: bool):
 
 
 def run_forever(upload: bool = True):
-    """Modo automático: roda até fechar a janela / desligar o PC."""
+    """Modo automático: roda até fechar a janela / desligar o PC / apertar
+    "Desligar" na interface."""
+    from . import control
+    if not control.start("auto"):
+        other = control.running_info() or {}
+        print(f"\n[!] Já tem um piloto ligado neste PC (processo {other.get('pid', '?')}, aberto pela "
+              "interface ou por outro atalho). Dois ao mesmo tempo bagunçariam a fila: este não vai ligar.")
+        return
+    try:
+        _run_forever(upload)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        control.finish()
+        keep_awake(False)
+
+
+def _run_forever(upload: bool = True):
     from . import discovery
     out_root = Path(getattr(config, "AUTOPILOT_OUTPUT_DIR", "output/autopiloto"))
     if not out_root.is_absolute():
@@ -853,7 +874,7 @@ def run_forever(upload: bool = True):
     keep_awake(True)
 
     log("=" * 60)
-    log("  PILOTO AUTOMÁTICO LIGADO -- feche esta janela pra parar")
+    log("  PILOTO AUTOMÁTICO LIGADO -- pra parar: botão Desligar na interface (ou feche a janela do .bat)")
     log(f"  canais: {', '.join(getattr(config, 'AUTOPILOT_CHANNELS', [])) or '(nenhum)'}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
     log(f"  postagem: {'LIGADA' if upload else 'DESLIGADA (só gera os clipes)'} -- até "
@@ -1005,7 +1026,8 @@ def run_forever(upload: bool = True):
                 _sleep_until(time.time() + 1800, log,
                              "fila cheia e postagem indisponível (confira o login do YouTube)")
         except KeyboardInterrupt:
-            log("  Piloto automático desligado (Ctrl+C).")
+            from . import control
+            log("  Piloto automático desligado" + (" (botão Desligar)." if control.stop_requested() else " (Ctrl+C)."))
             keep_awake(False)
             return
         except Exception as e:  # nada derruba o loop
@@ -1017,6 +1039,21 @@ def run_forever(upload: bool = True):
 
 def run_once(url: str, n_clips: int, upload: bool = True):
     """Modo manual: um link -> edita -> posta os clipes na hora."""
+    from . import control
+    if not control.start("link"):
+        print("\n[!] O piloto automático está ligado: desligue ele antes de cortar um link "
+              "(os dois mexem na mesma fila).")
+        return
+    try:
+        _run_once(url, n_clips, upload)
+    except KeyboardInterrupt:
+        Log(DATA_DIR / "autopilot.log")("  Corte do link interrompido.")
+    finally:
+        control.finish()
+        keep_awake(False)
+
+
+def _run_once(url: str, n_clips: int, upload: bool = True):
     out_root = Path(getattr(config, "AUTOPILOT_OUTPUT_DIR", "output/autopiloto"))
     if not out_root.is_absolute():
         out_root = ROOT / out_root

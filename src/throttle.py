@@ -16,7 +16,9 @@ estraga nada: o programa só continua de onde parou. O resto (baixar,
 recortar, analisar rosto) é CPU e não é limitado.
 
 O modo escolhido fica salvo em autopilot_data/modo_gpu.txt: quando o piloto
-religa (ou depois de uma atualização) ele volta no mesmo modo.
+religa (ou depois de uma atualização) ele volta no mesmo modo. E vale AO
+VIVO: a interface (interface.py) troca o modo com o piloto ligado e a
+edição em andamento passa pro modo novo em ~1 s, sem parar nada.
 
 Tempo: com 25% a transcrição e o encode levam até ~4x mais; os limites de
 tempo (watchdog, tempo máximo por vídeo) crescem junto pra nada ser
@@ -40,7 +42,7 @@ MODES = (25, 50, 70, 100)
 _PERIOD = 1.0  # segundos de cada ciclo trabalha/pausa
 
 _GPU_ARGS = ("_amf", "_nvenc", "_qsv", "_vaapi", "_vulkan", "-hwaccel")
-_state = {"limit": 100, "thread": None, "installed": False}
+_state = {"limit": 100, "thread": None, "installed": False, "slowest": 1.0}
 _procs: "weakref.WeakSet" = weakref.WeakSet()
 _paused: set = set()
 _lock = threading.Lock()
@@ -55,13 +57,14 @@ def _parse(v) -> Optional[int]:
 
 
 def configured_limit() -> int:
-    """Variável de ambiente (o .bat / o piloto passam) > modo salvo > config."""
-    n = _parse(os.environ.get(ENV))
+    """Modo salvo (o último escolhido: interface, atalho ou --gpu) >
+    variável de ambiente > config."""
+    try:
+        n = _parse(SAVED.read_text(encoding="utf-8"))
+    except OSError:
+        n = None
     if n is None:
-        try:
-            n = _parse(SAVED.read_text(encoding="utf-8"))
-        except OSError:
-            n = None
+        n = _parse(os.environ.get(ENV))
     if n is None:
         try:
             from . import config
@@ -91,6 +94,14 @@ def time_factor(n: Optional[int] = None) -> float:
     return 1.0 if n >= 100 else min(100.0 / n, 4.0)
 
 
+def slowest_factor() -> float:
+    """O maior `time_factor` desde que este processo ligou (o modo pode ter
+    sido trocado no meio): os tempos-limite usam este."""
+    f = max(_state["slowest"], time_factor())
+    _state["slowest"] = f
+    return f
+
+
 def _uses_gpu(args) -> bool:
     if isinstance(args, (str, bytes)):
         parts = [args.decode(errors="ignore") if isinstance(args, bytes) else args]
@@ -111,6 +122,9 @@ if sys.platform == "win32":
     import ctypes
 
     _ntdll = ctypes.WinDLL("ntdll")
+    _ntdll.NtSuspendProcess.argtypes = (ctypes.c_void_p,)
+    _ntdll.NtResumeProcess.argtypes = (ctypes.c_void_p,)
+    _ntdll.NtSuspendProcess.restype = _ntdll.NtResumeProcess.restype = ctypes.c_long
 
     def _pause(p) -> bool:
         return _ntdll.NtSuspendProcess(ctypes.c_void_p(int(p._handle))) == 0
@@ -155,7 +169,13 @@ def _alive():
 
 
 def _loop() -> None:
+    last_read = 0.0
     while True:
+        if time.time() - last_read >= 1.0:
+            # modo trocado na interface vale na hora
+            last_read = time.time()
+            _state["limit"] = configured_limit()
+            _state["slowest"] = max(_state["slowest"], time_factor(_state["limit"]))
         lim = _state["limit"]
         on = _PERIOD * lim / 100.0
         procs = _alive()
@@ -185,14 +205,15 @@ class _ThrottledPopen(subprocess.Popen):
         super().__init__(args, *a, **kw)
         self._gpu_limited = False
         self._no_scale = False
-        if _state["limit"] < 100 and _uses_gpu(args):
+        if _uses_gpu(args):
+            # registra mesmo sem limite agora: o modo pode mudar no meio
             self._gpu_limited = True
             _procs.add(self)
 
     def _scale(self, timeout):
         if timeout is None or not getattr(self, "_gpu_limited", False) or self._no_scale:
             return timeout
-        return timeout * time_factor(_state["limit"])
+        return timeout * time_factor(25)  # o pior caso: o modo pode baixar no meio
 
     def communicate(self, input=None, timeout=None):
         timeout = self._scale(timeout)
@@ -219,11 +240,14 @@ class _ThrottledPopen(subprocess.Popen):
 
 
 def install(limit: Optional[int] = None, log=print) -> int:
-    """Liga o limite neste processo (e nos que ele abrir). Devolve o %."""
+    """Liga o controle de GPU neste processo (e nos que ele abrir). Fica
+    ligado mesmo "sem limite": o modo pode ser trocado na interface com o
+    programa rodando. Devolve o % atual."""
     n = configured_limit() if limit is None else (_parse(limit) or 100)
     os.environ[ENV] = str(n)  # o operário (main.py) herda
     _state["limit"] = n
-    if n >= 100 or _state["installed"]:
+    _state["slowest"] = max(_state["slowest"], time_factor(n))
+    if _state["installed"]:
         return n
     subprocess.Popen = _ThrottledPopen
     _state["installed"] = True
@@ -231,12 +255,10 @@ def install(limit: Optional[int] = None, log=print) -> int:
     _state["thread"] = t
     t.start()
     atexit.register(_resume_all)
-    try:
-        from . import config
-        if n <= 50:
-            # um clipe por vez no encoder da placa
-            config.MAX_PARALLEL_CLIPS_HW = 1
-        config.WATCHDOG_TIMEOUT_SECONDS = getattr(config, "WATCHDOG_TIMEOUT_SECONDS", 5400) * time_factor(n)
-    except Exception:
-        pass
+    if n <= 50:
+        try:
+            from . import config
+            config.MAX_PARALLEL_CLIPS_HW = 1  # um clipe por vez no encoder da placa
+        except Exception:
+            pass
     return n

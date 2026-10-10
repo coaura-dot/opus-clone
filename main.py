@@ -86,7 +86,7 @@ def _force_exit(code: int):
     os._exit(code)
 
 
-def _start_watchdog(timeout_seconds: float):
+def _start_watchdog(timeout_seconds: float, scale_with_gpu: bool = False):
     """Rede de segurança contra QUALQUER travamento (não só na saída) —
     inclusive um processo ffmpeg/whisper.cpp que nunca retorna no meio do
     processamento. Se o programa inteiro não terminar sozinho dentro de
@@ -99,7 +99,15 @@ def _start_watchdog(timeout_seconds: float):
     (vídeos muito longos, muitos clipes) legitimamente demorar mais que
     o padrão."""
     def _watchdog():
-        time.sleep(timeout_seconds)
+        if scale_with_gpu:
+            # modo de GPU limitada (src/throttle.py) deixa tudo mais lento, e
+            # o modo pode mudar no meio: confere o limite a cada 15 s
+            from src.throttle import slowest_factor
+            t0 = time.time()
+            while time.time() - t0 < timeout_seconds * slowest_factor():
+                time.sleep(15)
+        else:
+            time.sleep(timeout_seconds)
         print(f"\n[watchdog] o programa passou de {timeout_seconds/60:.0f} min sem terminar "
               "sozinho -- isso não é normal, forçando encerramento agora (provável softlock; "
               "ver RELATORIO_PROXIMOS_PASSOS.txt, item 11). Se o seu vídeo/quantidade de clipes "
@@ -161,13 +169,13 @@ def main():
     print("  AUTO CLIPPER — Cortes virais automáticos (estilo Opus Clip)")
     print("=" * 62)
 
-    # modo de GPU (25/50/70/sem limite, ver src/throttle.py): herdado do piloto
-    # ou do modo salvo; precisa vir antes do watchdog (o tempo-limite cresce junto)
+    # modo de GPU (25/50/70/sem limite, ver src/throttle.py): o modo salvo
+    # (pode ser trocado na interface com a edição rodando)
     from src import throttle
     gpu = throttle.install()
     if gpu < 100:
         print(f"  Modo: {throttle.describe(gpu)} (transcrição e encode pausam parte de cada segundo)")
-    _start_watchdog(getattr(config, "WATCHDOG_TIMEOUT_SECONDS", 90 * 60))
+    _start_watchdog(getattr(config, "WATCHDOG_TIMEOUT_SECONDS", 90 * 60), scale_with_gpu=True)
 
     ensure_ffmpeg()
     from src.downloader import ytdlp_cmd

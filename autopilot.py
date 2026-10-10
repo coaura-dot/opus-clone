@@ -4,6 +4,7 @@ Auto Clipper -- PILOTO AUTOMÁTICO
 =================================
 Baixa, edita e POSTA no YouTube sozinho: título, descrição, hashtags, tudo.
 
+    interface.py (AUTO_CLIPPER.bat)  janela com botões: ligar/desligar, modo da GPU, painel e log
     python autopilot.py              menu
     python autopilot.py --auto       modo automático infinito (1 clique: INICIAR_AUTOMATICO.bat)
     python autopilot.py --url LINK   um vídeo: edita e posta os clipes

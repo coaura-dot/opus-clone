@@ -151,6 +151,25 @@ um com estes arquivos ao lado:
 baixa, edita e **posta** no seu canal, com título, descrição, hashtags,
 crédito do vídeo original e da música.
 
+- **Duplo clique em `AUTO_CLIPPER.bat`** (ou no atalho "Auto Clipper" da
+  área de trabalho) -- a **interface**, uma janela com botões
+  (`interface.py`):
+  - **4 botões de modo** (25%, 50%, 70% da GPU, sem limite): com o piloto
+    desligado, o botão **liga** nesse modo; com ele ligado, **troca** o modo
+    na hora, sem parar a edição (só muda o ritmo da placa).
+  - **Ligar / Desligar:** desligar para em segundos e salva tudo; o vídeo
+    que estava sendo editado volta pra lista. Se o piloto não responder em
+    90 s, é encerrado à força.
+  - **Painel:** postados hoje (de 20), clipes na fila, próximo post, clipes
+    pra postar à mão, último post (clique abre no YouTube) e o log ao vivo,
+    com avisos em vermelho.
+  - **Atalhos:** cortar um link, conectar o canal do YouTube, abrir as
+    pastas "postar à mão" e dos cortes, YouTube Studio.
+  - O piloto roda escondido, sem janela preta. Se cair, a interface religa
+    em 60 s. Ao fechar a janela ela pergunta se é pra desligar o piloto ou
+    deixar ele trabalhando sozinho; ao abrir de novo, mostra o piloto que já
+    estava ligado. Um piloto aberto pelos `.bat` também aparece e desliga
+    pelo botão. Nunca roda dois pilotos ao mesmo tempo (bagunçaria a fila).
 - **Duplo clique em `INICIAR_AUTOMATICO.bat`** -- modo automático infinito:
   procura os vídeos que estão ganhando views mais rápido nos canais da sua
   lista (`AUTOPILOT_CHANNELS` em `src/config.py`), corta, posta espaçado e
@@ -167,8 +186,9 @@ crédito do vídeo original e da música.
   o mesmo piloto automático, usando no máximo 25%, 50%, 70% da GPU ou sem
   limite. O modo escolhido fica salvo (`autopilot_data/modo_gpu.txt`): o
   `INICIAR_AUTOMATICO.bat` e o religamento depois de uma atualização voltam
-  no último modo. Também dá pra trocar no menu (opção 6) ou com
-  `python autopilot.py --auto --gpu 50`. Detalhes em "Limite de uso da GPU".
+  no último modo. Também dá pra trocar na interface (vale na hora), no
+  menu (opção 6) ou com `python autopilot.py --auto --gpu 50`. Detalhes em
+  "Limite de uso da GPU".
 
 ### Configuração (uma vez só, ~10 min)
 
@@ -973,6 +993,8 @@ volume consistente entre si, independente de quão alto/baixo estava o
 opus-clip-clone/
 ├── main.py                 # CLI principal
 ├── autopilot.py            # piloto automático: baixa, edita e posta no YouTube
+├── interface.py            # janela com botões: ligar/desligar, modo da GPU, painel, log
+├── AUTO_CLIPPER.bat        # abre a interface
 ├── INICIAR_AUTOMATICO.bat  # 1 clique: modo automático infinito (no último modo de GPU)
 ├── INICIAR_GPU_25/50/70/SEM_LIMITE.bat  # o mesmo, limitando o uso da GPU
 ├── AUTO_CLIPPER_MENU.bat   # menu (um link, login do canal, fila)
@@ -1000,6 +1022,7 @@ opus-clip-clone/
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
 │   ├── throttle.py            # modos de GPU 25/50/70%: pausa whisper.cpp/encode parte de cada segundo
+│   ├── control.py             # liga/desliga o piloto por fora (interface): "estou vivo" e pedido de parar
 │   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
 │   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
 │   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta
