@@ -1137,7 +1137,7 @@ AUTOPILOT_MIN_QUALITY = 45
 # (vazio = padrão: gancho 22, picos 12, ritmo 12, conteudo 16, fechamento 8,
 # imagem 12, duracao 10, titulo 8). Ex.: {"gancho": 30} dá mais peso ao começo.
 VIRAL_WEIGHTS = {}
-# Shorts por dia (a interface muda: clique em "Postados hoje"). Achado real
+# Shorts por dia (a interface muda: "Shorts por dia", botões − e +). Achado real
 # (9-10/out): com 6/dia (1 a cada 4 h) os Shorts iam de 369 a ~1.300 views;
 # com 20-24/dia (1 por hora) TODOS os seguintes ficaram com 0-6 views -- o
 # YouTube parou de entregar. Posta pela API até o YouTube recusar (cota

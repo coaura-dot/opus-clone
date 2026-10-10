@@ -17,6 +17,7 @@ ligar e desligar por botões de acordo com o modo que eu quiser".
     estava sendo editado volta pra lista).
   - Painel "Agora": postados hoje, fila, próximo post, último post, o que o
     piloto está fazendo; e o log ao vivo.
+  - Quantos Shorts por dia (− e +; padrão 6, vale na hora).
   - Cortar um link, conectar o canal, abrir as pastas.
 
 O piloto roda num processo separado, sem janela. Se ele cair, a interface
@@ -304,6 +305,18 @@ class App:
         self.power.pack(side="left")
         self.hint = tk.Label(row, text="", bg=CARD, fg=MUTED, font=(FONT, 9), justify="left", wraplength=560)
         self.hint.pack(side="left", padx=14)
+        # quantos Shorts por dia (pedido do usuário; padrão 6) -- vale na hora
+        prow = tk.Frame(body, bg=CARD)
+        prow.pack(fill="x", pady=(12, 0))
+        tk.Label(prow, text="Shorts por dia:", bg=CARD, fg=TEXT, font=(FONT, 11, "bold")).pack(side="left")
+        Button(prow, "−", lambda: self._posts_step(-1), font=(FONT, 13, "bold"), padx=14, pady=2).pack(
+            side="left", padx=(12, 0))
+        self.posts_val = tk.Label(prow, text="", bg=CARD, fg=TEXT, font=(FONT, 15, "bold"), width=3)
+        self.posts_val.pack(side="left")
+        Button(prow, "+", lambda: self._posts_step(1), font=(FONT, 13, "bold"), padx=14, pady=2).pack(side="left")
+        self.posts_hint = tk.Label(prow, text="", bg=CARD, fg=MUTED, font=(FONT, 9), justify="left", anchor="w",
+                                   wraplength=480)
+        self.posts_hint.pack(side="left", padx=14)
 
         # --- agora
         card, body = self._card(r, "AGORA")
@@ -311,20 +324,15 @@ class App:
         grid = tk.Frame(body, bg=CARD)
         grid.pack(fill="x")
         self.kpi = {}
-        for i, (key, label) in enumerate([("today", "Postados hoje / por dia  ✎"), ("queue", "Clipes na fila"),
+        for i, (key, label) in enumerate([("today", "Postados hoje"), ("queue", "Clipes na fila"),
                                           ("next", "Próximo post"), ("manual", "Pra postar à mão hoje")]):
             box = tk.Frame(grid, bg=CARD2)
             box.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 8, 0))
             grid.columnconfigure(i, weight=1, uniform="k")
             v = tk.Label(box, text="—", bg=CARD2, fg=TEXT, font=(FONT, 18, "bold"))
             v.pack(anchor="w", padx=12, pady=(8, 0))
-            lab = tk.Label(box, text=label, bg=CARD2, fg=MUTED, font=(FONT, 9))
-            lab.pack(anchor="w", padx=12, pady=(0, 8))
+            tk.Label(box, text=label, bg=CARD2, fg=MUTED, font=(FONT, 9)).pack(anchor="w", padx=12, pady=(0, 8))
             self.kpi[key] = v
-            if key == "today":  # clique: quantos Shorts por dia
-                for w in (box, v, lab):
-                    w.configure(cursor="hand2")
-                    w.bind("<Button-1>", lambda e: self._posts_click())
         lp = tk.Frame(body, bg=CARD)
         lp.pack(fill="x", pady=(10, 0))
         # quadros do vídeo ORIGINAL do último post: quando a câmera sai errada,
@@ -644,25 +652,32 @@ class App:
             self._sheet = None
             self.last_post.config(text="Nenhum vídeo postado ainda.", fg=MUTED)
         self.sheet_link.config(text="ver quadros do original" if self._sheet else "")
+        self._show_posts()
         b = st.get("reach_brake")
         self.alert.config(text=(f"⚠ O YouTube parou de entregar os Shorts: os últimos tiveram "
                                 f"{', '.join(map(str, b.get('recent', [])))} views (antes ~{b.get('base', 0):.0f}). "
                                 f"Freio ligado: 1 post a cada {ap.reach.brake_hours():.0f} h até voltar.")
                           if b and getattr(config, "AUTOPILOT_REACH_BRAKE", True) else "")
 
-    def _posts_click(self):
-        cur = ap.daily_limit()
-        n = simpledialog.askinteger(
-            "Shorts por dia",
-            "Quantos Shorts postar por dia?\n\n"
-            "Recomendado: 6 (1 a cada 4 h). Com 1 por hora o YouTube parou de\n"
-            "entregar os vídeos do canal (0-6 views cada).\n\nVale na hora, sem desligar.",
-            parent=self.root, minvalue=1, maxvalue=24, initialvalue=cur)
-        if n:
-            control.set_posts_per_day(n)
-            gap = ap.post_gap_seconds() / 3600
-            self._note(f"Agora: até {n} Shorts por dia (1 a cada {gap:.1f} h).")
-            self._fill_stats()
+    def _posts_step(self, d: int):
+        n = int(min(max(ap.daily_limit() + d, 1), 24))
+        control.set_posts_per_day(n)
+        self._show_posts()
+        self._fill_stats()
+
+    def _show_posts(self):
+        """Valor e explicação do "Shorts por dia" (a fila pode mudar por fora)."""
+        n = ap.daily_limit()
+        mins = int(round(ap.post_gap_seconds() / 60))
+        gap = f"{mins // 60} h" + (f" {mins % 60} min" if mins % 60 else "") if mins >= 60 else f"{mins} min"
+        self.posts_val.config(text=str(n))
+        if n > 6:
+            # achado real (9-10/out): com 1 por hora todos os Shorts ficaram com 0-6 views
+            self.posts_hint.config(text=f"1 a cada {gap} · cuidado: acima de 6 o canal parou de pegar views",
+                                   fg=AMBER)
+        else:
+            self.posts_hint.config(text=f"1 a cada {gap}" + (" · recomendado" if n == 6 else " · recomendado: 6"),
+                                   fg=MUTED)
 
     def _open_last(self):
         if getattr(self, "_last_id", None):

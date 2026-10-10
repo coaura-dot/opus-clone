@@ -224,8 +224,8 @@ crédito do vídeo original e da música.
   ["YouTube API Services - Audit and Quota Extension"](https://support.google.com/youtube/contact/yt_api_form).
   Até sair, os vídeos sobem privados e você pode torná-los públicos no
   YouTube Studio.
-- **Quantos por dia: 6 (1 a cada 4 h).** Na interface, clique em "Postados
-  hoje / por dia" pra mudar (vale na hora). **Não poste 1 por hora.** Achado
+- **Quantos por dia: 6 (1 a cada 4 h).** Na interface, "Shorts por dia" com
+  os botões − e + muda (vale na hora, sem desligar). **Não poste 1 por hora.** Achado
   real no canal: com 1 post a cada 4 h os Shorts iam de 369 a ~1.300 views
   cada. No mesmo dia em que o piloto passou a postar 1 por hora (20 e
   depois 24 por dia), todos os seguintes ficaram com 0 a 6 views: o YouTube
