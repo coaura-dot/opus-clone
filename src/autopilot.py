@@ -326,7 +326,7 @@ def _in_post_window() -> bool:
 
 
 def daily_limit() -> int:
-    """Posts por dia (AUTOPILOT_POSTS_PER_DAY). Pedido do usuário: 20 por dia
+    """Posts por dia (AUTOPILOT_POSTS_PER_DAY). Pedido do usuário: 24 por dia
     "independente da cota da API" -- o piloto tenta até o próprio YouTube
     recusar (se a cota for aumentada, já posta mais sem mudar nada) e o que
     passar vai pra pasta "postar à mão" (src/manual_post.py).

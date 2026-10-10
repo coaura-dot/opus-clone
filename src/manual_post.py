@@ -3,7 +3,7 @@ Pasta "postar à mão": quando o YouTube não aceita mais uploads pela API no
 dia, os melhores clipes da fila vão pra cá com título, descrição e hashtags
 prontos, pra completar a meta do dia postando pelo celular/YouTube Studio.
 
-Por que existe: o usuário pediu 20 posts por dia. A API do YouTube, na cota
+Por que existe: o usuário pediu 24 posts por dia. A API do YouTube, na cota
 padrão de um projeto (10.000 unidades), aceita ~6 uploads por dia (cada um
 custa 1.600). O piloto tenta postar até o próprio YouTube recusar (se a cota
 for aumentada, ele já posta mais sem mudar nada); o que passar disso vem pra

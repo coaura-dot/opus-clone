@@ -1121,7 +1121,7 @@ AUTOPILOT_MIN_QUALITY = 45
 # (vazio = padrão: gancho 22, picos 12, ritmo 12, conteudo 16, fechamento 8,
 # imagem 12, duracao 10, titulo 8). Ex.: {"gancho": 30} dá mais peso ao começo.
 VIRAL_WEIGHTS = {}
-AUTOPILOT_POSTS_PER_DAY = 20            # meta do dia (1 a cada ~72 min). Posta pela API até o YouTube recusar
+AUTOPILOT_POSTS_PER_DAY = 24            # meta do dia (1 por hora). Posta pela API até o YouTube recusar
                                         # (cota padrão: ~6/dia); o resto vai pra output/postar_a_mao
 AUTOPILOT_LIMIT_BY_QUOTA = False        # True = nem tenta passar do que a cota YOUTUBE_DAILY_QUOTA comporta
 AUTOPILOT_MANUAL_EXPORT = True          # cota acabou: os melhores clipes do dia vão pra pasta "postar à mão"

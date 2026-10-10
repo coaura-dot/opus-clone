@@ -167,7 +167,7 @@ crédito do vídeo original e da música.
   - **Ligar / Desligar:** desligar para em segundos e salva tudo; o vídeo
     que estava sendo editado volta pra lista. Se o piloto não responder em
     90 s, é encerrado à força.
-  - **Painel:** postados hoje (de 20), clipes na fila, próximo post, clipes
+  - **Painel:** postados hoje (de 24), clipes na fila, próximo post, clipes
     pra postar à mão, último post (clique abre no YouTube) e o log ao vivo,
     com avisos em vermelho.
   - **Atalhos:** cortar um link, conectar o canal do YouTube, abrir as
@@ -224,14 +224,14 @@ crédito do vídeo original e da música.
   ["YouTube API Services - Audit and Quota Extension"](https://support.google.com/youtube/contact/yt_api_form).
   Até sair, os vídeos sobem privados e você pode torná-los públicos no
   YouTube Studio.
-- **Cota e meta de 20 por dia:** a cota padrão é de 10.000 unidades por dia,
+- **Cota e meta de 24 por dia:** a cota padrão é de 10.000 unidades por dia,
   e cada upload gasta 1.600, então a API aceita ~6 postagens por dia. A
-  meta é de 20 por dia (`AUTOPILOT_POSTS_PER_DAY`, 1 a cada ~72 min).
+  meta é de 24 por dia (`AUTOPILOT_POSTS_PER_DAY`, 1 por hora).
   - **Pela API:** o piloto posta até o próprio YouTube recusar. Com a cota
     aumentada, ele já posta mais sem mudar nada. Peça 40.000 unidades no
     mesmo formulário da auditoria; é grátis.
   - **Pasta "postar à mão":** quando o YouTube recusa, os melhores clipes da
-    fila (o que falta pra chegar em 20) vão para
+    fila (o que falta pra chegar em 24) vão para
     `output\postar_a_mao\<data>\`, com o `.mp4` e um `.txt` com título,
     descrição e hashtags, do mais viral pro menos (`src/manual_post.py`).
     Saem da fila automática pra não serem postados duas vezes. A pasta de
@@ -410,10 +410,10 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_EXPERT_BONUS` | 1.3 | título com convidado especialista (cientista, médico, economista, CEO, delegado...) ganha na escolha |
 | `AUTOPILOT_WEAK_TOPIC_FACTOR` | 0.7 | título de desafio, zoeira ou pegadinha perde na escolha |
 | `AUTOPILOT_QUEUE_TARGET` / `AUTOPILOT_POOL_MIN` / `AUTOPILOT_POOL_MIN_SOURCES` | 15 / 6 / 3 | banco de clipes: quantos gera e o mínimo (de quantos podcasts) pra escolher o mais viral |
-| `AUTOPILOT_POSTS_PER_DAY` | 20 | meta do dia; posta pela API até o YouTube recusar (cota padrão: ~6/dia), o resto vai pra `output\postar_a_mao` |
+| `AUTOPILOT_POSTS_PER_DAY` | 24 | meta do dia; posta pela API até o YouTube recusar (cota padrão: ~6/dia), o resto vai pra `output\postar_a_mao` |
 | `AUTOPILOT_LIMIT_BY_QUOTA` | False | True = nem tenta passar do que `YOUTUBE_DAILY_QUOTA` comporta |
 | `AUTOPILOT_MANUAL_EXPORT` | True | cota acabou: os melhores clipes do dia vão pra pasta "postar à mão" |
-| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha a meta do dia pela janela (20/dia em 24h = 1 a cada 72 min) |
+| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha a meta do dia pela janela (24/dia em 24h = 1 por hora) |
 | `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
 | `AUTOPILOT_QUEUE_TARGET` | 30 | clipes prontos esperando na fila |
 | `AUTOPILOT_MIN_QUALITY` | 45 | nota mínima (0-100) pra um clipe ser postado; ver "Nota de qualidade" abaixo |
