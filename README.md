@@ -715,6 +715,22 @@ arquitetura já foi pensada para isso.
 
 ## Reenquadramento (auto-frame)
 
+**Tela dividida (react) só quando é react de verdade.** Achado real num
+corte do Felipe Neto: o programa achou que um boneco na estante do estúdio
+era a facecam de um streamer, porque é um "rosto" parado no mesmo lugar
+enquanto as pessoas se mexem. A tela dividiu e a parte de baixo mostrava o
+boneco borrado. E a divisão ainda ligava e desligava no meio do clipe.
+Agora:
+- **Rosto vivo:** a facecam tem que ter um rosto que mexe e muda de
+  expressão (`REACT_MIN_FACE_JITTER`, `REACT_MIN_FACE_CHANGE`). Medido:
+  facecam real mexe 0,09-0,17 do tamanho do rosto e a imagem dele muda
+  15-37; boneco, desenho na parede e foto colada ficam em 0,007-0,05 e
+  1,4-1,8 (o desenho na parede atrás do Maicon Küster também era confundido
+  e agora sai).
+- **Clipe inteiro ou nada:** só divide a tela se a facecam está em 85% ou
+  mais do clipe (`REACT_MIN_CLIP_PRESENCE`), e aí no clipe inteiro. Nunca
+  liga e desliga no meio.
+
 **Tamanho do rosto decide o enquadramento** (vídeo comum/podcast):
 
 - **close** da fonte: recorte seguindo o rosto;
@@ -736,8 +752,18 @@ zoom e câmera na mão (vlog, documentário, cortes já editados):
   a câmera original faz aparece como está, sem "zoom duplo". A câmera do
   programa fica parada se a pessoa mexe pouco. Se a pessoa anda pelo quadro,
   ela segue um caminho suave, sem atraso;
-- **conversa** (2+ pessoas que não cabem num recorte): rastreia quem está
-  falando, como antes;
+- **conversa que cabe** (2+ pessoas juntas no plano): um recorte no grupo;
+- **conversa que não cabe** (plano aberto da mesa, pessoas longe uma da
+  outra): **corta seco pra quem está falando**, como um editor de
+  multicâmera. Quem fala é quem está mexendo a boca; o movimento dos olhos
+  desconta o da cabeça. Cada pessoa fica pelo menos 2 s na tela
+  (`SPEAKER_MIN_HOLD_SECONDS`), e a câmera nunca desliza de um rosto pro
+  outro nem faz fade cruzado. Num grupo de 3+ sem ninguém falando claro,
+  mostra a cena inteira;
+- **celular na mão / selfie** (rostos grandes, tortos e tremidos, que o
+  detector perde na maioria dos quadros): recorte parado onde as poucas
+  detecções acharam a pessoa, com mais folga. Antes o plano virava "sem
+  rosto" e cortava cabeças;
 - **sem rosto** (b-roll: paisagem, carro, aeroporto): tela cheia, parado, no
   ponto com mais detalhe. Antes saía como uma faixa fina sobre fundo borrado;
 - **cartela de texto/título**: a cartela inteira, ampliada até a largura do

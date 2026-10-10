@@ -1883,7 +1883,7 @@ def render_vertical_clip(source_path: str, start: float, end: float,
                     pch = shot.crop_h
                     out_frame = _compose_tracked_frame(
                         frame, px, py, pch * out_w / out_h, pch, src_w, src_h, out_w, out_h,
-                        zoom_factor if shot.kind == "single" else broll_zoom, bounds=bounds,
+                        zoom_factor if shot.kind in ("single", "speaker") else broll_zoom, bounds=bounds,
                     )
                 blend_remaining = 0
             elif blend_remaining > 0:

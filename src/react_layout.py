@@ -227,6 +227,23 @@ def _person_mask(box, face, shape) -> np.ndarray:
     return m
 
 
+def _liveness(faces: np.ndarray, grays) -> Tuple[float, float]:
+    """(quanto o rosto anda, relativo ao tamanho dele; quanto a imagem do
+    rosto muda entre uma amostra e outra, em níveis de cinza)."""
+    fw, fh = float(np.median(faces[:, 2])), float(np.median(faces[:, 3]))
+    mx, my = float(np.median(faces[:, 0])), float(np.median(faces[:, 1]))
+    jitter = float(np.median(np.abs(faces[:, 0] - mx)) / max(fw, 1e-3)
+                   + np.median(np.abs(faces[:, 1] - my)) / max(fh, 1e-3))
+    x0, y0 = int(max(mx - fw / 2, 0)), int(max(my - fh / 2, 0))
+    crops = []
+    for g in grays:
+        cr = g[y0:y0 + int(fh), x0:x0 + int(fw)]
+        if cr.size:
+            crops.append(cv2.resize(cr, (24, 24), interpolation=cv2.INTER_AREA).astype(np.float32))
+    change = float(np.median([np.mean(np.abs(a - b)) for a, b in zip(crops, crops[1:])])) if len(crops) > 2 else 0.0
+    return jitter, change
+
+
 def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: int,
                         n_samples: Optional[int] = None, verbose: bool = False) -> Optional[ReactLayout]:
     """Decide se o vídeo é um react com facecam sobreposta e, se for, onde
@@ -277,6 +294,20 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
     for presence, c, idx in cands[:3]:
         faces = np.array([f for _, f in c[3]])
         face = tuple(float(v) for v in np.median(faces, axis=0))
+        # rosto VIVO: quem está na facecam mexe a cabeça e muda de expressão.
+        # Achado real (Felipe Neto, estúdio): o "rosto" fixo era um boneco na
+        # estante -- parado no mesmo lugar enquanto as pessoas se mexiam em
+        # volta, ele passava em todos os testes e a tela dividia mostrando o
+        # boneco borrado. Medido: facecam real mexe 0,09-0,17 do tamanho do
+        # rosto e a imagem do rosto muda 15-37 (níveis de cinza); boneco,
+        # desenho na parede e foto colada: 0,007-0,05 e 1,4-1,8.
+        jitter, appearance = _liveness(faces, [grays[i] for i, _ in c[3]])
+        if jitter < getattr(config, "REACT_MIN_FACE_JITTER", 0.06) or \
+                appearance < getattr(config, "REACT_MIN_FACE_CHANGE", 6.0):
+            if verbose:
+                print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) PARADO demais "
+                      f"(mexe {jitter:.3f}, muda {appearance:.1f}) -- boneco/quadro/desenho, não facecam")
+            continue
         stack = np.stack([grays[i] for i in idx]).astype(np.float32)
         V = cv2.blur(np.std(stack, axis=0), (5, 5))
         E = np.mean([cv2.Canny(grays[i], 60, 150) > 0 for i in idx], axis=0).astype(np.float32)
@@ -465,8 +496,12 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     present = np.array(present)
     min_len = max(int(round(getattr(config, "REACT_MIN_SEGMENT_SECONDS", 3.0) * rate)), 1)
     present = _smooth_runs(present, min_len)
-    if present.mean() < 0.15:
+    # tela dividida é do CLIPE INTEIRO ou de nada: ligar e desligar no meio
+    # (achado real: "react em tela dividida (48% do clipe)") parecia defeito.
+    # Só divide se a facecam está na tela em quase todo o trecho.
+    if present.mean() < getattr(config, "REACT_MIN_CLIP_PRESENCE", 0.85):
         return None
+    present = np.ones_like(present)
 
     # rosto do streamer: segura o último visto nas falhas e suaviza (2.5s)
     default = (layout.face[0] / s, layout.face[1] / s, layout.face[3] / s)

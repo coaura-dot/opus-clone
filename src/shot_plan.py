@@ -79,11 +79,14 @@ class ShotPlan:
         kinds = {}
         for s in self.shots:
             kinds[s.kind] = kinds.get(s.kind, 0) + 1
-        names = {"single": "rosto", "multi": "conversa", "broll": "sem rosto", "text": "texto",
-                 "facefit": "close gigante"}
+        names = {"single": "rosto", "multi": "conversa", "speaker": "conversa (corta pra quem fala)",
+                 "broll": "sem rosto", "text": "texto", "facefit": "close gigante/cena inteira"}
         parts = ", ".join(f"{names.get(k, k)} {n}" for k, n in sorted(kinds.items(), key=lambda kv: -kv[1]))
         bars = sum(1 for s in self.shots if s.bounds != self.full)
         txt = f"{len(self.shots)} cena(s): {parts}"
+        cuts = sum(getattr(s, "switches", 0) for s in self.shots)
+        if cuts:
+            txt += f"; {cuts} corte(s) pra quem fala"
         if bars:
             txt += f"; barras pretas tiradas em {bars}"
         return txt
@@ -152,6 +155,8 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     tiny_h = max(int(round(an_h * _TINY_W / an_w)), 2)
     diffs, hdist = [], []
     faces = {}     # quadro -> [(cx, cy, w, h)] em px da análise
+    acts = {}      # quadro -> [atividade da boca de cada rosto] (None = sem quadro anterior)
+    prev_det = None
     scene = {}     # quadro -> (linhas, colunas, gray)  (medidas leves; gray só pra texto/detalhe)
     prev_tiny = prev_hist = None
     force_detect = 0
@@ -178,11 +183,18 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
                 if _is_cut(diffs[-1], hdist[-1]):
                     force_detect = 3  # quadros logo depois do corte: rosto do plano novo
                     since_cut = 0
+                    prev_det = None   # boca do plano anterior não compara com a do novo
             prev_tiny, prev_hist = tiny_g, hist
 
             if i % _FACE_EVERY == 0 or force_detect > 0:
                 faces[i] = _faces(detector, frame, min_score)
                 force_detect = max(force_detect - 1, 0)
+                # quem está FALANDO: a boca muda entre uma detecção e outra (a
+                # região dos olhos desconta o movimento da cabeça)
+                g = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                cur = [(f, _face_patches(g, f)) for f in faces[i]]
+                acts[i] = [_mouth_activity(f, pt, prev_det[1]) if prev_det else None for f, pt in cur]
+                prev_det = (i, cur)
             # barras/texto/detalhe: 2x por segundo e logo depois de cada corte
             # (plano curto também precisa de amostra; o 1º quadro pode ser flash)
             if i % _SCENE_EVERY == 0 or since_cut in (1, 6):
@@ -204,7 +216,7 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     bounds_list = _merge_short([0] + cuts + [n], int(round(getattr(config, "SHOT_MIN_SECONDS", 0.4) * fps)))
 
     an_bounds = _all_bounds(bounds_list, scene, an_w, an_h)
-    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps)
+    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts)
              for a, b, bb in zip(bounds_list[:-1], bounds_list[1:], an_bounds)]
     plan = ShotPlan(shots, n, (0, 0, src_w, src_h))
     if verbose:
@@ -215,6 +227,36 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
 def _is_cut(d: float, h: float) -> bool:
     thr = float(getattr(config, "SCENE_CUT_THRESHOLD", 28.0))
     return d > thr or (d > thr * 0.45 and h > 0.4)
+
+
+def _face_patches(gray: np.ndarray, f):
+    """(boca, olhos) de um rosto, em miniatura (pra comparar entre quadros)."""
+    cx, cy, w, h = f
+    H, W = gray.shape
+
+    def patch(y0, y1):
+        x0, x1 = int(max(cx - 0.3 * w, 0)), int(min(cx + 0.3 * w, W))
+        y0, y1 = int(max(cy + y0 * h, 0)), int(min(cy + y1 * h, H))
+        if x1 - x0 < 4 or y1 - y0 < 3:
+            return None
+        p = cv2.resize(gray[y0:y1, x0:x1], (16, 8), interpolation=cv2.INTER_AREA).astype(np.float32)
+        return p - p.mean()
+    return patch(0.12, 0.45), patch(-0.30, -0.05)
+
+
+def _mouth_activity(f, pt, prev) -> Optional[float]:
+    """Quanto a boca mudou desde a detecção anterior do MESMO rosto."""
+    cx, cy, w, h = f
+    best = None
+    for g, gpt in prev:
+        if abs(g[0] - cx) < 0.5 * w and abs(g[1] - cy) < 0.5 * h and 0.75 < g[3] / max(h, 1e-3) < 1.33:
+            best = gpt
+            break
+    if best is None or pt[0] is None or best[0] is None:
+        return None
+    mouth = float(np.mean(np.abs(pt[0] - best[0])))
+    eyes = float(np.mean(np.abs(pt[1] - best[1]))) if pt[1] is not None and best[1] is not None else 0.0
+    return max(mouth - 0.8 * eyes, 0.0)
 
 
 def _faces(detector, frame, min_score) -> list:
@@ -314,7 +356,7 @@ def _all_bounds(edges, scene, an_w, an_h) -> list:
     return out
 
 
-def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
+def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None) -> Shot:
     samples = _shot_samples(scene, a, b)
     (bx0, by0, bx1, by1), clip_bounds = an_bounds
     bw, bh = bx1 - bx0, by1 - by0
@@ -368,7 +410,12 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
         x0 = float(np.clip(cx - w / 2, bounds[0], bounds[2] - w))
         return Shot(a, b, "facefit", bounds, text_x=(int(round(x0)), int(round(x0 + w))))
 
-    if presence >= 0.4 and not is_big_text:
+    # celular na mão / selfie (achado real: live com rostos grandes, tortos
+    # e tremidos): o detector acha o rosto em só 10-30% dos quadros, mas ele
+    # está lá o tempo todo -- poucas detecções já dizem ONDE a pessoa está.
+    # Antes o plano virava "sem rosto" e o recorte cortava cabeças.
+    sparse = presence < 0.4
+    if (not sparse or (len(with_face) >= 4 and presence >= 0.06)) and not is_big_text:
         counts, spans = [], []
         for _, g in with_face:
             top_h = max(f[3] for f in g)
@@ -390,8 +437,9 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
                     track.append((k, (min(f[0] for f in main) + max(f[0] for f in main)) / 2.0,
                                   float(np.mean([f[1] for f in main])), float(np.median([f[3] for f in main]))))
                 return _single(a, b, frames, track, bounds, sx, sy, crop_h, full_crop_h, fps, min_crop_h,
-                               target_frac)
-            return Shot(a, b, "multi", bounds)
+                               target_frac, lock=sparse)
+            return _speaker(a, b, frames, faces, acts or {}, (bx0, by0, bx1, by1), bounds, sx, sy,
+                            fps, crop_h, full_crop_h, aspect)
         # um rosto: segue o mesmo rosto ao longo do plano (o mais perto do anterior)
         track, prev = [], None
         for k, g in with_face:
@@ -410,7 +458,8 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
             w = float(np.clip(face_w * 1.25, crop_w_full, content_w))
             x0 = float(np.clip(cx - w / 2, bounds[0], bounds[2] - w))
             return Shot(a, b, "facefit", bounds, text_x=(int(round(x0)), int(round(x0 + w))))
-        return _single(a, b, frames, track, bounds, sx, sy, None, full_crop_h, fps, min_crop_h, target_frac)
+        return _single(a, b, frames, track, bounds, sx, sy, None, full_crop_h, fps, min_crop_h, target_frac,
+                       lock=sparse)
 
     if is_text or is_big_text:
         # cartela: só a barra do clipe inteiro (fundo preto da cartela não é barra)
@@ -452,7 +501,89 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps) -> Shot:
                 xs=np.full(n, cx), ys=np.full(n, bounds[1] + full_crop_h * config.HEADROOM_RATIO))
 
 
-def _single(a, b, frames, track, bounds, sx, sy, crop_h, full_crop_h, fps, min_crop_h, target_frac) -> Shot:
+def _speaker(a, b, frames, faces, acts, an_box, bounds, sx, sy, fps, crop_h, full_crop_h, aspect) -> Shot:
+    """Duas ou mais pessoas que não cabem num recorte só (plano aberto da
+    mesa): CORTA SECO pra quem está falando, como um editor de multicâmera
+    -- nada de câmera deslizando de um rosto pro outro nem fade cruzado
+    (pedido do usuário: "cortes e transições ruins"). Quem fala = boca
+    mexendo (ver _mouth_activity). Cada pessoa fica pelo menos
+    SPEAKER_MIN_HOLD_SECONDS na tela antes de trocar.
+    Grupo de 3+ sem ninguém falando claro: mostra a cena inteira."""
+    bx0, by0, bx1, by1 = an_box
+    bh = by1 - by0
+    dets = []  # (quadro, rosto, atividade)
+    for k in sorted(faces):
+        if not a <= k < b:
+            continue
+        ak = acts.get(k) or [None] * len(faces[k])
+        g = [(f, x) for f, x in zip(faces[k], ak) if bx0 <= f[0] <= bx1 and by0 <= f[1] <= by1 and f[3] >= 0.035 * bh]
+        if g:
+            top_h = max(f[3] for f, _ in g)
+            dets += [(k, f, x) for f, x in g if f[3] >= 0.6 * top_h]
+    det_frames = sorted({k for k, _, _ in dets})
+    if not dets or not det_frames:
+        return Shot(a, b, "multi", bounds)
+    # pessoas = grupos de rostos pela posição horizontal
+    fw = float(np.median([f[2] for _, f, _ in dets]))
+    xs_sorted = sorted(f[0] for _, f, _ in dets)
+    centers, grp = [], [xs_sorted[0]]
+    for x in xs_sorted[1:]:
+        if x - grp[-1] > 0.6 * fw:
+            centers.append(float(np.median(grp)))
+            grp = [x]
+        else:
+            grp.append(x)
+    centers.append(float(np.median(grp)))
+    people = []
+    for c in centers:
+        mine = [(k, f, x) for k, f, x in dets if abs(f[0] - c) <= 0.6 * fw]
+        if len({k for k, _, _ in mine}) >= 0.25 * len(det_frames):
+            people.append(mine)
+    if len(people) < 2:
+        return Shot(a, b, "multi", bounds)
+    nP, nK = len(people), len(det_frames)
+    pos = {k: i for i, k in enumerate(det_frames)}
+    act = np.zeros((nP, nK))
+    for p, mine in enumerate(people):
+        for k, _, x in mine:
+            if x is not None:
+                act[p, pos[k]] = max(act[p, pos[k]], x)
+    step = max(float(np.median(np.diff(det_frames))) if nK > 1 else 3.0, 1.0)
+    win = max(int(round(1.0 * fps / step)), 1)  # ~1 s de média
+    sm = np.stack([np.convolve(np.pad(r, (win // 2, win - 1 - win // 2), mode="edge"), np.ones(win) / win,
+                               mode="valid") for r in act])
+    clear = float(np.max(sm)) > getattr(config, "SPEAKER_MIN_ACTIVITY", 1.5)
+    if not clear and nP >= 3:
+        return Shot(a, b, "facefit", bounds, text_x=(bounds[0], bounds[2]))  # cena inteira
+    hold = getattr(config, "SPEAKER_MIN_HOLD_SECONDS", 2.0) * fps
+    # começa em quem mais fala no 1º segundo (ou o maior rosto)
+    first = sm[:, :max(win, 1)].mean(axis=1)
+    cur = int(np.argmax(first)) if first.max() > 0 else \
+        int(np.argmax([np.median([f[3] for _, f, _ in m]) for m in people]))
+    seg_start = a
+    who = np.zeros(nK, dtype=int)
+    for i, k in enumerate(det_frames):
+        cand = int(np.argmax(sm[:, i]))
+        if cand != cur and sm[cand, i] > 1.3 * sm[cur, i] + 0.3 and k - seg_start >= hold:
+            cur = cand
+            seg_start = k
+        who[i] = cur
+    # posição fixa de cada pessoa no plano (o recorte não fica "seguindo")
+    px_of = [float(np.median([f[0] for _, f, _ in m])) * sx for m in people]
+    py_of = [float(np.median([f[1] for _, f, _ in m])) * sy for m in people]
+    # troca um pouco ANTES de a média de 1 s perceber (a fala já começou)
+    lead = int(round(0.4 * fps))
+    idx = np.searchsorted(det_frames, np.minimum(frames + lead, det_frames[-1]), side="right") - 1
+    idx = np.clip(idx, 0, nK - 1)
+    xs = np.array([px_of[who[i]] for i in idx], dtype=np.float64)
+    ys = np.array([py_of[who[i]] for i in idx], dtype=np.float64)
+    shot = Shot(a, b, "speaker", bounds, crop_h=crop_h, xs=xs, ys=ys)
+    shot.switches = int(np.sum(np.diff(who) != 0))
+    return shot
+
+
+def _single(a, b, frames, track, bounds, sx, sy, crop_h, full_crop_h, fps, min_crop_h, target_frac,
+            lock: bool = False) -> Shot:
     ks = np.array([t[0] for t in track], dtype=np.float64)
     xs = np.array([t[1] for t in track]) * sx
     ys = np.array([t[2] for t in track]) * sy
@@ -475,6 +606,12 @@ def _single(a, b, frames, track, bounds, sx, sy, crop_h, full_crop_h, fps, min_c
     px = np.interp(frames, ks, xs)
     py = np.interp(frames, ks, ys)
     sigma = max(getattr(config, "SHOT_PATH_SMOOTH_SECONDS", 0.5) * fps, 1.0)
+    if lock:
+        # poucas detecções (câmera tremida): recorte PARADO na posição típica
+        # -- interpolar entre detecções esparsas fazia a câmera "nadar"
+        crop_h = float(np.clip(crop_h / 0.85, min_crop_h, full_crop_h))  # mais folga: rosto mexe
+        return Shot(a, b, "single", bounds, crop_h=crop_h, xs=np.full_like(px, float(np.median(xs))),
+                    ys=np.full_like(py, float(np.median(ys))))
     if np.ptp(px) <= getattr(config, "SHOT_LOCK_X", 0.15) * crop_w:
         px = np.full_like(px, float(np.median(xs)))   # câmera parada: o rosto mexe dentro do quadro
     else:

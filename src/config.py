@@ -925,6 +925,11 @@ REACT_CONTENT_FRAC = 0.5            # altura do painel de conteúdo (resto = str
 REACT_CAM_FACE_FRAC = 0.30          # rosto do streamer ~30% da altura do painel dele
 REACT_MIN_SEGMENT_SECONDS = 3.0     # trecho mínimo com/sem facecam (sem pisca-pisca)
 REACT_CAM_MATCH_MAX_DIFF = 22.0     # diferença máx. do fundo da facecam pra "ela está na tela"
+SPEAKER_MIN_HOLD_SECONDS = 2.0      # conversa em plano aberto: cada pessoa fica pelo menos isso antes de cortar pra outra
+SPEAKER_MIN_ACTIVITY = 1.5          # boca mexendo (abaixo disso ninguém fala claro: grupo grande = cena inteira)
+REACT_MIN_FACE_JITTER = 0.06        # rosto da facecam tem que MEXER (boneco/quadro na parede: <0,05)
+REACT_MIN_FACE_CHANGE = 6.0         # ... e a imagem dele mudar (expressão; boneco/foto: <2)
+REACT_MIN_CLIP_PRESENCE = 0.85      # tela dividida só se a facecam está em 85%+ do clipe -- e aí no clipe inteiro
 
 # --- Facecam pequena (layout típico de react: reator numa caixinha
 # pequena sobre a tela reagida, às vezes com chat do lado) ---
