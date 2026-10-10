@@ -41,6 +41,7 @@ import cv2
 import numpy as np
 
 from . import config
+from . import content_window
 
 AN_W = 640           # largura da cópia usada na análise
 _TINY_W = 64         # largura da cópia usada pra achar corte
@@ -164,6 +165,8 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     tiny_h = max(int(round(an_h * _TINY_W / an_w)), 2)
     diffs, hdist = [], []
     colprof = []   # quadro -> quanto cada coluna (640 px) mudou: troca de só METADE da tela
+    smalls = []    # quadro -> miniatura cinza (janela de conteúdo abrindo/cortando, ver content_window.py)
+    grid = content_window.grid_size(an_w, an_h)
     prev_g = None
     faces = {}     # quadro -> [(cx, cy, w, h)] em px da análise
     acts = {}      # quadro -> [atividade da boca de cada rosto] (None = sem quadro anterior)
@@ -189,6 +192,7 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
             colprof.append(np.zeros(an_w, np.float32) if prev_g is None else
                            cv2.absdiff(g_an, prev_g).mean(axis=0).astype(np.float32))
             prev_g = g_an
+            smalls.append(cv2.resize(g_an, grid, interpolation=cv2.INTER_AREA))
             if prev_tiny is None:
                 diffs.append(0.0)
                 hdist.append(0.0)
@@ -228,7 +232,20 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
         return None
 
     cuts = [k for k in range(1, n) if _is_cut(diffs[k], hdist[k])]
-    bounds_list = _merge_short([0] + cuts + [n], int(round(getattr(config, "SHOT_MIN_SECONDS", 0.4) * fps)))
+    # janela de conteúdo por cima da câmera (vídeo reagido, print, foto):
+    # abrir/fechar a janela também é troca de plano
+    wins = []
+    if getattr(config, "CONTENT_WINDOW_ENABLED", True):
+        back = min(float(getattr(config, "CONTENT_WINDOW_LOOKBACK_SECONDS", 30.0)), max(start, 0.0))
+        pre = content_window.read_smalls(source_path, start - back, back, fps, an_w, an_h) if back >= 1.0 else []
+        wins = content_window.detect(smalls, scene, an_w, an_h, fps, pre=pre)
+    del smalls
+    bounds_list = _merge_short([0] + cuts + content_window.transitions(wins, fps) + [n],
+                               int(round(getattr(config, "SHOT_MIN_SECONDS", 0.4) * fps)))
+    scene_keys = sorted(scene)
+
+    def window_at(a: int, b: int):
+        return content_window.window_in(wins, a, b, scene_keys, fps)
 
     an_bounds = _all_bounds(bounds_list, scene, an_w, an_h)
 
@@ -268,8 +285,8 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
     def side_cuts(seam: int, a: int = 0, b: int = 10 ** 9):
         """Quantos cortes de meia tela em cada lado desta divisa (entre os
         quadros a e b; o padrão é o clipe inteiro)."""
-        lc = sum(1 for c, sd, k in events if sd == "L" and abs(c - seam) <= 10 and a - 1 <= k <= b + 1)
-        rc = sum(1 for c, sd, k in events if sd == "R" and abs(c - seam) <= 10 and a - 1 <= k <= b + 1)
+        lc = sum(1 for c, sd, k in events if sd == "L" and abs(c - seam) <= 10 and a - 1 <= k <= b - 2)
+        rc = sum(1 for c, sd, k in events if sd == "R" and abs(c - seam) <= 10 and a - 1 <= k <= b - 2)
         return lc, rc
 
     def confirm_split(seam: int, a: int, b: int, still: bool, content: str, ambiguous: bool,
@@ -291,6 +308,8 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
         # divisa invisível (achada só pelos cortes): o corte de meia tela tem
         # que acontecer NESTE plano -- senão um plano de câmera cheia do mesmo
         # clipe virava tela dividida
+        # (vale o corte que COMEÇA o plano, não o que começa o seguinte: esse
+        # pode ser uma janela abrindo)
         lc, rc = side_cuts(seam) if visible else side_cuts(seam, a, b)
         if not visible and not (lc or rc):
             return None
@@ -308,8 +327,27 @@ def build_plan(source_path: str, start: float, duration: float, src_w: int, src_
                 return content
         return None
 
-    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts, confirm_split, clip_seam)
+    shots = [_plan_shot(a, b, faces, scene, bb, sx, sy, fps, acts, confirm_split, clip_seam, window_at)
              for a, b, bb in zip(bounds_list[:-1], bounds_list[1:], an_bounds)]
+    # tela dividida num piscar (sequência de planos divididos com menos de
+    # 2 s, ou só de planos de menos de 1 s) é transição/efeito, não layout
+    # (achado no teste:
+    # Minecraft, 3 planos de 0,4-0,8 s seguidos viravam "imagem + pessoa")
+    i = 0
+    while i < len(shots):
+        if shots[i].kind != "split":
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(shots) and shots[j + 1].kind == "split":
+            j += 1
+        total = shots[j].end - shots[i].start
+        longest = max(shots[m].end - shots[m].start for m in range(i, j + 1))
+        if total < 2.0 * fps or (longest < 1.0 * fps and total < 4.0 * fps):
+            for m in range(i, j + 1):
+                sh = shots[m]
+                shots[m] = _plan_shot(sh.start, sh.end, faces, scene, an_bounds[m], sx, sy, fps, acts, split_ok=False)
+        i = j + 1
     plan = ShotPlan(shots, n, (0, 0, src_w, src_h))
     if verbose:
         print(f"    [cenas] {plan.summary()}")
@@ -544,6 +582,11 @@ def _find_split(samples, fs, box, hint: Optional[int] = None):
     width = (seam - bx0) if content == "L" else (bx1 - seam)
     if width < 0.2 * (bx1 - bx0):
         return None
+    # o lado da câmera é uma webcam: fora da pessoa, o fundo fica parado.
+    # Achado no teste (Minecraft com facecam no canto): a borda da facecam
+    # virava "divisa", e o lado "da câmera" era quase todo jogo em movimento
+    if not _cam_side_still(samples, side[cam], seam, cam, box):
+        return None
     # o lado da imagem está PARADO (foto, print)? Mede a mudança entre as
     # amostras (borradas: a compressão do vídeo não conta). Foto: ~0;
     # estante com a facecam de um react passando: bem mais.
@@ -553,10 +596,33 @@ def _find_split(samples, fs, box, hint: Optional[int] = None):
     return seam, content, cam, change < getattr(config, "SPLIT_STILL_MAX_CHANGE", 1.5), ambiguous, visible
 
 
+def _cam_side_still(samples, faces, seam: int, cam: str, box) -> bool:
+    """Fora da pessoa, o lado da câmera fica parado entre as amostras?
+    (plano curto demais pra conferir -- um piscar de transição -- não divide)"""
+    if len(samples) < 3:
+        return False
+    if not faces:
+        return True
+    bx0, by0, bx1, by1 = box
+    x0, x1 = (bx0, seam - 2) if cam == "L" else (seam + 2, bx1)
+    arr = np.array(faces, dtype=np.float64)
+    cx, cy, fw, fh = (float(np.median(arr[:, k])) for k in range(4))
+    keep = np.ones((by1 - by0, x1 - x0), bool)
+    # a pessoa (cabeça e corpo) mexe: fica de fora
+    keep[max(int(cy - 1.0 * fh) - by0, 0):, max(int(cx - 1.6 * fw) - x0, 0):max(int(cx + 1.6 * fw) - x0, 0)] = False
+    if keep.mean() < 0.15:
+        return True
+    stack = np.stack([smp[2][by0:by1, x0:x1].astype(np.float32) for smp in samples])
+    sd = np.std(stack, axis=0)
+    return float((sd[keep] < 10.0).mean()) >= 0.6
+
+
 def _trim(samples, x0, x1, y0, y1):
-    """Tira bordas lisas (moldura/fundo de cor única) em volta da imagem."""
-    g = np.median(np.stack([s[2][y0:y1, x0:x1].astype(np.float32) for s in samples]), axis=0)
-    cs, rs = g.std(axis=0), g.std(axis=1)
+    """Tira bordas lisas (moldura/fundo de cor única) em volta da imagem.
+    O detalhe é medido em cada amostra (a mediana das amostras de um vídeo
+    em movimento fica lisa e o recorte encolhia pra um canto da imagem)."""
+    st = np.stack([s[2][y0:y1, x0:x1].astype(np.float32) for s in samples])
+    cs, rs = np.median(st.std(axis=1), axis=0), np.median(st.std(axis=2), axis=0)
     a, b = 0, len(cs)
     while a < b - 10 and cs[a] < 6:
         a += 1
@@ -570,8 +636,60 @@ def _trim(samples, x0, x1, y0, y1):
     return x0 + a, y0 + c, x0 + b, y0 + d
 
 
+def _window_shot(a, b, win, fs, an_box, bounds, sx, sy) -> Optional[Shot]:
+    """Plano com janela de conteúdo: a janela em cima e a pessoa (o rosto
+    FORA da janela) embaixo. Sem ninguém fora da janela, None (aí é só o
+    vídeo em tela cheia, enquadramento normal)."""
+    bx0, by0, bx1, by1 = an_box
+    x0, y0, x1, y1 = win.rect
+    x0, y0, x1, y1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None
+    # a janela tomando quase a tela toda é o vídeo em tela cheia
+    if (x1 - x0) * (y1 - y0) > 0.8 * (bx1 - bx0) * (by1 - by0):
+        return None
+    # janela pequena com rosto VIVO dentro e sem corte nenhum é a facecam
+    # de um react (achado no teste: com o detector de react falhando, a
+    # facecam ficava parada nos cortes do vídeo reagido, virava "janela" e a
+    # tela saía invertida). Vídeo de verdade numa janela corta; janela
+    # grande é pra assistir; foto/print não mexe.
+    if (x1 - x0) * (y1 - y0) < 0.12 * (bx1 - bx0) * (by1 - by0) and win.inner_cuts == 0:
+        ins = [max(i, key=lambda f: f[3]) for i in
+               ([f for f in g if content_window.in_content(win, f)] for _, g in fs) if i]
+        if len(ins) >= max(3, 0.5 * len(fs)):
+            arr = np.array(ins, dtype=np.float64)
+            h = float(np.median(arr[:, 3]))
+            jit = float(np.median(np.abs(arr[:, 0] - np.median(arr[:, 0])))
+                        + np.median(np.abs(arr[:, 1] - np.median(arr[:, 1])))) / max(h, 1e-3)
+            if jit >= getattr(config, "SPLIT_MIN_FACE_JITTER", 0.003):
+                return None
+    # a pessoa: rosto que não é do conteúdo da janela (fora dela, ou na
+    # frente dela -- apresentador recortado por cima da janela)
+    outs = [max(o, key=lambda f: f[3]) for o in
+            ([f for f in g if not content_window.in_content(win, f)] for _, g in fs) if o]
+    if len(outs) < max(2, 0.5 * len(fs)):
+        return None
+    arr = np.array(outs, dtype=np.float64)
+    face = (float(np.median(arr[:, 0])) * sx, float(np.median(arr[:, 1])) * sy, float(np.median(arr[:, 3])) * sy)
+    # o recorte da pessoa fica do lado dela da janela (senão aparecia uma
+    # lasca do tweet/vídeo ao lado do rosto, no painel de baixo); rosto na
+    # frente da janela (apresentador recortado): o quadro todo
+    fcx, fw = float(np.median(arr[:, 0])), float(np.median(arr[:, 2]))
+    cam = bounds
+    if fcx < x0 and (x0 - 2) - bx0 >= 1.2 * fw:
+        cam = (bounds[0], bounds[1], int(round((x0 - 2) * sx)), bounds[3])
+    elif fcx > x1 and bx1 - (x1 + 2) >= 1.2 * fw:
+        cam = (int(round((x1 + 2) * sx)), bounds[1], bounds[2], bounds[3])
+    # a moldura já é a borda exata: só tira a linha dela (aparar o liso
+    # cortava o fundo branco do próprio vídeo da janela)
+    tx0, ty0, tx1, ty1 = x0 + 2, y0 + 2, x1 - 2, y1 - 2
+    return Shot(a, b, "split", bounds,
+                content=(int(round(tx0 * sx)), int(round(ty0 * sy)), int(round(tx1 * sx)), int(round(ty1 * sy))),
+                cam=cam, face=face)
+
+
 def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None, confirm_split=None,
-               clip_seam=None) -> Shot:
+               clip_seam=None, window_at=None, split_ok: bool = True) -> Shot:
     samples = _shot_samples(scene, a, b)
     (bx0, by0, bx1, by1), clip_bounds = an_bounds
     bw, bh = bx1 - bx0, by1 - by0
@@ -591,9 +709,18 @@ def _plan_shot(a, b, faces, scene, an_bounds, sx, sy, fps, acts=None, confirm_sp
     with_face = [(k, g) for k, g in fs if g]
     presence = len(with_face) / max(len(fs), 1)
 
+    # janela de conteúdo por cima da câmera (content_window.py): vem antes
+    # da tela dividida -- um TikTok no MEIO da tela tem divisa dos dois
+    # lados, e a tela dividida pegava metade da tela junto com ele
+    split_ok = split_ok and getattr(config, "SPLIT_LAYOUT_ENABLED", True)
+    win = window_at(a, b) if window_at is not None and split_ok else None
+    if win is not None:
+        shot = _window_shot(a, b, win, fs, (bx0, by0, bx1, by1), bounds, sx, sy)
+        if shot is not None:
+            return shot
+
     # tela dividida no vídeo original (imagem de um lado, pessoa do outro)
-    split = _find_split(samples, fs, (bx0, by0, bx1, by1), clip_seam) \
-        if getattr(config, "SPLIT_LAYOUT_ENABLED", True) else None
+    split = _find_split(samples, fs, (bx0, by0, bx1, by1), clip_seam) if split_ok else None
     if split:
         if confirm_split is not None:
             side = confirm_split(split[0], a, b, split[3], split[1], split[4], split[5])

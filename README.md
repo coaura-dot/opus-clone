@@ -925,6 +925,49 @@ Testado com um vídeo montado no formato do TikTok (painel com pessoa
 falando + câmera): todos os trechos saíram divididos; nos 13 vídeos sem tela
 dividida, nenhum falso alarme.
 
+**Janela de conteúdo por cima da câmera — v37** (`src/content_window.py`).
+O caso mais comum de react que ainda escapava: a câmera do streamer na tela
+inteira e o conteúdo numa **janela** (TikTok, Reels, vídeo do YouTube, post
+do Instagram, tweet, print de notícia, foto) em qualquer canto, sem divisa
+de cima a baixo. Sem IA pesada:
+- a janela é achada pelos **eventos** dela: num quadro, só um retângulo troca
+  de imagem (abriu, o vídeo dentro cortou, a foto trocou) — ou, num corte
+  seco da câmera, um retângulo fica parado (a imagem entrou junto com o
+  corte). Também olha até 30 s antes do clipe, pra janela que abriu um
+  pouco antes do trecho;
+- em cada momento ela está na tela se a **moldura** aparece (linha nítida em
+  2 lados ou mais), perto de um evento dela;
+- o trecho sai com a **janela em cima** e a pessoa embaixo; apresentador
+  recortado NA FRENTE da janela conta como a pessoa (achado no podcast do
+  Bam Margera).
+
+Não é janela: chat da live (rola pra cima), facecam de react (pequena, rosto
+vivo, nunca corta), inventário/HUD de jogo, tarja de texto, retângulos
+quaisquer de um cenário cheio de linhas.
+
+Achado junto (provável causa do corte do orochidois): a janela do vídeo
+reagido, com alguém falando dentro, era confundida com a **facecam** do
+streamer pelo detector de react clássico — o vídeo virava "react" com a
+"facecam" ausente e saía só o rosto dele. Agora, com um rosto maior fora
+da caixa (a mesma pessoa parada na frente da webcam), a caixa é conteúdo
+quando corta (facecam nunca corta) ou é grande (12%+ da tela).
+
+Testes (vídeos montados com a câmera real do Maicon Küster + conteúdo de
+cada tipo, e vídeos reais):
+- TikTok em painel e em janela, YouTube em janela (com e sem cortes, aberto
+  antes do clipe), posts do Instagram, tweets claros/escuros, notícia, foto
+  pop-up: conteúdo mostrado em 96-100% do tempo em que estava na tela;
+- podcast do Bam Margera: as 4 janelas reais achadas (vídeo do carro,
+  notícia, TikTok no meio da tela, janela com os apresentadores na frente);
+- sem falso alarme em: 13 vídeos reais da v36, Inteligência Ltda e Impera
+  inteiros, Maicon real, chat rolando, tarja, Minecraft (SMP e speedrun com
+  inventário); reacts clássicos e gameplays continuam achando a facecam.
+- Bug corrigido de quebra (desde a v34): o "aparar bordas lisas" do lado da
+  imagem usava a média das amostras — em vídeo em movimento ela fica lisa e
+  o recorte encolhia pra um canto da imagem.
+
+`CONTENT_WINDOW_ENABLED = False` desliga.
+
 **Quando um corte sair com a câmera errada.** Cada corte agora grava:
 - `"versao"` no `.meta.json`: qual versão do programa editou. Clipes que já
   estavam na fila (o modo "só postar" posta esses) foram editados pela
@@ -1114,6 +1157,7 @@ opus-clip-clone/
 │   ├── opener.py              # a frase de abertura se sustenta sozinha?
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
 │   ├── version.py             # versão do programa (vai no .meta.json de cada corte)
+│   ├── content_window.py      # janela de conteúdo por cima da câmera (TikTok, tweet, vídeo...)
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
 │   ├── voices.py              # de quem é a voz? (streamer x outro jogador no voice chat)

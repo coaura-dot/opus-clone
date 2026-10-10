@@ -193,7 +193,11 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     # dividida do vídeo original (imagem + pessoa) é confirmada pela fala
     # ("essa moça aqui") e a legenda desses trechos sobe pra divisória
     shot_plan_obj, margin_at = None, None
-    if react_plan is None and getattr(config, "SHOT_PLAN_ENABLED", True):
+    # react que não cobre o clipe todo (facecam some em parte dele): os
+    # trechos sem facecam usam o plano por cena -- com a transcrição e a
+    # legenda na divisória quando tiver janela/tela dividida
+    react_partial = react_plan is not None and react_plan.active_fraction < 0.98
+    if (react_plan is None or react_partial) and getattr(config, "SHOT_PLAN_ENABLED", True):
         from . import shot_plan as shot_plan_mod
         from .reframer import _new_yunet
         try:
@@ -205,7 +209,8 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         if shot_plan_obj is not None:
             spans = [(jumpcut.remap_time(sh.start / src_fps, keep_segments),
                       jumpcut.remap_time(sh.end / src_fps, keep_segments))
-                     for sh in shot_plan_obj.shots if sh.kind == "split"]
+                     for sh in shot_plan_obj.shots if sh.kind == "split"
+                     and not (react_plan is not None and react_plan.active((sh.start + sh.end) / 2.0 / src_fps))]
             if spans:
                 split_m = react_layout_mod.caption_margin_v(config.TARGET_HEIGHT)
                 total = sum(b - a for a, b in spans)

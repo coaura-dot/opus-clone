@@ -949,6 +949,11 @@ REACT_MIN_CLIP_PRESENCE = 0.85      # tela dividida só se a facecam está em 85
 SPLIT_LAYOUT_ENABLED = True
 SPLIT_MIN_FACE_JITTER = 0.003       # rosto da câmera mexe pelo menos isso (rosto de foto: ~0)
 SPLIT_STILL_MAX_CHANGE = 1.5        # lado da imagem "parado como foto" (pra valer a prova pela fala)
+# Janela de conteúdo POR CIMA da câmera (src/content_window.py): TikTok,
+# Reels, vídeo do YouTube, tweet, post, print de notícia numa janela em
+# qualquer lugar da tela. Sai com a janela em cima e a pessoa embaixo.
+CONTENT_WINDOW_ENABLED = True
+CONTENT_WINDOW_LOOKBACK_SECONDS = 30.0   # olha até isso antes do clipe (janela que abriu um pouco antes)
 
 # --- Gameplay com facecam (src/gameplay.py) ---
 # Liga sozinho pros canais marcados com "|game" na AUTOPILOT_CHANNELS (o

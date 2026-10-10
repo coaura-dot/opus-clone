@@ -332,8 +332,9 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
 
     # agrupa rostos que aparecem no MESMO lugar e tamanho em vários quadros
     clusters: list = []  # [cx, cy, fh, [(i, face)]]
+    all_faces = [_faces(det, f) for f in frames]
     for i, f in enumerate(frames):
-        for face in _faces(det, f):
+        for face in all_faces[i]:
             cx, cy, fw, fh = face
             for c in clusters:
                 if abs(cx - c[0]) < 0.035 * W and abs(cy - c[1]) < 0.05 * H and 0.7 < fh / c[2] < 1.4:
@@ -398,6 +399,11 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
             if verbose:
                 print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) mas caixa implausível {box}")
             continue
+        if _content_over_cam(box, face, idx, all_faces, grays, W, H):
+            if verbose:
+                print(f"    [react] caixa {tuple(int(v) for v in box)} é o CONTEÚDO por cima da câmera "
+                      f"do streamer (rosto maior fora dela, fundo fixo) -- não é facecam")
+            continue
 
         # independência: o conteúdo (fora da caixa) muda sem a facecam mudar
         outside = np.ones((H, W), bool)
@@ -451,6 +457,61 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
             presence=presence, independence=independence, sides=sides,
         )
     return None
+
+
+def _content_over_cam(box, face, idx, all_faces, grays, W, H) -> bool:
+    """A caixa com rosto é um vídeo (TikTok, Reels, YouTube) numa janela
+    POR CIMA da câmera do streamer -- o contrário de uma facecam?
+
+    Achado no teste (layout do orochidois: câmera dele na tela inteira e o
+    vídeo reagido numa janela): o rosto de quem fala no vídeo da janela
+    passava em todas as provas de facecam (vivo, caixa com moldura), o
+    vídeo virava "react" com a "facecam" ausente e o corte saía só com o
+    rosto do streamer.
+    Facecam nunca corta; o vídeo da janela corta. É conteúdo quando:
+      - fora da caixa há, em quase todo quadro, um rosto MAIOR, da mesma
+        pessoa parada no mesmo lugar (o streamer na frente da webcam); e
+      - a caixa troca de imagem inteira entre amostras (corte do vídeo)
+        enquanto o resto da tela fica igual, ou é grande (12%+ da tela).
+    (Uma entrevista sem cortes numa caixa sobre a câmera continua
+    ambígua: aí vale a facecam, e o plano por cena cobre os trechos em que
+    ela "some" -- ver content_window.py.)"""
+    bx, by, bw, bh = box
+    fh = face[3]
+    big, frames = [], []
+    for i in idx:
+        out = [f for f in all_faces[i] if f[3] >= 1.3 * fh and
+               not (bx - 0.02 * W <= f[0] <= bx + bw + 0.02 * W and by - 0.02 * H <= f[1] <= by + bh + 0.02 * H)]
+        if out:
+            big.append(max(out, key=lambda f: f[3]))
+            frames.append(i)
+    if len(frames) < max(4, 0.8 * len(idx)):
+        return False
+    arr = np.array(big, dtype=np.float64)
+    cx, cy, fw, fhh = (float(np.median(arr[:, k])) for k in range(4))
+    if fhh < 0.12 * H:
+        return False
+    # a MESMA pessoa parada no mesmo lugar (sentada na frente da webcam):
+    # rosto de conteúdo pula de lugar e de tamanho a cada corte
+    if float(np.median(np.abs(arr[:, 0] - cx))) > 0.3 * fw or float(np.median(np.abs(arr[:, 1] - cy))) > 0.3 * fhh \
+            or float(np.median(np.abs(arr[:, 3] - fhh))) > 0.15 * fhh:
+        return False
+    # janela grande pra ASSISTIR (um quarto da tela ou mais) por cima da
+    # webcam: facecam de react fica em 5-10% da tela
+    if bw * bh >= 0.12 * W * H:
+        return True
+    inside = np.zeros((H, W), bool)
+    inside[int(by):int(by + bh), int(bx):int(bx + bw)] = True
+    pairs = cuts = 0
+    # amostras seguidas (os cortes do vídeo ficam entre os planos com rosto)
+    for a in range(min(idx), max(idx)):
+        d = np.abs(grays[a + 1].astype(np.float32) - grays[a].astype(np.float32))
+        d_in, d_out = float(d[inside].mean()), float(d[~inside].mean())
+        pairs += 1
+        cuts += int(d_in > 30.0 and d_out < 0.5 * d_in)
+    # medido: janela de TikTok 5 cortes em 31 pares (dentro 44-147, fora
+    # 17-33); facecam de react: nenhum (o streamer mexendo dá 5-20 dentro)
+    return cuts >= max(2, 0.08 * pairs)
 
 
 def _smooth_runs(flags: np.ndarray, min_len: int) -> np.ndarray:
