@@ -154,9 +154,16 @@ crédito do vídeo original e da música.
 - **Duplo clique em `AUTO_CLIPPER.bat`** (ou no atalho "Auto Clipper" da
   área de trabalho) -- a **interface**, uma janela com botões
   (`interface.py`):
-  - **4 botões de modo** (25%, 50%, 70% da GPU, sem limite): com o piloto
-    desligado, o botão **liga** nesse modo; com ele ligado, **troca** o modo
-    na hora, sem parar a edição (só muda o ritmo da placa).
+  - **5 botões de modo** (só postar; 25%, 50%, 70% da GPU; sem limite): com
+    o piloto desligado, o botão **liga** nesse modo; com ele ligado, **troca**
+    o modo na hora. Entre os modos de GPU a edição continua, só muda o ritmo
+    da placa.
+  - **Só postar:** não baixa nem edita nada; posta a fila do **maior score
+    pro menor** (ordem pura da nota, sem a regra de variedade de podcast),
+    no horário de sempre, com o piloto em prioridade baixa no PC. Ligar com
+    uma edição em andamento para a edição, e o vídeo volta pra lista. Fila
+    vazia: ele avisa e espera; clicar num modo de GPU volta a fazer clipes.
+    Atalho: `INICIAR_SO_POSTAR.bat`.
   - **Ligar / Desligar:** desligar para em segundos e salva tudo; o vídeo
     que estava sendo editado volta pra lista. Se o piloto não responder em
     90 s, é encerrado à força.
@@ -237,6 +244,21 @@ crédito do vídeo original e da música.
 - **Direitos:** use canais que **liberam cortes**. Clipe de canal que não
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.
+
+### Antes de cada post: esse vídeo já está no canal?
+
+Em qualquer modo, antes de cada upload o piloto confere (`src/channel_check.py`):
+1. o próprio histórico (`state.json`);
+2. o **canal de verdade**, pela API: os 200 vídeos mais recentes da lista de
+   uploads, incluindo os privados e os postados à mão pelo celular ou pelo
+   Studio. Custa 4 unidades de cota (um upload custa 1.600).
+
+Mesmo título, sem contar maiúscula, acento e pontuação, conta como já
+postado. Título cortado no limite de 100 letras também conta. Aí o clipe
+sai da fila e o piloto passa pro próximo. Se o YouTube não responder a
+conferência, ele **não posta às cegas**: espera 10 min e confere de novo.
+A repostagem pública de um vídeo que ficou travado como privado não passa
+por essa conferência, porque usa o mesmo título de propósito.
 
 ### Faxina automática: a pasta de cortes não passa de 1 GB
 
@@ -998,6 +1020,7 @@ opus-clip-clone/
 ├── AUTO_CLIPPER.bat        # abre a interface
 ├── INICIAR_AUTOMATICO.bat  # 1 clique: modo automático infinito (no último modo de GPU)
 ├── INICIAR_GPU_25/50/70/SEM_LIMITE.bat  # o mesmo, limitando o uso da GPU
+├── INICIAR_SO_POSTAR.bat   # modo só postar: não baixa nem edita, só posta a fila
 ├── AUTO_CLIPPER_MENU.bat   # menu (um link, login do canal, fila)
 ├── test_pipeline.py         # teste de integração (sem precisar do YouTube)
 ├── requirements.txt
@@ -1023,7 +1046,8 @@ opus-clip-clone/
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
 │   ├── throttle.py            # modos de GPU 25/50/70%: pausa whisper.cpp/encode parte de cada segundo
-│   ├── control.py             # liga/desliga o piloto por fora (interface): "estou vivo" e pedido de parar
+│   ├── control.py             # liga/desliga o piloto por fora (interface); modo só postar
+│   ├── channel_check.py       # antes de postar: o vídeo já está no canal?
 │   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
 │   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
 │   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta

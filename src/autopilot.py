@@ -157,6 +157,34 @@ class YoutubeBlocked(Exception):
 _BLOCK_MARKERS = ("Sign in to confirm you", "HTTP Error 429", "Too Many Requests")
 
 
+class Interrupted(Exception):
+    """Edição interrompida porque o modo mudou pra SÓ POSTAR (não é falha do vídeo)."""
+
+
+_PRIO = {"low": None}
+_AUTO = {"on": False}
+
+
+def low_priority(on: bool) -> None:
+    """Modo só postar: o piloto fica com prioridade baixa no PC (jogo,
+    navegador e o resto passam na frente). Volta ao normal no modo completo
+    (no Windows a edição herdaria a prioridade baixa)."""
+    if _PRIO["low"] == on:
+        return
+    _PRIO["low"] = on
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = ctypes.c_void_p
+            k32.SetPriorityClass.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+            k32.SetPriorityClass(k32.GetCurrentProcess(), 0x4000 if on else 0x20)  # BELOW_NORMAL / NORMAL
+        else:
+            os.setpriority(os.PRIO_PROCESS, 0, 10 if on else 0)
+    except Exception:
+        pass
+
+
 class LocalFailure(Exception):
     """A edição falhou por um problema no PC (ex.: modelo do whisper.cpp que
     não carrega), não por causa do vídeo: o vídeo não é descartado."""
@@ -217,7 +245,12 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
         # espera em passos curtos: no Windows um wait() longo segura o Ctrl+C
         # até a edição acabar (achado real: o piloto "desligou sozinho" logo
         # depois de terminar um vídeo -- era um Ctrl+C apertado bem antes)
+        from . import control
         while proc.poll() is None:
+            if _AUTO["on"] and control.post_only():
+                log("    Modo SÓ POSTAR ligado: parando esta edição (o vídeo volta pra lista).")
+                _kill_tree(proc)
+                raise Interrupted()
             timeout = base * slowest_factor()
             if time.time() - started > timeout:
                 log(f"    [!] edição passou de {timeout // 60:.0f} min -- encerrando esse vídeo e seguindo.")
@@ -463,9 +496,38 @@ def _ai_compare(state: State, queue: list, key, log: Log) -> None:
     state.save()
 
 
-def post_next(state: State, service, log: Log, ignore_schedule: bool = False) -> bool:
-    """Posta o melhor clipe da fila. True se postou."""
+def _quota_hit(state: State, e, key, log: Log) -> None:
+    """A API do YouTube recusou por cota/limite: para de postar até a cota
+    zerar e manda o que faltava pra meta do dia pra pasta "postar à mão"."""
+    until = _next_pacific_midnight()
+    state.data["blocked_until"] = until
+    state.save()
+    done = state.uploads_today()
+    log(f"    [!] {e} -- {done} postado(s) hoje pela API; volto a postar em "
+        f"{datetime.fromtimestamp(until):%d/%m %H:%M}.")
+    day = _pacific_day()
+    if state.data.get("quota_explained_day") != day:
+        state.data["quota_explained_day"] = day
+        state.save()
+        if "uploadLimitExceeded" in str(e):
+            log("        Esse é o limite de uploads do CANAL no dia (não da API). Canal verificado por "
+                "telefone tem limite maior: youtube.com/verify")
+        else:
+            log("        A cota padrão da API do YouTube (10.000 unidades) dá ~6 uploads por dia. Pra postar "
+                f"{daily_limit()} sozinho, peça o aumento de cota (é grátis): "
+                "https://support.google.com/youtube/contact/yt_api_form -- peça 40.000 unidades. "
+                "Quando aprovarem, o piloto já posta mais sem mudar nada.")
+    from . import manual_post
+    manual_post.export(state, daily_limit() - done, day, key, log)
+
+
+def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
+              strict: bool = False) -> bool:
+    """Posta o melhor clipe da fila. True se postou. `strict` (modo só
+    postar): ordem pura da nota, do maior pro menor, sem a regra de
+    variedade de podcast."""
     from . import youtube_uploader as yt
+    from . import channel_check
     queue = state.data["queue"]
     if not queue:
         return False
@@ -483,15 +545,18 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
     # analisados no tempo ocioso, ver score_idle)
     from .virality import rank_key
     pending = sorted((c for c in queue if "viral" not in c and not _prio(c)),
-                     key=lambda c: -c.get("quality", 50))[:3]
-    for c in pending:
+                     key=lambda c: -c.get("quality", 50))
+    # só postar: a ordem tem que ser a da nota de verdade -- mede todos os
+    # que faltam (uma vez por clipe, poucos segundos cada)
+    for c in (pending if strict else pending[:3]):
         score_viral(state, c, log)
     # prioridade primeiro (repostagem / link colado na mão); depois a maior
     # nota combinada (viralidade + qualidade)
     weights = _learned_weights(state)
 
     def key(c):
-        return (-_prio(c), -(rank_key(c, weights) - _diversity_penalty(state, c)), c.get("added", 0))
+        div = 0.0 if strict else _diversity_penalty(state, c)
+        return (-_prio(c), -(rank_key(c, weights) - div), c.get("added", 0))
     _ai_compare(state, queue, key, log)
     queue.sort(key=key)
     item = queue[0]
@@ -506,6 +571,30 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         state.save()
         return False
     meta = json.loads(Path(item["meta"]).read_text(encoding="utf-8"))
+    # já está no canal? (pedido do usuário: "sempre verifica no canal se já
+    # postou o vídeo em questão" -- ver src/channel_check.py)
+    # (repostagem de vídeo travado como privado tem o MESMO título de propósito)
+    try:
+        dup = None if item.get("replaces") else channel_check.already_posted(service, state, meta["title"])
+    except channel_check.CheckFailed as e:
+        if str(e).startswith("quotaExceeded"):
+            _quota_hit(state, e, key, log)
+            return False
+        state.data["blocked_until"] = time.time() + 10 * 60
+        state.save()
+        log(f"    [!] não consegui conferir no canal se \"{meta['title']}\" já foi postado ({e}); "
+            "confiro de novo em 10 min (não posto às cegas).")
+        return False
+    if dup:
+        queue.pop(0)
+        if not any(p.get("youtube_id") == dup["id"] for p in state.data["posted"]):
+            state.data["posted"].append({"youtube_id": dup["id"], "title": meta["title"], "at": dup["at"],
+                                         "source_id": item.get("source_id"), "video": item["video"],
+                                         "channel": _channel_of(state, item), "found_on_channel": True})
+        state.save()
+        log(f"    \"{meta['title']}\" já está no canal ({dup['where']}): https://youtube.com/shorts/{dup['id']} "
+            "-- tirei da fila, vou pro próximo.")
+        return False
     if not _prio(item):
         others = len({_channel_of(state, c) for c in queue})
         log(f"  >> Escolhido entre {len(queue)} clipe(s) de {others} podcast(s): nota final "
@@ -514,26 +603,7 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
     try:
         vid = yt.upload_video(service, item["video"], meta, progress=log)
     except yt.QuotaExceeded as e:
-        until = _next_pacific_midnight()
-        state.data["blocked_until"] = until
-        state.save()
-        done = state.uploads_today()
-        log(f"    [!] {e} -- {done} postado(s) hoje pela API; volto a postar em "
-            f"{datetime.fromtimestamp(until):%d/%m %H:%M}.")
-        day = _pacific_day()
-        if state.data.get("quota_explained_day") != day:
-            state.data["quota_explained_day"] = day
-            state.save()
-            if "uploadLimitExceeded" in str(e):
-                log("        Esse é o limite de uploads do CANAL no dia (não da API). Canal verificado por "
-                    "telefone tem limite maior: youtube.com/verify")
-            else:
-                log("        A cota padrão da API do YouTube (10.000 unidades) dá ~6 uploads por dia. Pra postar "
-                    f"{daily_limit()} sozinho, peça o aumento de cota (é grátis): "
-                    "https://support.google.com/youtube/contact/yt_api_form -- peça 40.000 unidades. "
-                    "Quando aprovarem, o piloto já posta mais sem mudar nada.")
-        from . import manual_post
-        manual_post.export(state, daily_limit() - done, day, key, log)
+        _quota_hit(state, e, key, log)
         return False
     except yt.AuthError:
         raise
@@ -828,11 +898,16 @@ def _sleep_until(ts: float, log: Log, why: str):
         return
     if wait > 120:
         log(f"  .. {why} -- próxima ação às {datetime.fromtimestamp(ts):%H:%M}")
+    from . import control
+    mode = control.post_only()
     end = time.time() + wait
     while time.time() < end:
         # passos curtos: o botão "Desligar" da interface (src/control.py)
-        # para o piloto em ~2 s mesmo no meio de uma espera longa
+        # para o piloto em ~2 s mesmo no meio de uma espera longa; trocar
+        # entre "só postar" e o modo completo acorda o piloto na hora
         time.sleep(max(min(2.0, end - time.time()), 0))
+        if control.post_only() != mode:
+            return
 
 
 def _get_service(log: Log, upload: bool):
@@ -896,8 +971,14 @@ def _run_forever(upload: bool = True):
     from . import manual_post
     manual_post.cleanup(log)
     _forgive_local_failures(state, log)
-    repair_models(log)
-    update_ytdlp(state, log)
+    from . import control
+    if control.post_only():
+        low_priority(True)
+        log("  MODO SÓ POSTAR: não baixa nem edita nada -- só posta a fila, do maior score pro menor, "
+            "conferindo no canal antes de cada post.")
+    else:
+        repair_models(log)
+        update_ytdlp(state, log)
     from . import housekeeping
     housekeeping.clean_work_dir(log)
     housekeeping.cleanup(state, out_root, log)
@@ -905,6 +986,8 @@ def _run_forever(upload: bool = True):
     next_auth_try = time.time() + 3600
     failures = 0
     startup = True
+    last_mode = None
+    _AUTO["on"] = True  # só o modo automático para a edição ao trocar pra "só postar"
     while True:
         try:
             if upload and service is None and time.time() >= next_auth_try:
@@ -936,16 +1019,27 @@ def _run_forever(upload: bool = True):
                 from . import rights
                 rights.check_recent_posts(state, service, log)
 
+            # modo SÓ POSTAR (src/control.py): lido a cada volta -- a interface
+            # troca com o piloto ligado
+            only_post = control.post_only()
+            if only_post != last_mode:
+                if last_mode is not None:
+                    log("  >> Modo SÓ POSTAR: parei de buscar e editar vídeos; só posto a fila, do maior "
+                        "score pro menor." if only_post else "  >> Modo completo: volto a buscar, editar e postar.")
+                last_mode = only_post
+            low_priority(only_post)
+
             # 1) postar, se estiver na hora -- e se o banco de clipes já tem
-            # opção de podcasts diferentes pra escolher o mais viral
+            # opção de podcasts diferentes pra escolher o mais viral (no só
+            # postar não chega clipe novo: posta o melhor que tiver)
             waiting_pool = False
             if service is not None and state.data["queue"]:
                 ok, _ = can_post_now(state)
-                waiting_pool = ok and not pool_ready(state, log)
+                waiting_pool = ok and not only_post and not pool_ready(state, log)
                 if ok and not waiting_pool:
                     from . import youtube_uploader as yt
                     try:
-                        post_next(state, service, log)
+                        post_next(state, service, log, strict=only_post)
                     except yt.AuthError as e:
                         log(f"  [!] {e}")
                         service = None
@@ -957,7 +1051,7 @@ def _run_forever(upload: bool = True):
             target = getattr(config, "AUTOPILOT_QUEUE_TARGET", 8)
             local_until = state.data.get("local_fail_until", 0)
             blocked_until = max(state.data.get("download_blocked_until", 0), local_until)
-            if (len(state.data["queue"]) < target and time.time() >= blocked_until
+            if (not only_post and len(state.data["queue"]) < target and time.time() >= blocked_until
                     and make_room(state, out_root, log) and housekeeping.has_room(state, out_root, log)):
                 repair_models(log)
                 update_ytdlp(state, log)
@@ -985,6 +1079,9 @@ def _run_forever(upload: bool = True):
                         state.save()
                         housekeeping.clean_work_dir(log)
                         housekeeping.cleanup(state, out_root, log)
+                    except Interrupted:
+                        housekeeping.clean_work_dir(log)
+                        continue  # o vídeo não foi marcado: volta pra lista
                     except LocalFailure as e:
                         state.data["local_fail_until"] = time.time() + 30 * 60
                         state.save()
@@ -1015,7 +1112,13 @@ def _run_forever(upload: bool = True):
                 continue
 
             # 3) fila cheia (ou downloads pausados): espera a próxima postagem
-            if time.time() < blocked_until and not (service is not None and state.data["queue"]):
+            if only_post and service is None:
+                _sleep_until(time.time() + 1800, log, "só postar: postagem indisponível (confira o login do "
+                             "YouTube na interface)")
+            elif only_post and not state.data["queue"]:
+                _sleep_until(time.time() + 1800, log, "só postar: a fila acabou, nada pra postar (ligue um "
+                             "modo de GPU pra fazer mais clipes)")
+            elif time.time() < blocked_until and not (service is not None and state.data["queue"]):
                 _sleep_until(blocked_until, log, "edição pausada (problema no PC)" if blocked_until == local_until
                              else "downloads pausados pelo bloqueio do YouTube")
             elif service is not None and state.data["queue"]:
@@ -1023,9 +1126,10 @@ def _run_forever(upload: bool = True):
                 if waiting_pool:
                     nxt = _pool_deadline(state)  # posta o melhor que tiver nessa hora
                 wake = min(nxt, time.time() + 3600)
-                if time.time() < blocked_until:
+                if time.time() < blocked_until and not only_post:
                     wake = min(wake, blocked_until)  # volta a baixar assim que a pausa acabar
-                score_idle(state, log, wake)
+                if not only_post:
+                    score_idle(state, log, wake)
                 _sleep_until(wake, log,
                              f"fila com {len(state.data['queue'])} clipe(s); próxima postagem às "
                              f"{datetime.fromtimestamp(max(nxt, time.time())):%H:%M}")

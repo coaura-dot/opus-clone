@@ -14,6 +14,9 @@ Como a interface fala com o piloto (que roda em outro processo):
     vídeo que estava sendo editado volta pra lista e é feito de novo depois.
   - autopilot_data/modo_gpu.txt (src/throttle.py): trocar o modo com o
     piloto ligado vale na hora, sem parar nada.
+  - autopilot_data/modo_trabalho.txt: "postar" = modo SÓ POSTAR (não baixa
+    nem edita nada: só posta a fila, do maior score pro menor); "completo"
+    = acha, edita e posta. Também vale na hora.
 """
 import _thread
 import json
@@ -27,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "autopilot_data"
 HEARTBEAT = DATA_DIR / "piloto_ligado.json"
 STOP = DATA_DIR / "parar.pedido"
+WORK = DATA_DIR / "modo_trabalho.txt"
 _BEAT_EVERY = 5.0
 _FRESH = 20.0
 
@@ -84,6 +88,19 @@ def running_info() -> Optional[dict]:
     return info
 
 
+def post_only() -> bool:
+    """Modo SÓ POSTAR ligado? (lido na hora: a interface troca com o piloto rodando)"""
+    try:
+        return WORK.read_text(encoding="utf-8").strip().lower() == "postar"
+    except OSError:
+        return False
+
+
+def set_post_only(on: bool) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    WORK.write_text("postar\n" if on else "completo\n", encoding="utf-8")
+
+
 def request_stop() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     STOP.write_text(f"{time.time():.0f}\n", encoding="utf-8")
@@ -103,7 +120,8 @@ def stop_requested() -> bool:
 def _write_beat(mode: str) -> None:
     from .throttle import configured_limit
     info = {"pid": os.getpid(), "started": _state["started"], "beat": time.time(),
-            "gpu": configured_limit(), "mode": mode, "stopping": _state["stopping"]}
+            "gpu": configured_limit(), "mode": mode, "stopping": _state["stopping"],
+            "work": "postar" if post_only() else "completo"}
     tmp = HEARTBEAT.with_suffix(".tmp")
     try:
         tmp.write_text(json.dumps(info), encoding="utf-8")

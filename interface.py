@@ -8,9 +8,11 @@ ligar e desligar por botões de acordo com o modo que eu quiser".
     Duplo clique em AUTO_CLIPPER.bat (ou no atalho "Auto Clipper" da área
     de trabalho). `interface.py --ligar` já abre ligando, no último modo.
 
-  - 4 botões de modo (25%, 50%, 70% da GPU ou sem limite): com o piloto
-    desligado, o botão LIGA nesse modo; com ele ligado, TROCA o modo na hora
-    (a edição em andamento continua, só muda o ritmo -- ver src/throttle.py).
+  - 5 botões de modo: SÓ POSTAR (não baixa nem edita: só posta a fila, do
+    maior score pro menor, conferindo no canal antes) e 25%, 50%, 70% da GPU
+    ou sem limite. Com o piloto desligado, o botão LIGA nesse modo; com ele
+    ligado, TROCA o modo na hora (nos de GPU a edição em andamento continua,
+    só muda o ritmo -- ver src/throttle.py).
   - Ligar / Desligar: desligar para em segundos, salvando tudo (o vídeo que
     estava sendo editado volta pra lista).
   - Painel "Agora": postados hoje, fila, próximo post, último post, o que o
@@ -57,8 +59,9 @@ STATE = ap.DATA_DIR / "state.json"
 OUT_DIR = ROOT / getattr(config, "AUTOPILOT_OUTPUT_DIR", "output/autopiloto")
 MANUAL_DIR = ROOT / "output" / "postar_a_mao"
 
-MODES = [(25, "25%", "PC livre"), (50, "50%", "equilibrado"), (70, "70%", "rápido"),
-         (100, "Sem limite", "o mais rápido")]
+POST = "postar"  # modo SÓ POSTAR (não baixa nem edita: só posta a fila)
+MODES = [(POST, "Só postar", "quase não usa o PC"), (25, "25%", "PC livre"), (50, "50%", "equilibrado"),
+         (70, "70%", "rápido"), (100, "Sem limite", "o mais rápido")]
 RESTART_AFTER = 60     # piloto caiu: religa depois disso (igual ao .bat)
 FORCE_KILL_AFTER = 90  # pediu pra desligar e não desligou: mata à força
 
@@ -68,6 +71,7 @@ TEXT, MUTED, DIM = "#e2e8f0", "#94a3b8", "#64748b"
 GREEN, GREEN_D = "#22c55e", "#15803d"
 RED, RED_D = "#ef4444", "#b91c1c"
 AMBER, BLUE, BLUE_D = "#f59e0b", "#3b82f6", "#1d4ed8"
+TEAL, TEAL_D = "#0d9488", "#0f766e"
 FONT = "Segoe UI" if WIN else "DejaVu Sans"
 MONO = "Consolas" if WIN else "DejaVu Sans Mono"
 
@@ -177,6 +181,27 @@ def _open(path) -> None:
             subprocess.Popen(["xdg-open", str(p)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         messagebox.showerror("Auto Clipper", f"Não consegui abrir {p}:\n{e}")
+
+
+def _current_mode():
+    """POST (só postar) ou o % de GPU do modo completo -- o salvo."""
+    return POST if control.post_only() else throttle.configured_limit()
+
+
+def _apply_mode(m) -> None:
+    if m == POST:
+        control.set_post_only(True)
+    else:
+        throttle.save_limit(m)
+        control.set_post_only(False)
+
+
+def _mode_label(m) -> str:
+    return "só postar" if m == POST else ("sem limite" if m >= 100 else f"{m}%")
+
+
+def _mode_desc(m) -> str:
+    return "modo SÓ POSTAR" if m == POST else throttle.describe(m)
 
 
 def _ago(ts: float) -> str:
@@ -385,16 +410,16 @@ class App:
         self._append(lines)
 
     # ---------------------------------------------------------- piloto ---
-    def _start(self, mode: int):
-        throttle.save_limit(mode)
+    def _start(self, mode):
+        _apply_mode(mode)
         control.clear_stop()
         try:
-            self.proc = _spawn(["--auto", "--gpu", mode])
+            self.proc = _spawn(["--auto", "--so-postar"] if mode == POST else ["--auto", "--gpu", mode])
         except OSError as e:
             messagebox.showerror("Auto Clipper", f"Não consegui ligar o piloto:\n{e}")
             return
         self.want_on, self.stop_at, self.restart_at = True, None, None
-        self._note(f"Ligando o piloto ({throttle.describe(mode)})...")
+        self._note(f"Ligando o piloto ({_mode_desc(mode)})...")
         self._refresh_controls()
 
     def _stop(self):
@@ -405,13 +430,20 @@ class App:
             self._note("Desligando o piloto (a edição em andamento para e o vídeo volta pra lista)...")
         self._refresh_controls()
 
-    def _mode_click(self, mode: int):
+    def _mode_click(self, mode):
         info = control.running_info()
         starting = self.proc is not None and self.proc.poll() is None
         if info or starting:
-            if throttle.configured_limit() != mode:
-                throttle.save_limit(mode)
-                self._note(f"Modo trocado pra {throttle.describe(mode)} -- vale na hora, sem parar a edição.")
+            cur = _current_mode()
+            if cur != mode:
+                _apply_mode(mode)
+                if mode == POST:
+                    self._note("Modo SÓ POSTAR: o piloto para de buscar e editar (a edição em andamento para e "
+                               "o vídeo volta pra lista) e só posta a fila, do maior score pro menor.")
+                elif cur == POST:
+                    self._note(f"Modo completo ({throttle.describe(mode)}): o piloto volta a buscar, editar e postar.")
+                else:
+                    self._note(f"Modo trocado pra {throttle.describe(mode)} -- vale na hora, sem parar a edição.")
             self._refresh_controls()
             return
         if self.link_proc is not None and self.link_proc.poll() is None:
@@ -427,7 +459,7 @@ class App:
                 return
             self._stop()
         elif not (self.link_proc is not None and self.link_proc.poll() is None):
-            self._start(throttle.configured_limit())
+            self._start(_current_mode())
 
     def _is_on(self) -> bool:
         info = control.running_info()
@@ -458,7 +490,7 @@ class App:
                 self.want_on = False  # saiu sozinho (ex.: já tinha outro piloto ligado)
         if self.restart_at and now >= self.restart_at and not info:
             self.restart_at = None
-            self._start(throttle.configured_limit())
+            self._start(_current_mode())
         if self.stop_at is not None:
             alive = info or (self.proc is not None and self.proc.poll() is None)
             if not alive:
@@ -495,7 +527,7 @@ class App:
 
     def _refresh_controls(self):
         info = control.running_info()
-        mode = throttle.configured_limit()
+        mode = _current_mode()
         starting = self.proc is not None and self.proc.poll() is None and not info
         link = (info and info.get("mode") == "link") or (self.link_proc is not None and self.link_proc.poll() is None)
         on = bool(info and info.get("mode") == "auto")
@@ -504,7 +536,8 @@ class App:
         elif self.stop_at is not None or (info and info.get("stopping")):
             st, color = "●  DESLIGANDO...", AMBER
         elif on:
-            st, color = f"●  LIGADO  ·  {'GPU sem limite' if mode >= 100 else f'GPU {mode}%'}", GREEN
+            st, color = ("●  LIGADO  ·  só postando" if mode == POST else
+                         f"●  LIGADO  ·  {'GPU sem limite' if mode >= 100 else f'GPU {mode}%'}"), GREEN
         elif starting:
             st, color = "●  LIGANDO...", AMBER
         elif self.restart_at:
@@ -516,23 +549,27 @@ class App:
         busy = on or starting or link
         for n, b in self.mode_btns.items():
             sel = n == mode
-            b.style(bg=BLUE if sel else CARD2, hover=BLUE_D if sel else LINE, fg="#ffffff" if sel else TEXT,
+            acc, acc_d = (TEAL, TEAL_D) if n == POST else (BLUE, BLUE_D)
+            b.style(bg=acc if sel else CARD2, hover=acc_d if sel else LINE, fg="#ffffff" if sel else TEXT,
                     enabled=not link)
         if self.stop_at is not None:
             self.power.style(text="■  Desligando…", bg=LINE, hover=LINE, fg=MUTED, enabled=False)
             self.hint.config(text="Parando a edição em andamento e salvando tudo...")
         elif on or starting:
             self.power.style(text="■  Desligar", bg=RED, hover=RED_D, fg="#ffffff", enabled=True)
-            self.hint.config(text="Clique em outro modo pra trocar na hora (a edição continua, só muda o ritmo "
-                                  "da placa de vídeo). Desligar salva tudo; o vídeo em edição volta pra lista.")
+            self.hint.config(text=("Só postando: não baixa nem edita nada; posta a fila do maior score pro menor, "
+                                   "conferindo no canal antes de cada post." if mode == POST else
+                                   "Clique em outro modo pra trocar na hora (a edição continua, só muda o ritmo "
+                                   "da placa de vídeo). Desligar salva tudo; o vídeo em edição volta pra lista."))
         elif self.restart_at:
             self.power.style(text="✕  Cancelar religar", bg=CARD2, hover=LINE, fg=TEXT, enabled=True)
             self.hint.config(text="O piloto caiu e vai ser religado sozinho.")
         else:
-            self.power.style(text=f"▶  Ligar ({'sem limite' if mode >= 100 else f'{mode}%'})", bg=GREEN_D,
+            self.power.style(text=f"▶  Ligar ({_mode_label(mode)})", bg=GREEN_D,
                              hover=GREEN, fg="#ffffff", enabled=not link)
-            self.hint.config(text="Clique num modo pra ligar nele: 25% deixa o PC livre pra usar (edição ~4x "
-                                  "mais lenta); sem limite é o mais rápido. A postagem segue a mesma agenda.")
+            self.hint.config(text="Clique num modo pra ligar nele. Só postar: não baixa nem edita, só posta a "
+                                  "fila (maior score primeiro). 25%: PC livre, edição ~4x mais lenta. Sem limite: "
+                                  "o mais rápido.")
         line = self.last_line[17:] if self.last_line.startswith("[") else self.last_line
         line = line.strip().lstrip("| ").strip()
         self.doing.config(text=("Agora: " + line[:150]) if line and (busy or self.stop_at) else
@@ -657,7 +694,7 @@ def main():
     app = App(root)
     if "--ligar" in sys.argv[1:] and not control.running_info():
         # aberta pela atualização: volta a trabalhar sozinha, no último modo
-        root.after(800, lambda: app._start(throttle.configured_limit()))
+        root.after(800, lambda: app._start(_current_mode()))
     root.mainloop()
 
 
