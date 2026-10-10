@@ -279,12 +279,18 @@ def _in_post_window() -> bool:
 
 
 def daily_limit() -> int:
-    """Uploads por dia: o menor entre o pedido (AUTOPILOT_POSTS_PER_DAY) e o
-    que a cota da API comporta (1.600 por upload, reservando um pouco pra
-    liberação dos vídeos privados -- src/release.py)."""
+    """Posts por dia (AUTOPILOT_POSTS_PER_DAY). Pedido do usuário: 20 por dia
+    "independente da cota da API" -- o piloto tenta até o próprio YouTube
+    recusar (se a cota for aumentada, já posta mais sem mudar nada) e o que
+    passar vai pra pasta "postar à mão" (src/manual_post.py).
+    AUTOPILOT_LIMIT_BY_QUOTA = True volta ao limite calculado pela cota
+    (1.600 por upload)."""
+    want = getattr(config, "AUTOPILOT_POSTS_PER_DAY", 20)
+    if not getattr(config, "AUTOPILOT_LIMIT_BY_QUOTA", False):
+        return max(want, 0)
     reserve = getattr(config, "AUTOPILOT_RELEASE_PER_DAY", 3) * 50 + 100
     by_quota = max(getattr(config, "YOUTUBE_DAILY_QUOTA", 10000) - reserve, 0) // 1600
-    return max(min(getattr(config, "AUTOPILOT_POSTS_PER_DAY", 6), by_quota), 0)
+    return max(min(want, by_quota), 0)
 
 
 def _window_hours() -> float:
@@ -497,7 +503,23 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False) ->
         until = _next_pacific_midnight()
         state.data["blocked_until"] = until
         state.save()
-        log(f"    [!] {e} -- volto a postar em {datetime.fromtimestamp(until):%d/%m %H:%M}.")
+        done = state.uploads_today()
+        log(f"    [!] {e} -- {done} postado(s) hoje pela API; volto a postar em "
+            f"{datetime.fromtimestamp(until):%d/%m %H:%M}.")
+        day = _pacific_day()
+        if state.data.get("quota_explained_day") != day:
+            state.data["quota_explained_day"] = day
+            state.save()
+            if "uploadLimitExceeded" in str(e):
+                log("        Esse é o limite de uploads do CANAL no dia (não da API). Canal verificado por "
+                    "telefone tem limite maior: youtube.com/verify")
+            else:
+                log("        A cota padrão da API do YouTube (10.000 unidades) dá ~6 uploads por dia. Pra postar "
+                    f"{daily_limit()} sozinho, peça o aumento de cota (é grátis): "
+                    "https://support.google.com/youtube/contact/yt_api_form -- peça 40.000 unidades. "
+                    "Quando aprovarem, o piloto já posta mais sem mudar nada.")
+        from . import manual_post
+        manual_post.export(state, daily_limit() - done, day, key, log)
         return False
     except yt.AuthError:
         raise
@@ -837,6 +859,8 @@ def run_forever(upload: bool = True):
 
     prune_blocked(state, log)
     prune_hook_clips(state, log)
+    from . import manual_post
+    manual_post.cleanup(log)
     _forgive_local_failures(state, log)
     repair_models(log)
     update_ytdlp(state, log)
