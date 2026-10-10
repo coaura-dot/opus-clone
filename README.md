@@ -162,6 +162,13 @@ crédito do vídeo original e da música.
   também fica em `autopilot_data/autopilot.log`.
 - **`AUTO_CLIPPER_MENU.bat`** -- menu: colar um link (ou arquivo do PC) e
   postar os cortes na hora, conectar o canal, ver a fila e o que já foi postado.
+- **Modos de início (limite de GPU)** -- `INICIAR_GPU_25.bat`,
+  `INICIAR_GPU_50.bat`, `INICIAR_GPU_70.bat` e `INICIAR_GPU_SEM_LIMITE.bat`:
+  o mesmo piloto automático, usando no máximo 25%, 50%, 70% da GPU ou sem
+  limite. O modo escolhido fica salvo (`autopilot_data/modo_gpu.txt`): o
+  `INICIAR_AUTOMATICO.bat` e o religamento depois de uma atualização voltam
+  no último modo. Também dá pra trocar no menu (opção 6) ou com
+  `python autopilot.py --auto --gpu 50`. Detalhes em "Limite de uso da GPU".
 
 ### Configuração (uma vez só, ~10 min)
 
@@ -347,7 +354,7 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; humor e assunto do momento: Ilha de Barbados, Diva Depressão, Felipe Neto; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês). Canal que der bloqueio de direitos autorais sai sozinho (abaixo) |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; humor e assunto do momento: Ilha de Barbados, Diva Depressão, Felipe Neto; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês; `"\|game"` = gameplay com facecam). Canal que der bloqueio de direitos autorais sai sozinho (abaixo) |
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
 | `AUTOPILOT_MIN_VIEWS` | 50000 | só vídeos com pelo menos N views |
@@ -413,6 +420,33 @@ AMD ROCm nem a DirectML para GPUs GCN/Polaris como a RX 580 — só CUDA
 motor** (veja "Transcrição via GPU/Vulkan" logo abaixo). Sem essa troca, o
 programa configura automaticamente o número de threads da CPU usado pela
 transcrição com base nos núcleos físicos detectados.
+
+## Limite de uso da GPU (modos 25% / 50% / 70% / sem limite)
+
+Pra usar o PC (jogar, assistir, trabalhar) com o piloto rodando. Quem usa a
+placa aqui são dois programas que o Auto Clipper chama: o **whisper.cpp**
+(transcrição, Vulkan) e o **ffmpeg com o encoder da placa** (AMF na RX 580).
+Placa de vídeo não tem um "use só X%" que funcione igual em toda marca,
+então o limite é no tempo (`src/throttle.py`): a cada segundo esses dois
+trabalham a fração do modo e ficam **pausados** o resto -- 25% = 0,25 s
+trabalhando, 0,75 s parado. Na média a GPU fica nessa porcentagem do que
+usaria. Pausar não estraga nada: o programa continua de onde parou.
+
+| Modo | Atalho | Edição |
+|---|---|---|
+| 25% | `INICIAR_GPU_25.bat` | até ~4x mais lenta; PC bem livre |
+| 50% | `INICIAR_GPU_50.bat` | até ~2x mais lenta; 1 clipe por vez no encoder |
+| 70% | `INICIAR_GPU_70.bat` | ~1,4x mais lenta |
+| sem limite | `INICIAR_GPU_SEM_LIMITE.bat` | o mais rápido |
+
+- Só a parte de GPU é limitada; baixar, analisar rosto e cortar continuam
+  na CPU normalmente.
+- Os tempos-limite (watchdog, tempo máximo por vídeo) crescem junto com o
+  modo, pra nada ser cortado no meio por "demora".
+- A meta de posts do dia não muda: com 25% sobra bem menos tempo livre entre
+  um vídeo e outro, então a fila de clipes enche mais devagar.
+- Testado: um encode que levava 12 s levou 47 s no modo 25%, com o mesmo
+  trabalho total.
 
 ## Transcrição via GPU/Vulkan (usando a RX 580 de verdade)
 
@@ -805,6 +839,29 @@ enquadramento normal — sempre em trechos de pelo menos 3s, sem pisca-pisca.
 Ajustes em `REACT_*` (`src/config.py`); `REACT_MODE_AUTO_DETECT = False`
 desliga.
 
+**Gameplay com facecam** (canal marcado com `|game` na lista de canais, ex.:
+DrDonut Clips): o jogo na tela inteira com o streamer num canto. Pedido do
+usuário: jogo calmo e o streamer falando, foca nele; ação no jogo (crystal
+PvP, PvP, tiro, parkour) ou alguém falando no voice chat, a câmera pega o
+jogo. O programa (`src/gameplay.py`) acha a facecam e decide, a cada
+instante do clipe, entre dois planos em tela cheia:
+- **jogo:** recorte em pé centrado na mira, sem pegar a facecam. Entra
+  quando o jogo "mexe" muito (`GAMEPLAY_ACTION_MOTION`; medido em speedrun
+  de Minecraft: andando 8-20, luta e explosão 26-46) ou quando quem fala é
+  outra pessoa: tem fala e a boca do streamer está parada. Essa regra do voice
+  chat só liga quando a boca dele separa bem fala de silêncio naquele clipe;
+  sem isso ela fica desligada pra não errar;
+- **streamer:** close dele quando o jogo está calmo e ele está falando. Se a
+  facecam é pequena (o normal), ampliar até a tela cheia passaria de 5-7x e
+  borrava: aí ela vira um painel nítido com o rosto em destaque sobre um
+  fundo desfocado dela mesma (`GAMEPLAY_MAX_UPSCALE`, 3,5x).
+
+Cada plano fica pelo menos 2 s na tela (`GAMEPLAY_MIN_HOLD_SECONDS`), com
+corte seco. O corte pro jogo entra um pouquinho antes da ação. A detecção da
+facecam é mais solta nesses canais: aceita facecam colada na borda do quadro
+e cortada no queixo (achado no SMP do Tommyinnit, que o detector de react
+recusava). Pra marcar outro canal: `"@canal|game"` ou `"link|en|game"`.
+
 Usa detecção de rosto via OpenCV (Haar Cascade, incluso na própria lib —
 não precisa baixar nada), combinando **dois classificadores**: rosto de
 frente e rosto de perfil (testado nos dois lados, via espelhamento). Isso
@@ -916,7 +973,8 @@ volume consistente entre si, independente de quão alto/baixo estava o
 opus-clip-clone/
 ├── main.py                 # CLI principal
 ├── autopilot.py            # piloto automático: baixa, edita e posta no YouTube
-├── INICIAR_AUTOMATICO.bat  # 1 clique: modo automático infinito
+├── INICIAR_AUTOMATICO.bat  # 1 clique: modo automático infinito (no último modo de GPU)
+├── INICIAR_GPU_25/50/70/SEM_LIMITE.bat  # o mesmo, limitando o uso da GPU
 ├── AUTO_CLIPPER_MENU.bat   # menu (um link, login do canal, fila)
 ├── test_pipeline.py         # teste de integração (sem precisar do YouTube)
 ├── requirements.txt
@@ -940,6 +998,8 @@ opus-clip-clone/
 │   ├── opener.py              # a frase de abertura se sustenta sozinha?
 │   ├── react_layout.py        # react: acha a facecam e monta a tela dividida
 │   ├── react_detector.py      # react: "olha isso" na fala
+│   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
+│   ├── throttle.py            # modos de GPU 25/50/70%: pausa whisper.cpp/encode parte de cada segundo
 │   ├── aspect_fix.py          # corrige vídeo salvo esticado/amassado
 │   ├── shot_plan.py           # plano por cena: cortes, barras pretas e layout de cada plano
 │   ├── quality.py             # nota de qualidade do clipe: o que o piloto posta e o que descarta

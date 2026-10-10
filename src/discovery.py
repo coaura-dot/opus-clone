@@ -83,12 +83,20 @@ def _channel_videos_url(channel: str) -> str:
     return c
 
 
+_FLAGS = {"game"}  # "game": canal de gameplay com facecam (ver src/gameplay.py)
+
+
 def _split_spec(spec: str):
-    """"@canal" ou "link|en" -> (canal, idioma ou None)."""
-    if "|" in spec:
-        ch, lang = spec.rsplit("|", 1)
-        return ch.strip(), (lang.strip() or None)
-    return spec.strip(), None
+    """"@canal", "link|en", "link|en|game" ou "@canal|game" ->
+    (canal, idioma ou None, conjunto de marcações)."""
+    parts = [p.strip() for p in spec.split("|")]
+    ch, lang, flags = parts[0], None, set()
+    for p in parts[1:]:
+        if p.lower() in _FLAGS:
+            flags.add(p.lower())
+        elif p:
+            lang = p
+    return ch, lang, flags
 
 
 def blocked(*texts) -> Optional[str]:
@@ -113,7 +121,7 @@ def list_channel(channel: str, n: int = 10) -> List[dict]:
 
 
 def _list_channel(channel: str, n: int = 10) -> List[dict]:
-    channel, lang = _split_spec(channel)
+    channel, lang, flags = _split_spec(channel)
     with _ydl(flat=True) as y:
         y.params["playlistend"] = n
         info = y.extract_info(_channel_videos_url(channel), download=False)
@@ -122,7 +130,7 @@ def _list_channel(channel: str, n: int = 10) -> List[dict]:
         if e and e.get("id"):
             out.append({"id": e["id"], "title": e.get("title") or "", "duration": e.get("duration"),
                         "view_count": e.get("view_count"), "channel": info.get("channel") or channel,
-                        "origin": "canal", "rank": rank, "lang": lang})
+                        "origin": "canal", "rank": rank, "lang": lang, "game": "game" in flags})
     return out
 
 
@@ -355,6 +363,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
            else f", publicado há {c['age_days']:.0f} dias")
     lang = f" [{c['lang']}]" if c.get("lang") else ""
     extra = []
+    if c.get("game"):
+        extra.append("gameplay")
     if c.get("duration"):
         extra.append(f"{c['duration'] / 60:.0f} min")
     if _EXPERT_RE.search(c.get("title") or ""):

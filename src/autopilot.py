@@ -160,7 +160,8 @@ class LocalFailure(Exception):
 _LOCAL_MARKERS = ("failed to initialize whisper context", "failed to load model")
 
 
-def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None) -> Optional[list]:
+def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None,
+               game: bool = False) -> Optional[list]:
     """Roda main.py num processo separado pra editar um vídeo. Devolve a
     lista de clipes gerados: None se a edição falhou, [] se terminou bem mas
     nenhum trecho prestou (ex.: o juiz de IA reprovou todos)."""
@@ -172,6 +173,8 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
            "--out", str(out_dir), "--results", str(results)]
     if lang:
         cmd += ["--lang", lang]  # canal em outro idioma (ex.: "...|en" na lista de canais)
+    if game:
+        cmd += ["--game"]  # canal de gameplay ("...|game"): câmera streamer x jogo
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     kw = {}
     if sys.platform == "win32":
@@ -198,7 +201,9 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
                 log(f"    | {line}")
     reader = threading.Thread(target=_pump, daemon=True)
     reader.start()
-    timeout = getattr(config, "AUTOPILOT_WORKER_TIMEOUT_MINUTES", 150) * 60
+    from .throttle import time_factor
+    # com a GPU limitada (modo 25/50/70%) a edição demora mais: o limite cresce junto
+    timeout = getattr(config, "AUTOPILOT_WORKER_TIMEOUT_MINUTES", 150) * 60 * time_factor()
     deadline = time.time() + timeout
     try:
         # espera em passos curtos: no Windows um wait() longo segura o Ctrl+C
@@ -718,7 +723,8 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
     n_clips = n_clips or getattr(config, "AUTOPILOT_CLIPS_PER_VIDEO", 3)
     log(f"  >> Editando: \"{source.get('title', vid)}\" -- {source['url']}")
     t0 = time.time()
-    clips = run_worker(source["url"], n_clips, out_root / vid, log, lang=source.get("lang"))
+    clips = run_worker(source["url"], n_clips, out_root / vid, log, lang=source.get("lang"),
+                       game=bool(source.get("game")))
     if clips is None:
         state.mark_source(vid, "failed", title=source.get("title"), channel=source.get("channel"))
         return 0

@@ -150,7 +150,17 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
     react_plan = None
     caption_margin_v = None
     hook_bottom_y = None
-    if react_layout is not None:
+    if react_layout is not None and getattr(config, "GAMEPLAY_MODE", False):
+        # gameplay com facecam (src/gameplay.py): tela cheia, alternando
+        # entre o streamer e o jogo -- legenda no lugar de sempre
+        from . import gameplay
+        react_plan = gameplay.plan_clip(react_layout, source_path, candidate.start, candidate.end,
+                                        config.TARGET_WIDTH, config.TARGET_HEIGHT, words=transcript_words)
+        if react_plan is not None:
+            print(f"    -> Clip {clip_index}: gameplay -- streamer {react_plan.streamer_fraction * 100:.0f}% / "
+                  f"jogo {(1 - react_plan.streamer_fraction) * 100:.0f}% do clipe, "
+                  f"{react_plan.switches} corte(s) de câmera")
+    elif react_layout is not None:
         react_plan = react_layout_mod.plan_clip(react_layout, source_path, candidate.start,
                                                 candidate.end, config.TARGET_WIDTH, config.TARGET_HEIGHT)
         if react_plan is not None:

@@ -145,7 +145,12 @@ def main():
     parser.add_argument("--results", default=None)
     # idioma da fala (ex.: "en" pra canal gringo); padrão: WHISPERCPP_LANGUAGE
     parser.add_argument("--lang", default=None)
+    # canal de gameplay com facecam ("...|game" na lista de canais): câmera
+    # alterna entre o streamer e o jogo (ver src/gameplay.py)
+    parser.add_argument("--game", action="store_true")
     cli_args, _ = parser.parse_known_args()
+    if cli_args.game:
+        config.GAMEPLAY_MODE = True
     if cli_args.lang:
         config.WHISPERCPP_LANGUAGE = cli_args.lang
         config.CONTENT_LANGUAGE = cli_args.lang
@@ -156,6 +161,12 @@ def main():
     print("  AUTO CLIPPER — Cortes virais automáticos (estilo Opus Clip)")
     print("=" * 62)
 
+    # modo de GPU (25/50/70/sem limite, ver src/throttle.py): herdado do piloto
+    # ou do modo salvo; precisa vir antes do watchdog (o tempo-limite cresce junto)
+    from src import throttle
+    gpu = throttle.install()
+    if gpu < 100:
+        print(f"  Modo: {throttle.describe(gpu)} (transcrição e encode pausam parte de cada segundo)")
     _start_watchdog(getattr(config, "WATCHDOG_TIMEOUT_SECONDS", 90 * 60))
 
     ensure_ffmpeg()
@@ -217,7 +228,18 @@ def main():
         # (conteúdo em cima, streamer embaixo) em vez de a câmera ficar
         # pulando entre o rosto do vídeo reagido e o do streamer.
         react = None
-        if getattr(config, "REACT_MODE_AUTO_DETECT", True):
+        gameplay = getattr(config, "GAMEPLAY_MODE", False)
+        if gameplay:
+            print("    Canal de gameplay: procurando a facecam do streamer...")
+            react = react_layout.detect_react_layout(
+                str(source_path), info["duration"], info["width"], info["height"], relaxed=True)
+            if react is not None:
+                x, y, w, h = react.cam_box
+                print(f"    -> Facecam em x={x} y={y} ({w}x{h}) -- câmera alterna entre o streamer "
+                      f"(jogo calmo, ele falando) e o jogo (ação, voice chat).")
+            else:
+                print("    -> Sem facecam fixa neste vídeo: reenquadramento comum.")
+        elif getattr(config, "REACT_MODE_AUTO_DETECT", True):
             print("    Analisando se o vídeo é um react (facecam sobreposta)...")
             react = react_layout.detect_react_layout(
                 str(source_path), info["duration"], info["width"], info["height"])

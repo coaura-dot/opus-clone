@@ -11,6 +11,7 @@ Baixa, edita e POSTA no YouTube sozinho: título, descrição, hashtags, tudo.
     python autopilot.py --status     mostra fila, postados e cota do dia
     python autopilot.py --liberar    confere agora se a auditoria saiu e solta 1 vídeo privado
     --no-upload                      gera os clipes mas não posta (teste)
+    --gpu 25|50|70|100               limite de uso da GPU (fica salvo; 100 = sem limite)
 
 Configuração: src/config.py, seção "POSTAGEM AUTOMÁTICA".
 Primeira vez: siga o passo a passo do README ("Postagem automática").
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src import config
 from src import autopilot
+from src import throttle
 
 
 def _login():
@@ -94,6 +96,25 @@ def _release_now():
         print(f"\n[ERRO] {e}")
 
 
+def _parse_gpu(v: str):
+    v = (v or "").strip().lower().rstrip("%")
+    if v in ("livre", "sem", "sem limite", "irrestrito", "max", "100"):
+        return 100
+    return int(v) if v.isdigit() and 5 <= int(v) <= 100 else None
+
+
+def _choose_gpu() -> None:
+    cur = throttle.configured_limit()
+    print(f"\n  Modo atual: {throttle.describe(cur)}")
+    print("  1) 25% da GPU   (PC livre pra usar; edição ~4x mais lenta)")
+    print("  2) 50% da GPU")
+    print("  3) 70% da GPU")
+    print("  4) Sem limite   (o mais rápido)")
+    pick = {"1": 25, "2": 50, "3": 70, "4": 100}.get(input("\nEscolha [4]: ").strip() or "4", 100)
+    throttle.save_limit(pick)
+    print(f"  Salvo: {throttle.describe(pick)} (vale pro piloto automático e pros próximos inícios).")
+
+
 def _ask_int(prompt: str, default: int) -> int:
     raw = input(f"{prompt} [{default}]: ").strip()
     return int(raw) if raw.isdigit() and 1 <= int(raw) <= 15 else default
@@ -108,11 +129,20 @@ def main():
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--no-upload", action="store_true")
     ap.add_argument("--liberar", action="store_true")
+    ap.add_argument("--gpu", default=None, help="25, 50, 70 ou 100 (sem limite)")
     args = ap.parse_args()
     upload = not args.no_upload and getattr(config, "AUTOPILOT_UPLOAD", True)
+    if args.gpu is not None:
+        n = _parse_gpu(args.gpu)
+        if n is None:
+            print(f"[!] --gpu {args.gpu}: use 25, 50, 70 ou 100. Seguindo sem limite.")
+            n = 100
+        throttle.save_limit(n)
+    gpu = throttle.install()
 
     print("=" * 62)
     print("  AUTO CLIPPER — PILOTO AUTOMÁTICO (baixa, edita e posta)")
+    print(f"  Modo: {throttle.describe(gpu)}")
     print("=" * 62)
 
     if args.login:
@@ -136,6 +166,7 @@ def main():
     print("  3) Conectar / trocar o canal do YouTube")
     print("  4) Ver fila e vídeos postados")
     print("  5) Conferir agora se a auditoria saiu e liberar vídeos privados")
+    print(f"  6) Modo da GPU: 25% / 50% / 70% / sem limite (agora: {throttle.describe(gpu)})")
     choice = input("\nEscolha [2]: ").strip() or "2"
     if choice == "1":
         url = input("Link do vídeo (ou caminho do arquivo): ").strip()
@@ -148,6 +179,9 @@ def main():
         _status()
     elif choice == "5":
         _release_now()
+    elif choice == "6":
+        _choose_gpu()
+        print("  Reinicie o programa pra valer agora (ou use os atalhos INICIAR_GPU_*.bat).")
     else:
         autopilot.run_forever(upload=upload)
 

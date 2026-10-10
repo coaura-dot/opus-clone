@@ -119,7 +119,7 @@ class ReactLayout:
         return float(np.sum(np.abs(patch - self.cam_ref) * self.cam_mask) / max(self.cam_mask.sum(), 1.0))
 
 
-def _walk(E, V, face, W, H, direction: str):
+def _walk(E, V, face, W, H, direction: str, relaxed: bool = False):
     """Anda do rosto pra fora até achar a borda da facecam. Retorna
     (posição, tipo) -- tipo: 'line' (moldura/borda fixa), 'var' (fronteira
     parado|mudando), 'edge' (borda do quadro) ou 'guess'."""
@@ -143,10 +143,20 @@ def _walk(E, V, face, W, H, direction: str):
                 continue
             vin = float(np.median(V[r0:r1, a0:a1]))
             vout = float(np.median(V[r0:r1, b0:b1]))
-            if cov >= 0.85 or (cov >= 0.75 and vout > 1.4 * vin + 3.0):
+            # linha fixa só é a borda da facecam se do lado de FORA a imagem
+            # muda mais (o jogo/vídeo) -- batente de porta ou quadro na parede
+            # do quarto do streamer também é linha fixa, mas com quarto parado
+            # dos dois lados (achado real: webcam do SMP cortada no meio)
+            if (cov >= 0.85 and vout > 1.15 * vin + 1.0) or (cov >= 0.75 and vout > 1.4 * vin + 3.0):
                 return float(x), "line"
             if vout > 2.5 * vin + 8.0:
-                return float(x), "var"
+                # gameplay: o streamer mexe a cabeça e a cadeira, e entre a
+                # cabeça e a cadeira fica um "vale" parado que imitava a borda
+                # (achado real: SMP, borda achada em 200 em vez de 256). Borda
+                # de verdade tem o jogo mexendo numa faixa LARGA do lado de fora.
+                c0_, c1_ = sorted((x + sign * 2, x + sign * 26))
+                if not relaxed or float(np.median(V[r0:r1, max(c0_, 0):min(c1_, W)])) > 2.5 * vin + 8.0:
+                    return float(x), "var"
         return (0.0 if direction == "left" else float(W)), "edge"
     c0, c1 = int(max(fl - 0.2 * fw, 0)), int(min(fr + 0.2 * fw, W))
     if direction == "up":
@@ -164,7 +174,10 @@ def _walk(E, V, face, W, H, direction: str):
             continue
         vin = float(np.median(V[a0:a1, c0:c1]))
         vout = float(np.median(V[b0:b1, c0:c1]))
-        if cov >= 0.85 or (cov >= 0.75 and vout > 1.4 * vin + 3.0):
+        # pra baixo fica o corpo de quem está na câmera (mexe tanto quanto o
+        # conteúdo): ali só a linha fixa decide; pra cima, a mesma regra dos lados
+        line_ok = cov >= 0.85 and (direction == "down" or vout > 1.15 * vin + 1.0)
+        if line_ok or (cov >= 0.75 and vout > 1.4 * vin + 3.0):
             return float(y), "line"
         # pra baixo fica o corpo do streamer (mexe): só aceita fronteira
         # de variação bem marcada
@@ -173,9 +186,9 @@ def _walk(E, V, face, W, H, direction: str):
     return (0.0 if direction == "up" else float(H)), "edge"
 
 
-def _find_cam_box(E, V, face, W, H):
+def _find_cam_box(E, V, face, W, H, relaxed: bool = False):
     cx, cy, fw, fh = face
-    found = {d: _walk(E, V, face, W, H, d) for d in ("left", "right", "up", "down")}
+    found = {d: _walk(E, V, face, W, H, d, relaxed) for d in ("left", "right", "up", "down")}
     left, kl = found["left"]
     right, kr = found["right"]
     top, ku = found["up"]
@@ -190,6 +203,20 @@ def _find_cam_box(E, V, face, W, H):
         top = cy - fh / 2 - 0.9 * fh
     if bottom is None:
         bottom = cy + fh / 2 + 1.4 * fh
+    # base não achada (corpo mexendo até a borda do quadro) mas os lados e o
+    # topo sim: webcam é 16:9 ou 4:3 -- a que deixa o rosto inteiro dentro.
+    # Gameplay (relaxed): vale também com um dos lados sendo a própria borda
+    # do quadro e a webcam cortada no queixo (achado real: SMP do Tommyinnit)
+    sides_ok = (kl[0] in "lv" and kr[0] in "lv") or (relaxed and "e" in kl[0] + kr[0]
+                                                     and (kl[0] in "lv" or kr[0] in "lv"))
+    chin = 0.45 if relaxed else 0.9
+    if kd[0] in "eg" and sides_ok and ku[0] in "lve":
+        bw_ = right - left
+        for ratio in (0.5625, 0.75):
+            if cy + chin * fh <= top + bw_ * ratio:
+                bottom = min(bottom, top + bw_ * ratio)
+                kd = "a"  # pela proporção
+                break
     left, right = max(left, 0.0), min(right, float(W))
     top, bottom = max(top, 0.0), min(bottom, float(H))
     return (left, top, right - left, bottom - top), kl[0] + kr[0] + ku[0] + kd[0]
@@ -245,9 +272,15 @@ def _liveness(faces: np.ndarray, grays) -> Tuple[float, float]:
 
 
 def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: int,
-                        n_samples: Optional[int] = None, verbose: bool = False) -> Optional[ReactLayout]:
+                        n_samples: Optional[int] = None, verbose: bool = False,
+                        relaxed: bool = False) -> Optional[ReactLayout]:
     """Decide se o vídeo é um react com facecam sobreposta e, se for, onde
-    ela está. None = vídeo comum (podcast, vlog, entrevista...)."""
+    ela está. None = vídeo comum (podcast, vlog, entrevista...).
+
+    `relaxed` (canal marcado como gameplay): aceita a facecam sem a prova de
+    "independência" -- jogo calmo (andando, menu, construindo) muda pouco e
+    a prova falhava em facecam de verdade (SMP do Tommyinnit) -- desde que o
+    rosto vivo fique fora do miolo do quadro, onde facecam fica sempre."""
     n = int(n_samples or getattr(config, "REACT_LAYOUT_SAMPLES", 48))
     if duration < 10:
         return None
@@ -302,8 +335,13 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
         # rosto e a imagem do rosto muda 15-37 (níveis de cinza); boneco,
         # desenho na parede e foto colada: 0,007-0,05 e 1,4-1,8.
         jitter, appearance = _liveness(faces, [grays[i] for i, _ in c[3]])
-        if jitter < getattr(config, "REACT_MIN_FACE_JITTER", 0.06) or \
-                appearance < getattr(config, "REACT_MIN_FACE_CHANGE", 6.0):
+        # webcam fechada no rosto: o rosto é grande, então o "quanto anda"
+        # relativo ao tamanho dele é menor (medido: 0,056) -- aí vale mudar
+        # bastante de expressão
+        jit_min = getattr(config, "REACT_MIN_FACE_JITTER", 0.06)
+        live = (jitter >= jit_min and appearance >= getattr(config, "REACT_MIN_FACE_CHANGE", 6.0)) or \
+            (jitter >= 0.66 * jit_min and appearance >= 12.0)
+        if not live:
             if verbose:
                 print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) PARADO demais "
                       f"(mexe {jitter:.3f}, muda {appearance:.1f}) -- boneco/quadro/desenho, não facecam")
@@ -312,9 +350,10 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
         V = cv2.blur(np.std(stack, axis=0), (5, 5))
         E = np.mean([cv2.Canny(grays[i], 60, 150) > 0 for i in idx], axis=0).astype(np.float32)
         E = cv2.dilate(E, np.ones((3, 3), np.uint8))
-        box, sides = _find_cam_box(E, V, face, W, H)
+        box, sides = _find_cam_box(E, V, face, W, H, relaxed=relaxed)
         bx, by, bw, bh = box
-        if bw < 2.0 * face[2] or bh < 1.8 * face[3] or bw * bh > 0.35 * W * H:
+        # webcam fechada no rosto (comum em gameplay) é estreita: 1,5x o rosto basta
+        if bw < 1.5 * face[2] or bh < 1.4 * face[3] or bw * bh > 0.35 * W * H:
             if verbose:
                 print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) mas caixa implausível {box}")
             continue
@@ -343,7 +382,8 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
         framed = (n_lines >= 2 and "g" not in sides and "v" not in sides
                   and bw * bh <= 0.15 * W * H and presence >= 0.7
                   and _sides_covered(E, box, sides) and len(sides) == 4)
-        ok = independence >= 0.25 or framed
+        off_center = not (0.3 * W < face[0] < 0.7 * W and 0.3 * H < face[1] < 0.7 * H)
+        ok = independence >= 0.25 or framed or (relaxed and off_center and presence >= 0.35)
         if verbose:
             print(f"    [react] rosto fixo presença={presence:.2f} caixa={tuple(int(v) for v in box)} "
                   f"lados={sides} independência={independence:.2f} -> {'REACT' if ok else 'não'}")

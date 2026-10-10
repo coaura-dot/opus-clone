@@ -104,6 +104,13 @@ CAPTION_SNAP_TO_SPEECH = True       # acerta o tempo das palavras pelo áudio (c
 ENCODER_MODE = "auto"
 VAAPI_DEVICE = "/dev/dri/renderD128"  # só usado no Linux (VAAPI); ignorado no Windows
 
+# --- Limite de uso da GPU (src/throttle.py) ---
+# Os atalhos INICIAR_GPU_25/50/70/SEM_LIMITE.bat (ou a opção 6 do menu)
+# escolhem e SALVAM o modo; este valor só vale se nenhum modo foi escolhido.
+# 100 = sem limite. Ex.: 25 = whisper.cpp e encode na placa trabalham 1/4
+# de cada segundo e pausam o resto (PC livre; edição ~4x mais lenta).
+GPU_LIMIT_PERCENT = 100
+
 # --- Processamento paralelo de clipes ---
 # "auto" = decide sozinho com base nos núcleos de CPU e no tipo de encode
 # ou um número fixo de clipes a processar simultaneamente
@@ -934,6 +941,18 @@ REACT_MIN_FACE_JITTER = 0.06        # rosto da facecam tem que MEXER (boneco/qua
 REACT_MIN_FACE_CHANGE = 6.0         # ... e a imagem dele mudar (expressão; boneco/foto: <2)
 REACT_MIN_CLIP_PRESENCE = 0.85      # tela dividida só se a facecam está em 85%+ do clipe -- e aí no clipe inteiro
 
+# --- Gameplay com facecam (src/gameplay.py) ---
+# Liga sozinho pros canais marcados com "|game" na AUTOPILOT_CHANNELS (o
+# piloto passa --game pro main.py). Câmera em tela cheia alternando:
+# STREAMER (jogo calmo e ele falando) x JOGO (ação ou voice chat).
+GAMEPLAY_MODE = False
+GAMEPLAY_ACTION_MOTION = 26.0       # o jogo "mexe" isso (0-255, média de 0,75 s) = ação (PvP, tiro, parkour)
+GAMEPLAY_ACTION_RELATIVE = 1.8      # ... ou 1,8x o normal deste clipe (desde que acima de ~14)
+GAMEPLAY_MIN_HOLD_SECONDS = 2.0     # cada plano fica pelo menos isso na tela (sem pisca-pisca)
+GAMEPLAY_FACE_FRAC = 0.34           # rosto do streamer ~1/3 da altura da tela no close
+GAMEPLAY_MAX_UPSCALE = 3.5          # ampliação máx. da facecam (mais que isso borra: vira painel com fundo desfocado)
+GAMEPLAY_VOICE_CHAT = True          # outra pessoa falando (boca do streamer parada) = mostra o jogo
+
 # --- Facecam pequena (layout típico de react: reator numa caixinha
 # pequena sobre a tela reagida, às vezes com chat do lado) ---
 # quando o rosto detectado ocupa menos que essa fração da ALTURA do
@@ -1047,7 +1066,8 @@ AUTOPILOT_CHANNELS = [
     "@MaiconKuster",                                             # Maicon Küster -- ~940 mil views/vídeo
     "https://www.youtube.com/channel/UC4aiJNDUviw_vMhdCq5Kq1Q",  # Cortes do Casimito -- ~700 mil views/vídeo
     # Gringos ("|en" = canal em inglês: transcrição/legenda em inglês)
-    "https://www.youtube.com/channel/UCldCI5K_HmwS_iQX7xqIlPg|en",  # DrDonut Clips -- ~420 mil views/vídeo
+    # "|game" = gameplay com facecam: câmera alterna entre o streamer e o jogo
+    "https://www.youtube.com/channel/UCldCI5K_HmwS_iQX7xqIlPg|en|game",  # DrDonut Clips -- ~420 mil views/vídeo
     "@TheoVon|en",                                               # Theo Von -- ~1,1 mi views/episódio
     "@lexfridman|en",                                            # Lex Fridman -- ~950 mil views/episódio
     # Saíram por serem pequenos demais (views típicas de 4 mil a 20 mil):
