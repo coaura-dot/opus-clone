@@ -981,6 +981,32 @@ cada tipo, e vídeos reais):
 
 `CONTENT_WINDOW_ENABLED = False` desliga.
 
+**O conteúdo reagido inteiro no corte — v40** (`src/react_extend.py`). Achado
+real (orochidois, Short do Magal): o enquadramento mostrou o conteúdo, mas o
+clipe acabava no streamer apresentando o vídeo ("ó esse aqui") e o depoimento
+que ele ia reagir ficava de fora. A escolha do trecho só olha a fala; agora,
+quando o fim do clipe tem o streamer **apresentando** algo ("ó esse aqui",
+"olha isso", "olha o que...", "vamos ver", "escuta isso", "dá o play", "esse
+vídeo/tiktok/depoimento", "look at this", "watch this") e logo depois entra
+uma **voz nova** (o vídeo reagido), o fim vai até essa voz terminar + a frase
+de reação do streamer. O mesmo pro começo (clipe que abria no meio do vídeo
+reagido volta pra apresentação).
+- voz nova = "impressão digital" da voz (o mesmo modelo leve do modo
+  gameplay) diferente de TODAS as falas do clipe. Medido: outra pessoa,
+  0,10-0,24 de semelhança; o próprio streamer, mesmo lendo uma história com
+  outra entonação, 0,45-0,80;
+- a voz nova tem que dominar o trecho (vídeo tocando, o streamer mais assiste
+  do que fala); numa conversa as vozes se alternam;
+- "olha, eu acho..." (muleta) e "ele falou", "ela disse" (narração) não contam;
+- vídeo longo: transcreve na hora o pedaço depois do bloco, se faltar;
+- no máximo 175 s (Shorts aceita 3 min), puxando o começo se precisar; não
+  invade outro clipe do mesmo vídeo.
+Testes: react montado (streamer + outra pessoa 50 s + reação) estende certo
+nos 5 casos (fim, começo, vídeo longo, limite de tamanho, outro clipe
+depois); sem apresentação ou com a mesma voz, não muda; 4 podcasts reais
+(Lex Fridman, Bam Margera, Inteligência Ltda, Impera) e o Maicon lendo
+histórias: nenhuma extensão. `REACT_EXTEND_ENABLED = False` desliga.
+
 **Quando um corte sair com a câmera errada.** Cada corte agora grava:
 - `"versao"` no `.meta.json`: qual versão do programa editou. Clipes que já
   estavam na fila (o modo "só postar" posta esses) foram editados pela
@@ -1172,6 +1198,7 @@ opus-clip-clone/
 │   ├── version.py             # versão do programa (vai no .meta.json de cada corte)
 │   ├── content_window.py      # janela de conteúdo por cima da câmera (TikTok, tweet, vídeo...)
 │   ├── reach.py               # freio automático: Shorts sem views → posta mais devagar
+│   ├── react_extend.py        # react: o corte pega o conteúdo reagido inteiro
 │   ├── react_detector.py      # react: "olha isso" na fala
 │   ├── gameplay.py            # gameplay com facecam: câmera alterna entre streamer e jogo
 │   ├── voices.py              # de quem é a voz? (streamer x outro jogador no voice chat)

@@ -949,6 +949,11 @@ REACT_MIN_CLIP_PRESENCE = 0.85      # tela dividida só se a facecam está em 85
 SPLIT_LAYOUT_ENABLED = True
 SPLIT_MIN_FACE_JITTER = 0.003       # rosto da câmera mexe pelo menos isso (rosto de foto: ~0)
 SPLIT_STILL_MAX_CHANGE = 1.5        # lado da imagem "parado como foto" (pra valer a prova pela fala)
+# React: o corte pega o conteúdo reagido INTEIRO (src/react_extend.py). O
+# clipe que acaba no streamer apresentando ("ó esse aqui", "vamos ver") com
+# uma voz NOVA logo depois vai até essa voz terminar + a reação dele.
+REACT_EXTEND_ENABLED = True
+REACT_EXTEND_NEW_VOICE_MAX_SIM = 0.35   # voz nova: semelhança com TODAS as falas do clipe abaixo disso
 # Janela de conteúdo POR CIMA da câmera (src/content_window.py): TikTok,
 # Reels, vídeo do YouTube, tweet, post, print de notícia numa janela em
 # qualquer lugar da tela. Sai com a janela em cima e a pessoa embaixo.

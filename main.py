@@ -27,6 +27,7 @@ from src import config
 from src import hwaccel
 from src import long_video
 from src import react_layout
+from src import react_extend
 from src import aspect_fix
 from src.utils import ensure_ffmpeg, ensure_dir, check_dependency, video_info
 from src.downloader import download_youtube_video, get_video_title
@@ -280,6 +281,8 @@ def main():
             # depois, mas não é necessário para o pedido original.
             for batch in long_video.iter_long_video_clip_batches(
                     str(source_path), info["duration"], n_clips, chunk_work_dir):
+                # react: o corte pega o conteúdo reagido inteiro (src/react_extend.py)
+                react_extend.extend_all(batch, None, str(source_path), info["duration"], str(chunk_work_dir))
                 for cand in batch:
                     clip_index += 1
                     final_path = build_clip(
@@ -301,6 +304,9 @@ def main():
             )
 
             candidates = select_clips(transcript, str(full_audio), info["duration"], n_clips)
+            # react: o corte pega o conteúdo reagido inteiro (src/react_extend.py)
+            react_extend.extend_all(candidates, transcript.words, str(source_path), info["duration"],
+                                    str(work_dir))
 
             n_workers = hwaccel.resolve_parallel_clips(len(candidates))
             hwaccel.set_parallel_workers(n_workers)

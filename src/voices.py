@@ -170,11 +170,12 @@ def embed(x: np.ndarray, log=print) -> Optional[np.ndarray]:
 
 
 def who_speaks(audio: np.ndarray, phrases: List[Tuple[float, float]], log=print,
-               min_len: float = 1.0) -> Optional[List[Optional[float]]]:
+               min_len: float = 1.0, ref: Optional[List[bool]] = None) -> Optional[List[Optional[float]]]:
     """Pra cada frase (início, fim em s no tempo de `audio`): o quanto a voz
     parece a voz PRINCIPAL do clipe (cosseno: ~0,6-0,9 mesma pessoa,
     ~0-0,3 outra). None na frase curta demais; None no total se o modelo
-    não está disponível."""
+    não está disponível. `ref`: só essas frases definem a voz principal
+    (ex.: as de dentro do clipe, sem o trecho de depois)."""
     embs, idx = [], []
     for i, (a, b) in enumerate(phrases):
         if b - a < min_len:
@@ -191,13 +192,33 @@ def who_speaks(audio: np.ndarray, phrases: List[Tuple[float, float]], log=print,
     if len(embs) < 2:
         return out
     E = np.stack(embs)
-    S = E @ E.T
+    use = np.array([ref is None or bool(ref[i]) for i in idx])
+    if use.sum() < 2:
+        use[:] = True
+    Er = E[use]
+    S = Er @ Er.T
     # voz principal: a frase que mais se parece com as outras (o "centro" do
     # grupo maior), e a média das que se parecem com ela
     medoid = int(np.argmax((S > 0.5).sum(axis=1) + 0.01 * S.sum(axis=1)))
     members = S[medoid] > 0.5
-    ref = E[members].mean(axis=0)
-    ref /= np.linalg.norm(ref) + 1e-9
+    main = Er[members].mean(axis=0)
+    main /= np.linalg.norm(main) + 1e-9
     for k, i in enumerate(idx):
-        out[i] = float(E[k] @ ref)
+        out[i] = float(E[k] @ main)
+    return out
+
+
+def embed_phrases(audio: np.ndarray, phrases: List[Tuple[float, float]], log=print,
+                  min_len: float = 1.0) -> Optional[List[Optional[np.ndarray]]]:
+    """A "impressão digital" de cada frase (None na curta demais); None no
+    total se o modelo não está disponível."""
+    out: List[Optional[np.ndarray]] = []
+    for a, b in phrases:
+        if b - a < min_len:
+            out.append(None)
+            continue
+        e = embed(audio[int(a * SR):int(b * SR)], log)
+        if e is None and _state["session"] is None:
+            return None
+        out.append(e)
     return out
