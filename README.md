@@ -342,8 +342,8 @@ posta sempre a maior nota primeiro, e clipe abaixo de `AUTOPILOT_MIN_QUALITY`
 não é postado. O que pesa:
 
 - **descarta**: recado do próprio canal ou patrocínio ("segue a gente no
-  Spotify", "se inscreve", "cupom", "link na descrição") e vídeo escuro ou
-  congelado;
+  Spotify", "se inscreve", "cupom", "link na descrição"; em inglês "brought
+  to you by", "promo code", "go to site.com") e vídeo escuro ou congelado;
 - **tira nota**: abertura/encerramento do episódio, fala arrastada, clipe
   longo demais (mais de 2,5 min), pouco rosto em quadro;
 - **dá nota**: gancho forte no começo (pergunta, "nunca", "ninguém",
@@ -793,7 +793,8 @@ pontuação transparente que você pode ajustar:
   perguntas, palavras de forte carga emocional) em português e inglês
 - **Fora**: o trailer de "melhores momentos" dos primeiros 90 s do episódio
   (`SELECT_SKIP_INTRO_SECONDS`) e o encerramento da conversa ("recado
-  final", "antes de te liberar", "onde a galera te encontra")
+  final", "antes de te liberar", "onde a galera te encontra"; em inglês
+  "thank you for being here", "where can people find you", "final thoughts")
 - **Título** (sem IA): a frase do começo do clipe que melhor funciona
   sozinha, com pergunta, número, nome ou assunto concreto. Sai o vocativo
   ("Walter, quer...") e a hesitação, e perde a frase que depende de

@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v43
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v44
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -291,9 +291,20 @@ v43 (pergunta "cortes do Flow, Inteligência e semelhantes estão
     channel_pause[ch] = até quando.
 
 
+v44 (log do JRE #2560 com David Grusch, "parece bom"):
+  - o corte 2 "Thank you very much for being here man" era o ENCERRAMENTO
+    do episódio (8966-9008 s de 9024 s) e passou com nota 72: os filtros de
+    quality.py (_PROMO/_OPENING/_CLOSING, usados também no clip_selector,
+    virality e post_kit) só tinham padrões em português;
+  - padrões em inglês nas três listas (agradecimento final, "where can
+    people find you", "final thoughts", "brought to you by", "promo code",
+    "go to x.com", "welcome to the show"...). Testados em frases do JRE e
+    no Lex/Bam em cache: 0 falsos positivos.
+
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v43 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v44 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

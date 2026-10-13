@@ -35,12 +35,19 @@ _PROMO = [  # só chamada do PRÓPRIO canal; falar "sobre" publi/redes é conte�
     r"c[óo]digo (de desconto|promocional)", r"use o c[óo]digo", r"nosso patroc", r"patroc[ií]nio d[oe] (epis|podcast|canal)",
     r"oferecimento", r"seja membro", r"membros do canal", r"apoia\.?se", r"lojinha", r"nossa loja",
     r"segu\w* a gente (l[áa] )?(no|nas|na|em) (spotify|instagram|insta|tiktok|youtube|redes|canal|twitter|x\b)", r"segue o podcast", r"siga o podcast", r"chave pix", r"super ?chat",
+    # inglês (Theo Von, Joe Rogan, Lex Fridman na lista)
+    r"brought to you by", r"sponsored by", r"(our|today'?s) sponsor", r"use (the )?(promo )?code", r"promo code",
+    r"link in (the )?(description|bio)", r"\bpatreon\b", r"subscribe to (the|my|our) (channel|podcast|show)",
+    r"(hit|smash) (the|that) (like|subscribe|bell)", r"\w+ dot com slash", r"(go|head) (over )?to \w+ ?(\.|dot) ?com\b",
 ]
 _OPENING = [
     r"^(e a[ií],? )?(fala|salve),? (galera|pessoal|rapaziada|família)", r"sejam bem[- ]vindos?",
     r"bem[- ]vindos? a(o)? (mais um|nosso)", r"come[çc]ando (mais um|o) (epis[óo]dio|podcast)",
     r"(hoje|nesse epis[óo]dio) (a gente )?recebe", r"obrigad[oa] por (ter )?vir", r"valeu (galera|pessoal),? at[ée]",
     r"at[ée] (o )?pr[óo]ximo (epis[óo]dio|v[ií]deo)", r"encerrando (o|mais um)",
+    # inglês
+    r"^(what'?s up|hey|hello),? (everybody|everyone|guys|folks)", r"welcome (back )?to (the|another|my|our) (show|podcast|episode)",
+    r"(on|in) (today'?s|this) episode", r"(my|our) guest (today|this week) is", r"thanks? (so much )?for having me",
 ]
 # FIM da conversa (achado real, postado: "Walter, quer deixar um recado final
 # antes de te liberar..." -- e ainda veio do trailer no começo do vídeo)
@@ -56,6 +63,14 @@ _CLOSING = [
     # achado real: "A gente agradecer a receptividade do Tirando Dúvidas"
     r"agradecer (a|pela|o) (receptividade|presen[çc]a|participa[çc][ãa]o|audi[êe]ncia|carinho|convite)",
     r"(quero|queria|vamos|gostaria de) agradecer", r"obrigad[oa] a (todos|voc[êe]s) que (assistiram|ficaram)",
+    # inglês (achado real: JRE com David Grusch -- "Thank you very much for
+    # being here man", 40 s antes do fim do episódio, virou corte com nota 72)
+    r"thank(s| you)( (very|so) much| again)? for (being here|coming (in|on|here)|doing (this|the show)|joining( us)?)",
+    r"(it was|it'?s been) (a pleasure|an honor|great|awesome|fun) (to have you|having you|talking|chatting)",
+    r"where can (people|everyone|folks|listeners) (find|follow) you", r"(any )?final thoughts", r"last question (for you|before|then)",
+    r"before (we|i) (let you go|wrap (it )?up)", r"(let'?s|we'?ll|gotta) wrap (it|this|things) up",
+    r"(see|catch) you (guys )?next (time|week)", r"that'?s (it|all) for (today|this (episode|week))",
+    r"appreciate you (coming|being here|doing this)",
 ]
 _STRONG_HOOK = [
     r"\?$", r"\bnunca\b", r"\bningu[ée]m\b", r"\bverdade\b", r"\bsegredo\b", r"\bmentira\b", r"\bmorr",
