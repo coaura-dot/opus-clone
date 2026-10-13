@@ -1,0 +1,230 @@
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — escrito em 13/10/2026, versão atual v40
+=====================================================================================
+
+Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
+(seções de reenquadramento, piloto automático e "React") e o src/config.py.
+
+
+1. QUEM É O USUÁRIO E O QUE É O PROGRAMA
+----------------------------------------
+- Fala português (escreva sempre em português, direto, sem enrolação).
+  Quer que as coisas "simplesmente funcionem", com pouca conversa.
+- PC Windows: placa de vídeo RX 580 + processador Xeon.
+- Pasta de instalação no PC dele:
+    C:\Users\igo\Desktop\opus-clip-clone\opus-clip-clone
+- "Auto Clipper": acha vídeos bombando (podcasts, reacts, gameplay), corta
+  trechos virais, edita em vertical (Shorts) com legenda/música/efeitos e
+  posta sozinho no canal do YouTube DontStopMeNow (@DontStopMeNowXD).
+- Ele usa pela INTERFACE (interface.py, Tkinter), que liga/desliga o piloto
+  automático em modos: Só postar / GPU 25% / 50% / 70% / Sem limite, e agora
+  tem "Shorts por dia" (− e +, padrão 6).
+
+
+2. REPOSITÓRIO, BRANCH E COMMITS
+--------------------------------
+- Repo: coaura-dot/opus-clone, branch: claude/credits-vs-pro-plan-lvd260
+  (já existe o PR #1 dessa branch; NÃO abrir PR novo sem ele pedir).
+- Commit: mensagem em português no estilo "vNN: resumo" + corpo curto, e
+  SEMPRE terminar com estas duas linhas:
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01Uu49dbmhFznhndmUDVHh4G
+  (Nunca escrever nome/ID de modelo em código, comentário, README ou commit
+  fora dessas linhas de atribuição.)
+- Push: git push -u origin claude/credits-vs-pro-plan-lvd260 (se falhar por
+  rede, tentar de novo até 4x esperando 2/4/8/16 s).
+- A pasta credentials/ (client_secret.json, youtube_token.json,
+  claude_api_key.txt, youtube_cookies.txt) é do usuário e está no
+  .gitignore. NUNCA commitar. Conferir no zip (ver abaixo).
+
+
+3. COMO ENTREGAR CADA ATUALIZAÇÃO (formato que ele espera)
+---------------------------------------------------------
+a) Subir a versão em src/version.py (VERSION = "vNN"). Ela vai no
+   .meta.json de cada corte (campo "versao") e aparece no log ao ligar.
+b) Lint (python3 -m pyflakes nos arquivos mexidos) e
+   python3 test_pipeline.py  (tem que terminar com "TESTE OK").
+c) Commit + push.
+d) Zip no scratchpad:
+     git archive --format=zip --prefix=AutoClipper/ -o <scratchpad>/AutoClipper-vNN.zip HEAD
+   conferir: unzip -l ... | grep -c "credentials/\|youtube_token\|client_secret.json\|claude_api_key"  -> tem que dar 0
+e) Mandar o zip com SendUserFile (display "attach") e, na resposta, este
+   bloco de PowerShell (trocar vNN em todos os lugares):
+
+& {
+  $zip  = "$env:USERPROFILE\Downloads\AutoClipper-vNN.zip"
+  $dest = "C:\Users\igo\Desktop\opus-clip-clone\opus-clip-clone"
+  if (-not (Test-Path $zip)) { Write-Host "Nao achei $zip (baixou pra outra pasta?)" -ForegroundColor Red; return }
+  $hb = "$dest\autopilot_data\piloto_ligado.json"
+  if ((Test-Path $hb) -and ((Get-Date) - (Get-Item $hb).LastWriteTime).TotalSeconds -lt 30) {
+    Write-Host "O piloto ainda esta ligado. Feche o Auto Clipper (clique Sim pra desligar) e rode de novo." -ForegroundColor Yellow; return }
+  $tmp = Join-Path $env:TEMP "ac_vNN"
+  if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force }
+  Expand-Archive $zip $tmp -Force
+  robocopy "$tmp\AutoClipper" $dest /E /XD .venv whisper.cpp output credentials autopilot_data .autoclip_work models /NFL /NDL /NJH /NJS /NP | Out-Null
+  if (Select-String -Path "$dest\src\version.py" -Pattern 'vNN' -Quiet) { Write-Host "vNN instalada." -ForegroundColor Green }
+  else { Write-Host "Algo deu errado na copia." -ForegroundColor Red; return }
+  $pyw = "$dest\.venv\Scripts\pythonw.exe"
+  if (Test-Path $pyw) { Start-Process $pyw -ArgumentList "`"$dest\interface.py`" --ligar" -WorkingDirectory $dest }
+  else { Start-Process "$dest\AUTO_CLIPPER.bat" -WorkingDirectory $dest }
+}
+
+   (Avisar pra fechar o Auto Clipper antes, clicando "Sim" pra desligar.)
+f) Na mensagem: o que mudou, o que foi testado (com números) e o que
+   ainda NÃO cobre. Lembrar que clipes que já estão na fila foram editados
+   pela versão antiga (o campo "versao" do .meta.json mostra qual).
+
+
+4. REGRAS / PEDIDOS RECUSADOS (não fazer)
+-----------------------------------------
+- Não baixar música comercial.
+- Não fazer spam nem burlar limites da plataforma: nada de vários projetos
+  do Google pra somar cota, nada de automação de navegador pra passar da
+  cota da API ou da auditoria.
+- Não usar proxy de terceiros pra furar o bloqueio "não sou um robô" do YouTube.
+- O servidor de PO token (bgutil) e a leitura de ia_search.py foram negados
+  pelo classificador: não insistir.
+- Não fazer chamadas reais à API do Claude (gasta o dinheiro dele).
+- Não inventar endereço/dados de site.
+
+
+5. AMBIENTE DE TESTE (nuvem) — O QUE FUNCIONA E O QUE NÃO
+---------------------------------------------------------
+- NÃO dá pra baixar vídeos do YouTube daqui (bloqueio de robô; páginas de
+  vídeo voltam LOGIN_REQUIRED). Funciona:
+    * miniaturas: https://i.ytimg.com/vi/<ID>/oar1.jpg, oar2, oar3 (quadros
+      do Short), hq720/maxresdefault/sd1-3 (do vídeo original);
+    * HTML da página do Short: tem a descrição "Corte de: <título> — <url
+      do vídeo original>" (o programa escreve isso);
+    * feed RSS do canal com data e VIEWS de cada vídeo:
+      https://www.youtube.com/feeds/videos.xml?channel_id=UCnzQodo_5H7ija_cvrrF7cQ
+      (foi assim que achei a queda de views com 1 post por hora).
+- Scratchpad desta sessão (pode sumir se o container for reciclado):
+    /tmp/claude-0/-home-user-opus-clone/e9241813-debd-5b2b-8320-4051eaa8f429/scratchpad
+  Vídeos reais de teste lá dentro:
+    multi_src/lex.webm (Lex Fridman + Trump), multi_src/bam.mp4 (podcast do
+      Bam Margera: janelas reais de conteúdo em 120-142, 150-175, 190-205 s)
+    real/maicon.mp4 (Maicon Küster lendo histórias; webcam; pop-ups em 231/246 s;
+      câmera contínua em 159-204 s), real/hp.webm (react clássico real),
+      real/inteligencia_corte.mp4, real/impera_prelive.mp4
+    game_src/smp.mp4 (Minecraft SMP com facecam), game_src/speedrun.mp4 (inventário)
+    syn/reactA-D.mp4 (react clássico: conteúdo + caixa da facecam)
+    camtest/neg_*.mp4 (negativos antigos), split/splitsrc.mp4 (Tinder), r2/reactsplit.mp4
+    v37/cases/*.mp4 + truth.json (janelas: TikTok, YouTube, Instagram, tweets,
+      notícia, pop-up, chat rolando, tarja) e v37/cam36.mp4
+    magal/t/react.mp4 (Maicon 0-50 s, OUTRA pessoa 50-100 s, Maicon 100-115 s)
+      + react.pkl (transcrição) e lex/bam/intel/impera.pkl
+  Scripts de teste lá dentro:
+    v37/evalc.py  <caso | caminho,início,duração[,game]> ...  -> decide como o
+       editor (react clássico -> plano por cena) e mede % do conteúdo mostrado
+    v37/plan.py   caminho,início,duração  -> plano por cena + janelas/eventos
+    v37/render.py caso,início,duração,nome -> renderiza e faz folha de quadros
+    v37/gen.py    (gera os casos sintéticos), v37/cards.py (tweets/posts/notícia)
+    split/negplan.py (negativos), magal/t/test_ext.py, test_ext2.py, sweep.py,
+      sweep2.py, e2e.py (extensão do react)
+- Interface sem tela: Xvfb + /usr/bin/python3.12 (tem tkinter); print com
+    ffmpeg -f x11grab -video_size 1100x800 -i :NN. Use um display NOVO (:9x)
+    se der "couldn't connect" (lock velho). NÃO usar pkill -f com padrão que
+    case com o próprio shell (use "[X]vfb :99").
+- Modelo de vozes (WeSpeaker, 26 MB) já baixado em models/voz/ (gitignored).
+- Transcrição aqui: faster-whisper 'small' na CPU (o whisper.cpp do PC dele
+  não existe aqui; o aviso é normal).
+
+
+6. MAPA DO CÓDIGO (o que importa)
+---------------------------------
+main.py ............ pipeline de um vídeo: baixa, detecta react clássico
+                     (react_layout), transcreve (vídeo > 39 min: blocos de 20
+                     min em long_video.py), escolhe trechos (clip_selector),
+                     ESTENDE react (react_extend), edita (video_editor.build_clip)
+autopilot.py (raiz) + src/autopilot.py ... piloto automático (fila, nota,
+                     postagem, modos, freio de alcance, só postar)
+interface.py ....... a interface (Tkinter, roda no pythonw)
+src/control.py ..... arquivos de controle em autopilot_data/: piloto_ligado.json
+                     (batimento), parar.pedido, modo_gpu.txt, modo_trabalho.txt,
+                     posts_por_dia.txt
+src/reach.py ....... freio automático: lê views dos próprios Shorts (API, 1
+                     unidade a cada 2 h); 3 últimos maduros (8 h+) com <5% da
+                     mediana anterior -> 1 post a cada 8 h até voltar
+src/channel_check.py "já está no canal?" antes de cada upload
+src/throttle.py .... limite de GPU (suspende/retoma processos)
+src/video_editor.py  build_clip: jump cuts, legenda, música, plano de cenas,
+                     render; grava .meta.json ("versao") e clip_XX.origem.jpg
+                     (8 quadros do original)
+src/reframer.py .... render vertical; _compose_split_frame (imagem em cima,
+                     pessoa embaixo)
+src/shot_plan.py ... plano por cena: single/multi/speaker/broll/text/facefit/
+                     split. Tela dividida (costura vertical) + janela de
+                     conteúdo (_window_shot) + filtro de "piscar" (<2 s)
+src/content_window.py janela de conteúdo por cima da câmera (v37)
+src/react_layout.py  react clássico (facecam em caixa sobre o conteúdo);
+                     _content_over_cam evita confundir janela de vídeo com facecam
+src/react_extend.py  (v40) corte pega o conteúdo reagido inteiro
+src/voices.py ...... "impressão digital" da voz (WeSpeaker ONNX no
+                     onnxruntime): embed, who_speaks(ref=...), embed_phrases
+src/gameplay.py .... modo gameplay (canal marcado com |game): streamer x jogo,
+                     voz de outro jogador mostra o jogo, cortes secos
+src/react_detector.py padrões de fala apontando imagem ("essa moça aqui")
+src/clip_selector.py escolha dos trechos (limites de assunto, duração)
+src/config.py ...... todos os ajustes (comentados em português)
+
+
+7. HISTÓRICO RECENTE (por que cada coisa existe)
+-----------------------------------------------
+v29-v35: câmera de gameplay, modos de GPU, interface, modo "só postar",
+  checagem no canal, tela dividida imagem+pessoa (Tinder do Maicon), vozes
+  no gameplay (DrDonut), cortes secos.
+v36: painel estilo TikTok com gente dos dois lados; "versao" no .meta.json;
+  quadros do original (.origem.jpg) + link na interface.
+v37 (orochidois "influenciadores aos prantos com o fim das bets", Short
+  0XB58M64JsI): janela de conteúdo por cima da câmera (TikTok, Reels,
+  YouTube, Instagram, tweet, notícia, foto). Eventos: só um retângulo troca
+  de imagem / fica parado num corte seco da câmera; olha 30 s antes do
+  clipe; moldura com 2+ lados nítidos (>=75%) perto de um evento; chat que
+  rola não conta; janela pequena com rosto vivo e sem corte = facecam.
+  Provável causa do caso: janela de vídeo com rosto confundida com facecam
+  -> corrigido em react_layout._content_over_cam.
+  Resultados: 96-100% nos sintéticos; 4 janelas reais do Bam; 0 falsos em
+  13 negativos + Inteligência/Impera inteiros + Minecraft + chat + tarja.
+v38: views caíram de ~1.300 pra 0-6 por Short exatamente quando o ritmo foi
+  de 1 a cada 4 h pra 1 por hora (limite 20-24/dia). Padrão voltou a 6/dia
+  + freio automático (reach.py) + aviso amarelo na interface.
+v39: "Shorts por dia" visível na interface (− e +, padrão 6; acima de 6
+  mostra aviso em amarelo).
+v40 (Short lBqOLQdGLZo, mesmo vídeo do orochidois; o usuário AMOU o
+  enquadramento, mas o corte acabou antes do depoimento do Magal):
+  react_extend.py. Fim do clipe com o streamer apresentando ("ó esse aqui",
+  "olha isso/o que", "vamos ver", "escuta isso", "dá o play", "esse
+  vídeo/tiktok/depoimento", "look at this"...) + VOZ NOVA logo depois (até
+  20 s) -> estende até essa voz acabar + a frase de reação. Voz nova =
+  semelhança < 0,35 com TODAS as falas do clipe (medido: outra pessoa
+  0,10-0,24; o próprio streamer lendo história 0,45-0,80). A voz nova tem
+  que dominar o trecho (>= 5 s e 1,5x a fala do streamer). Começo: idem,
+  referência = 45 s antes da apresentação. Vídeo longo: transcreve o
+  pedaço que falta. Máx 175 s; não invade outro clipe.
+  Testes: react montado OK nos 5 casos; 4 podcasts reais (76 candidatos) e
+  Maicon: 0 extensões. Removidos de propósito: "olha" sozinho (muleta),
+  "ele falou/ela disse" (narração), "here's".
+
+
+8. ESTADO ATUAL E PRÓXIMOS PASSOS
+--------------------------------
+- Última entrega: v40 (zip enviado). Esperando o usuário instalar e mandar
+  o próximo Short com problema.
+- Quando ele mandar um link de Short:
+    1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);
+    2) pegar miniaturas do original (hq720, sd1-3) pra ver o layout;
+    3) se possível, pedir a imagem "ver quadros do original" (link na
+       interface, ao lado do último post) — mostra 8 quadros do trecho original;
+    4) reproduzir o caso com vídeos reais do scratchpad, corrigir, rodar a
+       bateria inteira (positivos + negativos + gameplay), entregar.
+- Limitações conhecidas (já ditas a ele):
+    * janela de conteúdo aberta > 30 s antes do clipe e sem mudar nada dentro;
+    * janela pequena com alguém falando e sem nenhum corte = tratada como facecam;
+    * conteúdo reagido sem fala (só música/imagem) não estende o corte;
+    * modo gameplay sem a transcrição mostra só o jogo nos testes (normal).
+- Ideias não feitas (só se ele pedir/precisar): cortar os comentários
+  longos do streamer no meio do conteúdo reagido; detectar janela estática
+  pelo alinhamento perfeito da moldura; aviso na interface quando a cota da
+  API acabar.
+- SEMPRE: antes de entregar, rodar os negativos (podcasts, reacts clássicos,
+  Minecraft) — quase toda regra nova gerou falso positivo na 1ª versão.
