@@ -656,7 +656,9 @@ VIGNETTE_ANGLE = "PI/4.6"            # maior = vinheta mais forte/fechada
 # imperceptível pra esse uso e reduz bastante o tamanho do arquivo. Suba
 # (número menor) se preferir mais qualidade/arquivo maior; desça (número
 # maior) pra arquivos ainda menores.
-ENCODE_CRF = 23
+# v41: 21 -- o upload é recomprimido pelo YouTube; mandar mais limpo
+# preserva texto e rosto (a facecam ampliada perdia detalhe no 23)
+ENCODE_CRF = 21
 # Preset era "veryfast" fixo (não configurável). No caminho de CPU
 # (libx264) isso realmente prioriza velocidade sobre compressão. No
 # caminho de GPU AMD (AMF), porém, "veryfast"/"faster" mapeiam pro modo
@@ -677,8 +679,9 @@ ENCODE_PRESET = "fast"
 # teto (o vídeo continua guiado por QP abaixo desse teto — isso NÃO reduz
 # a qualidade do conteúdo normal, só evita um pico de bitrate fora do
 # comum). 8 Mbps é generoso pra 1080x1920 (bem acima do que YouTube/TikTok
-# recomendam pra essa resolução).
-ENCODE_MAXRATE_MBPS = 8.0
+# recomendam pra essa resolução). v41: 10 (vídeo de 60 quadros/s com o
+# QP mais baixo batia no teto de 8 nas cenas de movimento)
+ENCODE_MAXRATE_MBPS = 10.0
 
 # --- Seleção automática de clipes virais ---
 MIN_GAP_BETWEEN_CLIPS = 8            # intervalo mínimo (s) entre clipes escolhidos
@@ -932,8 +935,24 @@ REACT_MODE_AUTO_DETECT = True
 REACT_LAYOUT_SAMPLES = 48           # quadros amostrados no vídeo inteiro
 REACT_MIN_PRESENCE = 0.25           # o rosto da facecam aparece em pelo menos 25% deles (o streamer
                                     # costuma passar parte da live em tela cheia, sem facecam)
-REACT_CONTENT_FRAC = 0.5            # altura do painel de conteúdo (resto = streamer)
-REACT_CAM_FACE_FRAC = 0.30          # rosto do streamer ~30% da altura do painel dele
+REACT_CONTENT_FRAC = 0.5            # painel do conteúdo nunca menor que isso quando o streamer cabe grande
+REACT_CAM_FACE_FRAC = 0.30          # facecam grande: rosto do streamer ~30% da altura do painel dele
+# v41 (react do Casimiro ao Show do Milhão: pergunta e apresentadora
+# cortadas em cima; streamer borrado e tremendo embaixo):
+#  - streamer em TRIPÉ: enquadramento parado (antes seguia cada mexida de
+#    cabeça); a facecam não é ampliada mais que isso. Facecam pequena (o
+#    normal: ~20% da largura da tela) entra INTEIRA, na proporção dela.
+#    Medido: o recorte antigo ampliava ~3,8x; a facecam inteira, ~2,8x.
+REACT_CAM_MAX_UPSCALE = 2.4
+REACT_CAM_MAX_UPSCALE_HARD = 3.3    # nem inteira dá (fonte 720p): painel mais estreito que a tela
+#  - conteúdo: um enquadramento PARADO por plano do vídeo reagido, trocando
+#    no corte dele, cobrindo rostos em destaque e texto (pergunta, legenda,
+#    placar); o que não cabe recortado entra inteiro. Clipe com cena larga
+#    em pelo menos essa fração do tempo: o vídeo reagido inteiro, na
+#    largura da tela, em cima do streamer (faixas de fundo desfocado sobram)
+REACT_WIDE_LAYOUT_MIN_FRAC = 0.4
+REACT_CONTENT_FACE_MIN = 0.06       # rosto do vídeo reagido com 6%+ da altura = pessoa em destaque
+REACT_ANALYSIS_FPS = 8.0            # amostras por segundo na análise do clipe (acha os cortes do vídeo reagido)
 REACT_MIN_SEGMENT_SECONDS = 3.0     # trecho mínimo com/sem facecam (sem pisca-pisca)
 REACT_CAM_MATCH_MAX_DIFF = 22.0     # diferença máx. do fundo da facecam pra "ela está na tela"
 SPEAKER_MIN_HOLD_SECONDS = 2.0      # conversa em plano aberto: cada pessoa fica pelo menos isso antes de cortar pra outra

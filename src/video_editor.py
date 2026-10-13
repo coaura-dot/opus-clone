@@ -181,13 +181,13 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
                   f"{react_plan.switches} corte(s) de câmera{extra}{cheia}")
     elif react_layout is not None:
         react_plan = react_layout_mod.plan_clip(react_layout, source_path, candidate.start,
-                                                candidate.end, config.TARGET_WIDTH, config.TARGET_HEIGHT)
+                                                candidate.end, config.TARGET_WIDTH, config.TARGET_HEIGHT,
+                                                fps=src_fps)
         if react_plan is not None:
-            print(f"    -> Clip {clip_index}: react em tela dividida "
-                  f"({react_plan.active_fraction * 100:.0f}% do clipe com a facecam)")
-            if react_plan.active_fraction >= 0.5:
-                caption_margin_v = react_layout_mod.caption_margin_v(config.TARGET_HEIGHT)
-                hook_bottom_y = react_layout_mod.hook_bottom_y(config.TARGET_HEIGHT)
+            print(f"    -> Clip {clip_index}: react em tela dividida -- {react_plan.describe()}")
+            # legenda na divisória entre os painéis (a altura deles muda por clipe)
+            caption_margin_v = react_plan.caption_margin_v()
+            hook_bottom_y = react_plan.hook_bottom_y()
 
     # plano por cena (src/shot_plan.py) feito AQUI, com a transcrição: a tela
     # dividida do vídeo original (imagem + pessoa) é confirmada pela fala

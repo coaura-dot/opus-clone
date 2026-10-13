@@ -57,27 +57,6 @@ def _read_frame_at(source_path: str, t: float, w: int, h: int) -> Optional[np.nd
     return np.frombuffer(out[:w * h * 3], dtype=np.uint8).reshape(h, w, 3)
 
 
-def _read_frames(source_path: str, start: float, duration: float, rate: float,
-                 w: int, h: int) -> List[np.ndarray]:
-    """Decodifica o trecho uma vez só, em baixa resolução, a `rate` quadros/s."""
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{max(start, 0.0):.3f}", "-i", source_path,
-           "-t", f"{max(duration, 0.1):.3f}", "-vf", f"fps={rate},scale={w}:{h}", "-an",
-           "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    frames = []
-    size = w * h * 3
-    try:
-        while True:
-            buf = proc.stdout.read(size)
-            if len(buf) < size:
-                break
-            frames.append(np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3))
-    finally:
-        proc.stdout.close()
-        proc.wait()
-    return frames
-
-
 def _faces(detector, img) -> list:
     """(cx, cy, fw, fh) na escala de `img`, SEM o filtro de altura do
     detector principal (facecam costuma ficar no rodapé do quadro)."""
@@ -537,16 +516,132 @@ def _smooth_runs(flags: np.ndarray, min_len: int) -> np.ndarray:
     return flags
 
 
-class ReactClipPlan:
-    """Plano de um clipe em tela dividida: em que trechos a facecam está na
-    tela, onde está o rosto do streamer e qual janela do conteúdo mostrar."""
+_TINY_W, _TINY_H = 64, 36   # miniatura usada pra achar os cortes do vídeo reagido
 
-    def __init__(self, layout: ReactLayout, times, present, face_track, content_window):
+
+def _iter_frames(source_path: str, start: float, duration: float, rate: float, w: int, h: int):
+    """Quadros do trecho, um por vez (não guarda o clipe inteiro na memória)."""
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{max(start, 0.0):.3f}", "-i", source_path,
+           "-t", f"{max(duration, 0.1):.3f}", "-vf", f"fps={rate},scale={w}:{h}", "-an",
+           "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    size = w * h * 3
+    try:
+        while True:
+            buf = proc.stdout.read(size)
+            if len(buf) < size:
+                break
+            yield np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
+    finally:
+        proc.stdout.close()
+        proc.kill()
+        proc.wait()
+
+
+def _tiny_mask(cam_r, W: int, H: int) -> np.ndarray:
+    """1 = conteúdo, 0 = facecam (o streamer mexendo não é corte do vídeo)."""
+    m = np.ones((_TINY_H, _TINY_W), np.float32)
+    x0, y0 = int(cam_r[0] * _TINY_W / W), int(cam_r[1] * _TINY_H / H)
+    x1, y1 = int(np.ceil(cam_r[2] * _TINY_W / W)), int(np.ceil(cam_r[3] * _TINY_H / H))
+    m[y0:y1, x0:x1] = 0.0
+    return m
+
+
+def _tiny_gray(img, mask) -> np.ndarray:
+    t = cv2.resize(img, (_TINY_W, _TINY_H), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(t, cv2.COLOR_BGR2GRAY).astype(np.float32) * mask
+
+
+def _overlap(a, b) -> float:
+    """Área de a (x0, y0, x1, y1) que cai dentro de b, em fração de a."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    return ix * iy / max((a[2] - a[0]) * (a[3] - a[1]), 1e-6)
+
+
+def _iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    return inter / max((a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter, 1e-6)
+
+
+@dataclass
+class ContentShot:
+    """Um plano do vídeo reagido (entre dois cortes dele) e como ele entra no
+    painel de cima."""
+    t0: float                          # início (s desde o começo do clipe)
+    cut_diff: float                    # tamanho da troca de imagem no corte (acha o quadro exato no render)
+    window: Tuple[int, int, int, int]  # recorte do conteúdo (x, y, w, h), px da fonte
+    disp: Tuple[int, int, int, int]    # onde ele entra no painel (x, y, w, h), px da saída
+    fills: bool                        # True = preenche o painel; False = inteiro, com fundo desfocado
+
+
+@dataclass
+class CamShot:
+    """Enquadramento PARADO do streamer (tripé) a partir de `t0`."""
+    t0: float
+    crop: Tuple[float, float, float, float]  # recorte da facecam (x, y, w, h), px da fonte
+    face: Tuple[float, float]                # centro do rosto (o zoom de edição puxa pra ele)
+
+
+@dataclass
+class Geometry:
+    out_w: int
+    out_h: int
+    top: int         # y do painel do conteúdo
+    content_h: int
+    cam_x: int
+    cam_y: int
+    cam_w: int
+    cam_h: int
+    wide: bool       # conteúdo na largura inteira (painel baixo) + faixas de fundo desfocado
+
+    @property
+    def seam(self) -> int:
+        return self.top + self.content_h
+
+    @property
+    def full(self) -> bool:
+        """Os dois painéis cobrem a tela inteira (sem faixa de fundo)."""
+        return self.top == 0 and self.cam_y + self.cam_h >= self.out_h and self.cam_w >= self.out_w
+
+
+class ReactClipPlan:
+    """Plano de um clipe em tela dividida.
+
+    Achado real (react do Casimiro ao Show do Milhão): o painel de cima era
+    UMA janela estreita fixa (63% da largura de um vídeo 16:9) e cortava a
+    pergunta e a apresentadora; o de baixo seguia cada mexida de cabeça do
+    streamer numa facecam pequena ampliada ~4x -- borrado e tremendo.
+    Agora:
+      - conteúdo: um enquadramento PARADO por plano do vídeo reagido,
+        trocando exatamente no corte dele; cobre os rostos e o texto que
+        importam (pergunta, legenda, placar). Se não cabe recortado, entra
+        inteiro. Se o clipe tem muita cena larga, o painel já é da largura
+        inteira (vídeo 16:9 inteiro em cima);
+      - streamer: enquadramento de TRIPÉ (parado); facecam pequena aparece
+        inteira, com o painel na proporção dela, pra ampliar o mínimo."""
+
+    def __init__(self, layout: ReactLayout, times, present, geom: Geometry, shots: List[ContentShot],
+                 cam_shots: List[CamShot], cam_up: float, area, mask, fps: float, rate: float):
         self.layout = layout
         self.times = np.asarray(times, dtype=np.float64)
         self.present = np.asarray(present, dtype=bool)
-        self.face_track = face_track          # (N, 3): cx, cy, fh na fonte
-        self.content_window = content_window  # (x, y, w, h) na fonte
+        self.geom = geom
+        self.shots = shots
+        self.cam_shots = cam_shots
+        self.cam_up = cam_up                  # quanto a facecam é ampliada no painel
+        self.area = area                      # área do vídeo reagido (x, y, w, h), px da fonte (fundo)
+        self._mask = mask
+        self._half = 0.5 / max(fps, 1.0)
+        self._sample_dt = 1.0 / max(rate, 1e-3)
+        self._cur = 0
+        self._prev_tiny = None
+        # zoom de edição (momento-chave) no streamer: facecam já bem ampliada
+        # não aguenta muito mais zoom sem borrar
+        umax = float(getattr(config, "REACT_CAM_MAX_UPSCALE", 2.4))
+        self.cam_zoom_max = max(1.06, umax * 1.15 / max(cam_up, 1e-3))
 
     def active(self, t: float) -> bool:
         if len(self.times) == 0:
@@ -558,85 +653,164 @@ class ReactClipPlan:
     def active_fraction(self) -> float:
         return float(self.present.mean()) if len(self.present) else 0.0
 
-    def _face_at(self, t: float):
-        tr = self.face_track
-        return (float(np.interp(t, self.times, tr[:, 0])), float(np.interp(t, self.times, tr[:, 1])),
-                float(np.interp(t, self.times, tr[:, 2])))
+    def caption_margin_v(self) -> int:
+        """Legenda centrada na divisória entre o conteúdo e o streamer."""
+        font = getattr(config, "CAPTION_FONT_SIZE", 104)
+        return int(round(self.geom.out_h - self.geom.seam - font * 0.5))
+
+    def hook_bottom_y(self) -> int:
+        """Base do balão do título: logo acima da legenda."""
+        font = getattr(config, "CAPTION_FONT_SIZE", 104)
+        return int(self.geom.out_h - self.caption_margin_v() - font - 40)
+
+    def describe(self) -> str:
+        g = self.geom
+        inteiros = sum(1 for s in self.shots if not s.fills)
+        txt = (f"conteúdo {'na largura inteira' if g.wide else 'em painel alto'} ({g.content_h}px), "
+               f"streamer {g.cam_h}px parado (facecam ampliada {self.cam_up:.1f}x"
+               f"{', ' + str(len(self.cam_shots)) + ' enquadramentos' if len(self.cam_shots) > 1 else ''}), "
+               f"{len(self.shots)} plano(s) do vídeo reagido")
+        if inteiros and not g.wide:
+            txt += f", {inteiros} mostrado(s) inteiro(s)"
+        return txt
+
+    def _content_shot(self, frame, t: float) -> ContentShot:
+        """Plano do vídeo reagido neste quadro. A análise (8 quadros/s) diz
+        entre quais amostras foi o corte; aqui a troca acontece no quadro
+        exato em que a imagem muda (senão o enquadramento novo entraria
+        alguns quadros antes ou depois do corte)."""
+        tiny = _tiny_gray(frame, self._mask)
+        d = float(np.mean(np.abs(tiny - self._prev_tiny))) if self._prev_tiny is not None else 0.0
+        self._prev_tiny = tiny
+        shots, j = self.shots, self._cur
+        # o tempo de cada amostra tem 1-2 quadros de imprecisão: a troca
+        # forçada (corte gradual, sem pico) só vem meia amostra depois
+        while j + 1 < len(shots) and t >= shots[j + 1].t0 + 0.5 * self._sample_dt:
+            j += 1
+        if j + 1 < len(shots):
+            nxt = shots[j + 1]
+            if t > nxt.t0 - self._sample_dt - 6 * self._half and d >= max(0.5 * nxt.cut_diff, 6.0):
+                j += 1
+        self._cur = j
+        return shots[j]
+
+    def _cam_at(self, t: float) -> CamShot:
+        cam = self.cam_shots[0]
+        for c in self.cam_shots[1:]:
+            if t >= c.t0 - self._half:
+                cam = c
+        return cam
+
+    def _background(self, frame) -> np.ndarray:
+        """Fundo das faixas: o próprio vídeo reagido, bem desfocado e escuro."""
+        g = self.geom
+        x, y, w, h = self.area
+        target = g.out_w / float(g.out_h)
+        if w / float(h) > target:
+            nw = int(round(h * target))
+            x, w = x + (w - nw) // 2, nw
+        else:
+            nh = int(round(w / target))
+            y, h = y + (h - nh) // 2, nh
+        small = cv2.resize(frame[y:y + h, x:x + w], (max(g.out_w // 12, 4), max(g.out_h // 12, 4)),
+                           interpolation=cv2.INTER_AREA)
+        small = cv2.GaussianBlur(small, (0, 0), 2.0)
+        small = cv2.convertScaleAbs(small, alpha=float(getattr(config, "FALLBACK_BG_DARKEN", 0.55)))
+        return cv2.resize(small, (g.out_w, g.out_h), interpolation=cv2.INTER_LINEAR)
 
     def compose(self, frame, t: float, out_w: int, out_h: int, zoom: float = 1.0) -> np.ndarray:
-        frac = float(np.clip(getattr(config, "REACT_CONTENT_FRAC", 0.5), 0.3, 0.7))
-        top_h = int(round(out_h * frac / 2.0)) * 2
-        bot_h = out_h - top_h
-        src_h, src_w = frame.shape[:2]
+        from .reframer import crop_scaled, hq_resize
+        g = self.geom
+        shot = self._content_shot(frame, t)
+        if g.full and shot.fills:
+            out = np.empty((out_h, out_w, 3), np.uint8)
+        else:
+            out = self._background(frame)
 
-        x, y, w, h = self.content_window
-        top = frame[y:y + h, x:x + w]
-        top = cv2.resize(top, (out_w, top_h),
-                         interpolation=cv2.INTER_AREA if w > out_w else cv2.INTER_LINEAR)
+        # conteúdo: recorte parado do plano atual
+        x, y, w, h = shot.window
+        dx, dy, dw, dh = shot.disp
+        out[g.top + dy:g.top + dy + dh, dx:dx + dw] = hq_resize(frame[y:y + h, x:x + w], dw, dh)
 
-        bx, by, bw, bh = self.layout.cam_box
-        fcx, fcy, ffh = self._face_at(t)
-        aspect = out_w / float(bot_h)
-        face_frac = getattr(config, "REACT_CAM_FACE_FRAC", 0.30)
-        crop_h = float(np.clip(ffh / face_frac, ffh * 2.2, bh)) / max(zoom, 1.0)
-        crop_w = crop_h * aspect
-        if crop_w > bw:
-            crop_w = float(bw)
-            crop_h = crop_w / aspect
-        x0 = int(np.clip(fcx - crop_w / 2, bx, bx + bw - crop_w))
-        y0 = int(np.clip(fcy - crop_h * 0.42, by, by + bh - crop_h))
-        cw, ch = max(int(crop_w), 2), max(int(crop_h), 2)
-        bot = frame[y0:y0 + ch, x0:x0 + cw]
-        up = out_w / float(cw)
-        bot = cv2.resize(bot, (out_w, bot_h),
-                         interpolation=cv2.INTER_CUBIC if up > 1.5 else
-                         (cv2.INTER_AREA if up < 1 else cv2.INTER_LINEAR))
-        if up > 2.5:
-            # facecam pequena ampliada 3-6x fica mole: realce leve de nitidez
-            soft = cv2.GaussianBlur(bot, (0, 0), 2.0)
-            bot = cv2.addWeighted(bot, 1.45, soft, -0.45, 0)
+        # streamer: tripé; o zoom de edição (momento-chave) fecha no rosto
+        cam = self._cam_at(t)
+        cx, cy, cw, ch = cam.crop
+        z = float(np.clip(zoom, 1.0, self.cam_zoom_max))
+        if z > 1.001:
+            nw, nh = cw / z, ch / z
+            fx, fy = cam.face
+            cx = float(np.clip(fx - nw / 2, cx, cx + cw - nw))
+            cy = float(np.clip(fy - nh * 0.42, cy, cy + ch - nh))
+            cw, ch = nw, nh
+        out[g.cam_y:g.cam_y + g.cam_h, g.cam_x:g.cam_x + g.cam_w] = crop_scaled(
+            frame, cx, cy, cw, ch, g.cam_w, g.cam_h, sharpen=True)
 
-        out = np.empty((out_h, out_w, 3), np.uint8)
-        out[:top_h] = top
-        out[top_h:] = bot
         # divisória fina entre os painéis
         sep = max(int(round(out_h * 0.002)), 2)
-        out[top_h - sep // 2: top_h + (sep - sep // 2)] = (18, 18, 18)
+        out[g.seam - sep // 2: g.seam + (sep - sep // 2)] = (18, 18, 18)
         return out
 
 
 def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
-              out_w: int, out_h: int) -> Optional[ReactClipPlan]:
-    """Analisa o trecho do clipe (2 quadros/s, baixa resolução)."""
+              out_w: int, out_h: int, fps: float = 30.0) -> Optional[ReactClipPlan]:
+    """Analisa o trecho do clipe (8 quadros/s, baixa resolução, sem guardar
+    os quadros) e monta o plano da tela dividida."""
+    from .shot_plan import _is_cut, _merge_short, _text_lines
     W, H = _analysis_size(layout.src_w, layout.src_h)
-    rate = 2.0
-    frames = _read_frames(source_path, start, end - start, rate, W, H)
-    if not frames:
-        return None
+    rate = float(getattr(config, "REACT_ANALYSIS_FPS", 8.0))
+    every = max(int(round(rate / 2.0)), 1)   # rosto/texto/facecam: 2 amostras por segundo
     det = _new_yunet()
     bx, by, bw, bh = layout.box_at(W)
     s = layout.src_w / float(W)
     thr = getattr(config, "REACT_CAM_MATCH_MAX_DIFF", 22.0)
+    cam_r = (max(bx - 0.05 * bw, 0.0), max(by - 0.05 * bh, 0.0),
+             min(bx + 1.05 * bw, float(W)), min(by + 1.05 * bh, float(H)))
+    mask = _tiny_mask(cam_r, W, H)
 
-    present, cam_faces, content_faces = [], [], []
-    grays = []
-    for f in frames:
+    present, cam_faces, reg = [], [], []
+    samples = {}      # amostra -> (rostos do conteúdo, linhas de texto)
+    smalls = []       # cinza reduzido das amostras regulares (onde o vídeo reagido mexe)
+    cuts = {}         # amostra -> tamanho da troca de imagem
+    prev_tiny = prev_hist = None
+    pending = -1
+    n = 0
+    for i, f in enumerate(_iter_frames(source_path, start, end - start, rate, W, H)):
+        n = i + 1
+        t_small = cv2.resize(f, (_TINY_W, _TINY_H), interpolation=cv2.INTER_AREA)
+        tiny = cv2.cvtColor(t_small, cv2.COLOR_BGR2GRAY).astype(np.float32) * mask
+        hist = cv2.calcHist([cv2.cvtColor(t_small, cv2.COLOR_BGR2HSV)], [0, 1, 2], None,
+                            [8, 4, 4], [0, 180, 0, 256, 0, 256])
+        cv2.normalize(hist, hist)
+        if prev_tiny is not None:
+            d = float(np.mean(np.abs(tiny - prev_tiny)))
+            if _is_cut(d, float(cv2.compareHist(prev_hist, hist, cv2.HISTCMP_BHATTACHARYYA))):
+                cuts[i] = d
+                pending = i + 1   # 1ª amostra do plano novo pode pegar a transição
+        prev_tiny, prev_hist = tiny, hist
+        regular = i % every == 0
+        if not regular and i != pending:
+            continue
         gray = cv2.cvtColor(f, cv2.COLOR_BGR2GRAY)
-        grays.append(gray)
         faces = _faces(det, f)
-        in_cam = [fc for fc in faces
-                  if bx + 0.03 * bw < fc[0] < bx + 0.97 * bw and by < fc[1] < by + bh
-                  and fc[3] < 0.95 * bh]
-        out_cam = [fc for fc in faces if fc not in in_cam
-                   and not (bx - 0.05 * bw < fc[0] < bx + 1.05 * bw and by - 0.05 * bh < fc[1] < by + 1.05 * bh)]
-        diff = layout.cam_matches(gray)
-        ring_ok = diff is not None and diff < thr
-        present.append(bool(in_cam) or ring_ok)
-        cam_faces.append(max(in_cam, key=lambda fc: fc[3]) if in_cam else None)
-        content_faces.append(out_cam)
+        content = [fc for fc in faces
+                   if not (cam_r[0] <= fc[0] <= cam_r[2] and cam_r[1] <= fc[1] <= cam_r[3])]
+        lines = [(x, y, x + w, y + h) for x, y, w, h in _text_lines(gray) if _letters(gray, x, y, w, h)]
+        lines = [ln for ln in lines if _overlap(ln, cam_r) < 0.2]
+        samples[i] = (content, lines)
+        if regular:
+            in_cam = [fc for fc in faces
+                      if bx + 0.03 * bw < fc[0] < bx + 0.97 * bw and by < fc[1] < by + bh
+                      and fc[3] < 0.95 * bh]
+            diff = layout.cam_matches(gray)
+            present.append(bool(in_cam) or (diff is not None and diff < thr))
+            cam_faces.append(max(in_cam, key=lambda fc: fc[3]) if in_cam else None)
+            reg.append(i)
+            smalls.append(cv2.resize(gray, (W // 2, H // 2), interpolation=cv2.INTER_AREA))
+    if not reg:
+        return None
 
     present = np.array(present)
-    min_len = max(int(round(getattr(config, "REACT_MIN_SEGMENT_SECONDS", 3.0) * rate)), 1)
+    min_len = max(int(round(getattr(config, "REACT_MIN_SEGMENT_SECONDS", 3.0) * rate / every)), 1)
     present = _smooth_runs(present, min_len)
     # tela dividida é do CLIPE INTEIRO ou de nada: ligar e desligar no meio
     # (achado real: "react em tela dividida (48% do clipe)") parecia defeito.
@@ -644,93 +818,363 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     if present.mean() < getattr(config, "REACT_MIN_CLIP_PRESENCE", 0.85):
         return None
     present = np.ones_like(present)
+    times = np.array(reg, dtype=np.float64) / rate
 
-    # rosto do streamer: segura o último visto nas falhas e suaviza (2.5s)
-    default = (layout.face[0] / s, layout.face[1] / s, layout.face[3] / s)
-    track, last = [], default
-    for fc in cam_faces:
-        if fc is not None:
-            last = (fc[0], fc[1], fc[3])
-        track.append(last)
-    track = np.array(track, dtype=np.float64)
-    k = 5
-    if len(track) >= k:
-        pad = np.pad(track, ((k // 2, k // 2), (0, 0)), mode="edge")
-        kernel = np.ones(k) / k
-        track = np.stack([np.convolve(pad[:, j], kernel, mode="valid") for j in range(3)], axis=1)
-    track *= s
+    # planos do vídeo reagido (flash e chicote não contam como corte)
+    edges = _merge_short([0] + sorted(cuts) + [n], max(int(round(0.5 * rate)), 1))
+    spans = list(zip(edges, edges[1:]))
+    is_mark = _static_text(smalls, spans, W)
+    base = _letterbox(smalls, W, H)
+    pos = {i: k for k, i in enumerate(reg)}
+    needs, areas = [], []
+    for a, b in spans:
+        idx = [i for i in sorted(samples) if a <= i < b]
+        if len(idx) > 1 and idx[0] == a and a > 0:
+            idx = idx[1:]
+        nd = _shot_needs(idx, samples, is_mark, W, H)
+        ar = base
+        if nd is None:
+            # sem rosto nem texto: o vídeo reagido é onde a imagem mexe (o
+            # player, numa live com navegador + chat em volta)
+            ks = [pos[i] for i in reg if a <= i < b]
+            if len(ks) >= 3:
+                ar = _moving_box([smalls[k] for k in ks], cam_r, W, H, base) or base
+        needs.append(nd)
+        areas.append(ar)
+    area = base
 
-    # a janela do conteúdo só olha os trechos em tela dividida (nos outros o
-    # streamer pode estar em tela cheia, e o rosto dele não é "conteúdo")
-    on = [i for i in range(len(frames)) if present[i]]
-    window = _content_window(layout, [grays[i] for i in on], [content_faces[i] for i in on],
-                             W, H, out_w, out_h)
-    times = np.arange(len(frames)) / rate
-    return ReactClipPlan(layout, times, present, track, window)
+    # tudo daqui pra baixo em px da FONTE
+    src_box = layout.cam_box
+    fhs = [fc[3] * s for fc in cam_faces if fc is not None]
+    face_h = float(np.median(fhs)) if fhs else layout.face[3]
+    area_s = tuple(v * s for v in area)
+    needs_s = [None if nd is None else tuple(v * s for v in nd) for nd in needs]
+    areas_s = [tuple(v * s for v in ar) for ar in areas]
+    durs = [(b - a) / rate for a, b in spans]
+    geom, cam_crop = _geometry(out_w, out_h, src_box, face_h, area_s, needs_s, areas_s, durs)
+    shots = [_place_shot(nd, ar, src_box, geom, layout.src_w, layout.src_h, a / rate, cuts.get(a, 0.0))
+             for nd, ar, (a, _) in zip(needs_s, areas_s, spans)]
+    track = [None if fc is None else (fc[0] * s, fc[1] * s) for fc in cam_faces]
+    cam_shots = _cam_shots(src_box, cam_crop, track, times, layout.face)
+    cam_up = geom.cam_w / max(cam_crop[0], 1e-3)
+    ax0, ay0, ax1, ay1 = (int(round(v)) for v in area_s)
+    return ReactClipPlan(layout, times, present, geom, shots, cam_shots, cam_up,
+                         (ax0, ay0, ax1 - ax0, ay1 - ay0), mask, fps, rate)
 
 
-def _content_window(layout: ReactLayout, grays, content_faces, W, H, out_w, out_h):
-    """Uma janela FIXA do conteúdo pro clipe inteiro: cobre os rostos/ação
-    do vídeo reagido e evita a facecam."""
+def _letters(gray, x: int, y: int, w: int, h: int) -> bool:
+    """Linha de texto tem traço vertical (as letras); listra de bandeira,
+    LED do cenário e borda de mesa só têm traço horizontal."""
+    box = gray[y:y + h, x:x + w].astype(np.float32)
+    if box.size == 0:
+        return False
+    gx = float(np.mean(np.abs(cv2.Sobel(box, cv2.CV_32F, 1, 0, ksize=3))))
+    gy = float(np.mean(np.abs(cv2.Sobel(box, cv2.CV_32F, 0, 1, ksize=3))))
+    return gx >= 0.6 * gy
+
+
+def _static_text(smalls, spans, W: int):
+    """Marca d'água do canal, hashtag do programa, logo da live: texto que
+    fica parado no mesmo lugar em TODOS os planos (as bordas das letras
+    aparecem em quase toda amostra, troque o que trocar atrás). Não é motivo
+    pra mostrar a tela inteira. A pergunta de um programa de TV some nos
+    closes -- essa continua importante. Devolve uma função linha -> é marca?"""
+    if len(spans) < 2 or len(smalls) < 4:
+        return lambda ln: False
+    k = smalls[0].shape[1] / float(W)
+    persist = np.mean([cv2.Canny(g, 60, 150) > 0 for g in smalls], axis=0)
+    persist = cv2.dilate(persist.astype(np.float32), np.ones((3, 3), np.uint8))
+
+    def is_mark(ln) -> bool:
+        if ln[2] - ln[0] > 0.35 * W:
+            return False
+        sub = persist[int(ln[1] * k):int(np.ceil(ln[3] * k)), int(ln[0] * k):int(np.ceil(ln[2] * k))]
+        edges = sub[sub > 0.25]
+        return edges.size >= 12 and float(np.mean(edges >= 0.8)) >= 0.5
+    return is_mark
+
+
+def _corner_bug(ln, W: int, H: int) -> bool:
+    """Texto curto encostado num canto: logo/marca do canal do vídeo
+    reagido, hashtag do programa (achado no teste: "Instituto Teotônio
+    Vilela" no canto puxava o enquadramento até lá). Pergunta, título e
+    legenda são mais largos ou mais pro meio."""
+    x0, y0, x1, y1 = ln
+    return (x1 - x0) < 0.2 * W and (x0 < 0.1 * W or x1 > 0.9 * W) and (y0 < 0.15 * H or y1 > 0.85 * H)
+
+
+def _shot_needs(idx, samples, is_mark, W: int, H: int):
+    """O que precisa aparecer neste plano (x0, y0, x1, y1), px da análise:
+    rostos em destaque e texto (pergunta, legenda, placar). None = nada
+    específico (cena aberta, paisagem): mostra o vídeo inteiro."""
+    if not idx:
+        return None
+    k = len(idx)
+    need_n = max(1, int(np.ceil(0.34 * k)))
+    big = H * float(getattr(config, "REACT_CONTENT_FACE_MIN", 0.06))
+    boxes = []
+    faces = [fc for i in idx for fc in samples[i][0] if fc[3] >= big]
+    for fc in faces:
+        # rosto que aparece em boa parte do plano (1 detecção solta não conta)
+        hits = sum(any(abs(g[0] - fc[0]) < 0.6 * fc[2] and abs(g[1] - fc[1]) < 0.6 * fc[3]
+                       for g in samples[i][0]) for i in idx)
+        if hits >= need_n:
+            cx, cy, fw, fh = fc
+            boxes.append((cx - 0.8 * fw, cy - 0.8 * fh, cx + 0.8 * fw, cy + 1.0 * fh))
+    lines = [ln for i in idx for ln in samples[i][1]]
+    for ln in lines:
+        if is_mark(ln) or _corner_bug(ln, W, H):
+            continue
+        hits = sum(any(_iou(ln, o) >= 0.4 for o in samples[i][1]) for i in idx)
+        if hits >= need_n:
+            boxes.append(ln)
+    if not boxes:
+        return None
+    arr = np.array(boxes, dtype=np.float64)
+    px, py = 0.015 * W, 0.015 * H
+    return (max(float(arr[:, 0].min()) - px, 0.0), max(float(arr[:, 1].min()) - py, 0.0),
+            min(float(arr[:, 2].max()) + px, float(W)), min(float(arr[:, 3].max()) + py, float(H)))
+
+
+def _letterbox(smalls, W: int, H: int) -> Tuple[float, float, float, float]:
+    """Área do vídeo sem as barras pretas (x0, y0, x1, y1), px da análise."""
+    full = (0.0, 0.0, float(W), float(H))
+    if not smalls:
+        return full
+    sh, sw = smalls[0].shape[:2]
+    k = sw / float(W)
+    peak = np.max(np.stack(smalls), axis=0)   # barra preta: escura em TODA amostra
+    dark = float(getattr(config, "LETTERBOX_DARK_LEVEL", 12)) + 4
+    rows = np.nonzero(np.percentile(peak, 90, axis=1) > dark)[0]
+    cols = np.nonzero(np.percentile(peak, 90, axis=0) > dark)[0]
+    if len(rows) < 0.3 * sh or len(cols) < 0.3 * sw:
+        return full
+    x0, x1, y0, y1 = cols[0] / k, (cols[-1] + 1) / k, rows[0] / k, (rows[-1] + 1) / k
+    # barra fina (moldura, 1-2% da tela) não vale a pena tirar
+    x0 = 0.0 if x0 < 0.03 * W else x0
+    y0 = 0.0 if y0 < 0.03 * H else y0
+    x1 = float(W) if x1 > 0.97 * W else x1
+    y1 = float(H) if y1 > 0.97 * H else y1
+    return float(x0), float(y0), float(x1), float(y1)
+
+
+def _moving_box(smalls, cam_r, W: int, H: int, base):
+    """Maior região que mexe dentro de UM plano (x0, y0, x1, y1), px da
+    análise -- o player do vídeo reagido numa live com navegador, chat e
+    faixas em volta. Medida numa versão BORRADA da imagem (chat rolando
+    muda em detalhe fino e some no borrão). None = não dá pra afirmar
+    (região pequena, ou quase a tela toda)."""
+    sh, sw = smalls[0].shape[:2]
+    k = sw / float(W)
+    act = np.std(np.stack([cv2.GaussianBlur(g, (0, 0), 3.0).astype(np.float32) for g in smalls]), axis=0)
+    act[int(cam_r[1] * k):int(np.ceil(cam_r[3] * k)), int(cam_r[0] * k):int(np.ceil(cam_r[2] * k))] = 0.0
+    hot = float(np.percentile(act, 95))
+    if hot < 4.0:
+        return None
+    on = (act > max(3.0, 0.25 * hot)).astype(np.uint8)
+    ks = max(int(0.03 * sw), 3)
+    on = cv2.morphologyEx(on, cv2.MORPH_CLOSE, np.ones((ks, ks), np.uint8))
+    n, _, stats, _ = cv2.connectedComponentsWithStats(on, connectivity=8)
+    if n < 2:
+        return None
+    j = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x, y, w, h = (stats[j, c] / k for c in (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP, cv2.CC_STAT_WIDTH,
+                                             cv2.CC_STAT_HEIGHT))
+    base_area = (base[2] - base[0]) * (base[3] - base[1])
+    if not (0.35 * base_area <= w * h <= 0.8 * base_area):
+        return None
+    return (max(x, base[0]), max(y, base[1]), min(x + w, base[2]), min(y + h, base[3]))
+
+
+def _geometry(out_w: int, out_h: int, box, face_h: float, area, needs, areas, durs):
+    """Tamanho dos painéis do clipe (px da saída) e o recorte da facecam
+    (largura, altura em px da fonte).
+
+    Streamer: o maior painel em que a facecam não passa de
+    REACT_CAM_MAX_UPSCALE de ampliação. Facecam pequena (o normal em react:
+    ~20% da largura da tela) não chega lá nem inteira -- aí ela entra
+    INTEIRA, na proporção dela (ampliação mínima possível). Antes o recorte
+    era mais fechado que a facecam (rosto em 30% do painel): ~4x, borrado.
+    Conteúdo: painel alto (o resto da tela) quando o que importa cabe
+    recortado; senão (pergunta de programa de TV, duas pessoas nas pontas,
+    cena aberta) o vídeo inteiro na largura da tela."""
+    bx, by, bw, bh = box
+    umax = float(getattr(config, "REACT_CAM_MAX_UPSCALE", 2.4))
+    uhard = float(getattr(config, "REACT_CAM_MAX_UPSCALE_HARD", 3.3))
     frac = float(np.clip(getattr(config, "REACT_CONTENT_FRAC", 0.5), 0.3, 0.7))
-    aspect = out_w / (out_h * frac)
-    bx, by, bw, bh = layout.box_at(W)
-    # atividade = o quanto cada ponto muda ao longo do clipe, medida numa
-    # versão BORRADA da imagem: o vídeo reagido muda em áreas grandes; texto
-    # do chat rolando e contadores da live mudam em detalhe fino e somem no
-    # borrão. Interface do navegador e barras da live não mudam.
-    if len(grays) > 1:
-        blurred = [cv2.GaussianBlur(g, (0, 0), 6.0).astype(np.float32) for g in grays]
-        act = np.std(np.stack(blurred), axis=0)
-    else:
-        act = np.zeros((H, W), np.float32)
-    pad_x, pad_y = 0.04 * bw, 0.04 * bh
-    cx0, cy0 = int(max(bx - pad_x, 0)), int(max(by - pad_y, 0))
-    cx1, cy1 = int(min(bx + bw + pad_x, W)), int(min(by + bh + pad_y, H))
-    act[cy0:cy1, cx0:cx1] = 0.0
-    integ = cv2.integral(act)
-    total = float(integ[-1, -1])
-    face_frames = [fl for fl in content_faces if fl]
-    cam_area = max((cx1 - cx0) * (cy1 - cy0), 1)
-    # referência de "região ativa": média dos 30% de pontos que mais mudam
-    hot = float(np.mean(act[act >= np.percentile(act, 70)])) if total > 1 else 1.0
+    cam_max_h = int(round(out_h * (1.0 - frac) / 2.0)) * 2
+    tface = float(getattr(config, "REACT_CAM_FACE_FRAC", 0.30))
+    cam_h = None
+    for hs in range(cam_max_h, int(out_h * 0.3), -8):
+        asp = out_w / float(hs)
+        ch_max = min(float(bh), bw / asp)
+        ch_min = hs / umax
+        if ch_min <= ch_max:
+            ch = float(np.clip(face_h / tface, ch_min, ch_max))
+            cam_h, crop = hs, (ch * asp, ch)
+            break
+    cam_w = out_w
+    if cam_h is None:
+        # facecam pequena: inteira
+        cw, ch = float(bw), float(bh)
+        cam_h = int(round(out_w * ch / cw / 2.0)) * 2
+        if cam_h > cam_max_h:
+            cam_h = cam_max_h
+            ch = cw * cam_h / out_w
+        if out_w / cw > uhard:
+            # pequena demais até pra isso (fonte 720p): painel mais estreito
+            # que a tela, sobre o fundo desfocado, em vez de virar borrão
+            cam_w = int(round(cw * uhard / 2.0)) * 2
+            cam_h = int(round(ch * uhard / 2.0)) * 2
+        crop = (cw, ch)
 
-    best, best_score = None, -1e9
-    for sc in (1.0, 0.85, 0.72, 0.6):
-        h = H * sc
-        w = h * aspect
-        if w > W:
-            w = float(W)
-            h = w / aspect
-        nx = 25
-        ny = 1 if h >= H - 1 else 5
-        for x in np.linspace(0, W - w, nx):
-            for y in np.linspace(0, H - h, ny):
-                x0, y0, x1, y1 = int(x), int(y), int(x + w), int(y + h)
-                ix = max(0, min(x1, cx1) - max(x0, cx0))
-                iy = max(0, min(y1, cy1) - max(y0, cy0))
-                cam_ov = ix * iy / cam_area
-                mass = integ[y1, x1] - integ[y0, x1] - integ[y1, x0] + integ[y0, x0]
-                a = mass / total if total > 1 else 0.0
-                # pureza: a janela é quase toda conteúdo que se mexe (não
-                # interface parada, barra da live, bordas pretas)?
-                purity = min(mass / max((x1 - x0) * (y1 - y0), 1) / max(hot, 1e-3), 1.0)
-                if face_frames:
-                    inside = sum(any(x0 + 0.5 * fc[2] <= fc[0] <= x1 - 0.5 * fc[2]
-                                     and y0 + 0.5 * fc[3] <= fc[1] <= y1 - 0.3 * fc[3] for fc in fl)
-                                 for fl in face_frames)
-                    face_score = inside / len(face_frames)
-                else:
-                    face_score = 0.0
-                score = 1.5 * face_score + 0.6 * a + 1.5 * purity - 2.5 * cam_ov + 0.2 * sc
-                if score > best_score:
-                    best_score, best = score, (x0, y0, x1 - x0, y1 - y0)
-    s = layout.src_w / float(W)
-    x, y, w, h = best
-    x, y = int(round(x * s)), int(round(y * s))
-    w, h = int(round(w * s)), int(round(h * s))
-    w, h = min(w, layout.src_w - x), min(h, layout.src_h - y)
-    return x, y, w, h
+    ax0, ay0, ax1, ay1 = area
+    aw, ah = ax1 - ax0, ay1 - ay0
+    tall_h = out_h - cam_h
+    wide_h = min(int(round(out_w * ah / aw / 2.0)) * 2, tall_h)
+    total = max(sum(durs), 1e-6)
+    wide_t = 0.0
+    for nd, ar, d in zip(needs, areas, durs):
+        # sem rosto/texto: o plano inteiro importa (paisagem, jogo, player).
+        # Pede a largura inteira o plano que, no painel alto, ficaria pequeno
+        # (pergunta + cenário de um programa de TV 16:9: 51% do painel); um
+        # plano de mesa com 5 pessoas fica com ~75% -- dá pra mostrar inteiro
+        if _fill_ratio(nd if nd is not None else ar, ar, out_w, tall_h) < 0.6:
+            wide_t += d
+    wide = wide_t >= float(getattr(config, "REACT_WIDE_LAYOUT_MIN_FRAC", 0.4)) * total \
+        or tall_h <= 1.12 * wide_h
+    content_h = wide_h if wide else tall_h
+    rest = out_h - content_h - cam_h
+    # faixa livre: um pouco mais embaixo (a interface do Shorts cobre o rodapé)
+    top = int(round(rest * 0.45 / 2.0)) * 2
+    geom = Geometry(out_w, out_h, top, content_h, (out_w - cam_w) // 2, top + content_h,
+                    cam_w, cam_h, wide)
+    return geom, crop
+
+
+def _fill_ratio(need, area, pw: int, ph: int) -> float:
+    """Quanto do painel pw x ph o plano ocupa mostrando `need` inteiro (1 =
+    preenche; o resto é faixa desfocada)."""
+    asp = pw / float(ph)
+    aw, ah = area[2] - area[0], area[3] - area[1]
+    fw = min(aw, ah * asp)
+    if _fits(need, fw, fw / asp):
+        return 1.0
+    nw, nh = need[2] - need[0], need[3] - need[1]
+    w = float(np.clip(max(nw, nh * asp), nw, aw))
+    h = float(np.clip(max(nh, nw / asp), nh, ah))
+    sc = min(pw / w, ph / h)
+    return (w * sc) * (h * sc) / float(pw * ph)
+
+
+def _fits(need, fw: float, fh: float) -> bool:
+    """O que importa no plano cabe numa janela fw x fh (até 10% maior: a
+    folga em volta do rosto/texto pode ser cortada)?"""
+    return need is not None and need[2] - need[0] <= 1.1 * fw and need[3] - need[1] <= 1.1 * fh
+
+
+def _place_shot(need, area, box, geom: Geometry, src_w: int, src_h: int, t0: float,
+                cut_diff: float) -> ContentShot:
+    """Enquadramento parado de um plano do vídeo reagido."""
+    ax0, ay0, ax1, ay1 = area
+    aw, ah = ax1 - ax0, ay1 - ay0
+    pw, ph = geom.out_w, geom.content_h
+    asp = pw / float(ph)
+    fw, fh = min(aw, ah * asp), min(aw, ah * asp) / asp   # maior janela no formato do painel
+    cam = (box[0], box[1], box[0] + box[2], box[1] + box[3])
+    if need is None and fw >= 0.88 * aw and fh >= 0.88 * ah:
+        need = area   # sem nada específico, mas quase no formato do painel: preenche (corta uma lasquinha)
+    if _fits(need, fw, fh):
+        # cabe: preenche o painel, cobrindo o que importa; foge da facecam se
+        # der. Um pouco maior que o painel: corta só a folga em volta (a
+        # caixa do rosto já inclui ombros e margem)
+        lo_x, hi_x = max(ax0, need[2] - fw), min(need[0], ax1 - fw)
+        lo_y, hi_y = max(ay0, need[3] - fh), min(need[1], ay1 - fh)
+        if lo_x > hi_x:
+            lo_x = hi_x = float(np.clip((need[0] + need[2] - fw) / 2.0, ax0, ax1 - fw))
+        if lo_y > hi_y:
+            lo_y = hi_y = float(np.clip((need[1] + need[3] - fh) / 2.0, ay0, ay1 - fh))
+        cx = (need[0] + need[2]) / 2.0 - fw / 2.0
+        cy = (need[1] + need[3]) / 2.0 - fh / 2.0
+        best = None
+        for x in np.linspace(lo_x, max(hi_x, lo_x), 13):
+            for y in np.linspace(lo_y, max(hi_y, lo_y), 5):
+                cost = _overlap((x, y, x + fw, y + fh), cam) * 10.0 + \
+                    (abs(x - cx) / max(fw, 1.0) + abs(y - cy) / max(fh, 1.0))
+                if best is None or cost < best[0]:
+                    best = (cost, x, y)
+        x, y = best[1], best[2]
+        w, h = fw, fh
+        disp = (0, 0, pw, ph)
+        fills = True
+    else:
+        if need is None:
+            x, y, w, h = ax0, ay0, aw, ah
+        else:
+            # só o que importa (+ o que o formato do painel deixar), inteiro
+            nw, nh = need[2] - need[0], need[3] - need[1]
+            w = float(np.clip(max(nw, nh * asp), nw, aw))
+            h = float(np.clip(max(nh, nw / asp), nh, ah))
+            x = float(np.clip((need[0] + need[2] - w) / 2.0, ax0, ax1 - w))
+            y = float(np.clip((need[1] + need[3] - h) / 2.0, ay0, ay1 - h))
+        sc = min(pw / w, ph / h)
+        dw, dh = min(int(round(w * sc / 2.0)) * 2, pw), min(int(round(h * sc / 2.0)) * 2, ph)
+        fills = dw >= pw - 2 and dh >= ph - 2
+        if fills:
+            dw, dh = pw, ph
+        disp = ((pw - dw) // 2, (ph - dh) // 2, dw, dh)
+    xi, yi = int(round(x)), int(round(y))
+    wi, hi = min(int(round(w)), src_w - xi), min(int(round(h)), src_h - yi)
+    return ContentShot(t0, cut_diff, (xi, yi, max(wi, 2), max(hi, 2)), disp, fills)
+
+
+def _cam_shots(box, crop, track, times, default_face) -> List[CamShot]:
+    """Enquadramento de TRIPÉ do streamer: parado. Só muda (em corte seco)
+    se ele sair da posição por um tempo -- levantou, foi pro lado."""
+    bx, by, bw, bh = box
+    cw, ch = crop
+    pts = [(t, p) for t, p in zip(times, track) if p is not None]
+    if not pts:
+        pts = [(0.0, (default_face[0], default_face[1]))]
+
+    def place(sel):
+        fx = float(np.median([p[0] for _, p in sel]))
+        fy = float(np.median([p[1] for _, p in sel]))
+        x = float(np.clip(fx - cw / 2.0, bx, bx + bw - cw))
+        y = float(np.clip(fy - ch * 0.42, by, by + bh - ch))
+        return (x, y, cw, ch), (fx, fy)
+
+    if cw >= bw - 1.0 and ch >= bh - 1.0:
+        # a facecam inteira: não tem pra onde mexer
+        return [CamShot(0.0, *place(pts))]
+    hold = 3.0
+    segs, start = [], 0
+    while start < len(pts):
+        _, (fx, fy) = place([q for q in pts[start:] if q[0] < pts[start][0] + hold])
+        end, out_since = len(pts), None
+        for k in range(start, len(pts)):
+            px, py = pts[k][1]
+            if abs(px - fx) > 0.22 * cw or abs(py - fy) > 0.22 * ch:
+                out_since = k if out_since is None else out_since
+                if pts[k][0] - pts[out_since][0] >= 2.0:
+                    end = out_since
+                    break
+            else:
+                out_since = None
+        end = max(end, start + 1)
+        segs.append((start, end))
+        start = end
+    # trecho curto não vira enquadramento próprio (junta com o anterior)
+    merged = []
+    for a, b in segs:
+        if merged and pts[b - 1][0] - pts[a][0] < hold:
+            merged[-1] = (merged[-1][0], b)
+        else:
+            merged.append((a, b))
+    if len(merged) > 1 and pts[merged[0][1] - 1][0] - pts[merged[0][0]][0] < hold:
+        merged[1] = (merged[0][0], merged[1][1])
+        merged.pop(0)
+    return [CamShot(0.0 if k == 0 else pts[a][0], *place(pts[a:b])) for k, (a, b) in enumerate(merged)]
 
 
 def caption_margin_v(out_h: int) -> int:

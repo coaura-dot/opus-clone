@@ -1112,6 +1112,65 @@ def _blurred_cover(img, out_w: int, out_h: int, soft: bool = False) -> np.ndarra
     return (bg.astype(np.float32) * darken).astype(np.uint8)
 
 
+def _unsharp(img, sigma: float, amount: float) -> np.ndarray:
+    soft = cv2.GaussianBlur(img, (0, 0), sigma)
+    return cv2.addWeighted(img, 1.0 + amount, soft, -amount, 0)
+
+
+def _presharpen(img, scale: float) -> np.ndarray:
+    """Realce leve na resolução da FONTE, antes de ampliar (barato: a imagem
+    ainda é pequena). Facecam ampliada 2-3x fica mole sem isso; o realce
+    forte DEPOIS de ampliar (raio 2, o que fazíamos) estourava os blocos da
+    compressão do vídeo original."""
+    if scale <= 1.6:
+        return img
+    return _unsharp(img, 0.7, min(0.3 * (scale - 1.0), 0.75))
+
+
+def hq_resize(img, w: int, h: int) -> np.ndarray:
+    """Redimensiona com a melhor qualidade pra cada caso: reduzir = média da
+    área (sem serrilhado); ampliar = Lanczos com um realce leve antes."""
+    ih, iw = img.shape[:2]
+    s = max(w / max(iw, 1), h / max(ih, 1))
+    if s <= 1.0:
+        return cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
+    return cv2.resize(_presharpen(img, s), (w, h), interpolation=cv2.INTER_LANCZOS4)
+
+
+def crop_scaled(frame, x0: float, y0: float, cw: float, ch: float, out_w: int, out_h: int,
+                sharpen: bool = False) -> np.ndarray:
+    """Recorte (x0, y0, cw, ch) em px da fonte -- COM fração -- redimensionado
+    pra out_w x out_h.
+
+    Achado real (react do Casimiro, câmera de baixo "tremendo"): o recorte
+    andava de pixel inteiro em pixel inteiro e, ampliado ~4x, cada passo
+    virava um degrau de 4 px na tela -- a imagem tremia mesmo com o caminho
+    suave. Aqui a posição e o tamanho fracionários entram na própria
+    interpolação (a mesma da ampliação), então o movimento sai liso.
+    `sharpen`: ampliação de facecam (realce leve antes + bicúbica)."""
+    H, W = frame.shape[:2]
+    cw, ch = float(min(max(cw, 2.0), W)), float(min(max(ch, 2.0), H))
+    x0 = float(np.clip(x0, 0.0, W - cw))
+    y0 = float(np.clip(y0, 0.0, H - ch))
+    sx, sy = out_w / cw, out_h / ch
+    s = max(sx, sy)
+    if s <= 1.0:
+        # reduzindo: 1 px da fonte vale menos de 1 px na tela, o degrau não aparece
+        xi, yi = int(round(x0)), int(round(y0))
+        wi, hi = min(int(round(cw)), W - xi), min(int(round(ch)), H - yi)
+        return cv2.resize(frame[yi:yi + hi, xi:xi + wi], (out_w, out_h), interpolation=cv2.INTER_AREA)
+    m = 3  # margem pra interpolação nas bordas do recorte
+    px0, py0 = max(int(np.floor(x0)) - m, 0), max(int(np.floor(y0)) - m, 0)
+    px1, py1 = min(int(np.ceil(x0 + cw)) + m, W), min(int(np.ceil(y0 + ch)) + m, H)
+    patch = frame[py0:py1, px0:px1]
+    if sharpen:
+        patch = _presharpen(patch, s)
+    M = np.float32([[sx, 0.0, sx * (px0 - x0 + 0.5) - 0.5],
+                    [0.0, sy, sy * (py0 - y0 + 0.5) - 0.5]])
+    return cv2.warpAffine(patch, M, (out_w, out_h), flags=cv2.INTER_CUBIC if sharpen else cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
 def _compose_tracked_frame(frame, smoothed_x: float, smoothed_y: float,
                             crop_w: int, crop_h: int, src_w: int, src_h: int,
                             out_w: int, out_h: int, zoom_factor: float,
@@ -1126,22 +1185,19 @@ def _compose_tracked_frame(frame, smoothed_x: float, smoothed_y: float,
     if crop_h > bh or crop_w > bw:  # área útil menor que o recorte: encolhe mantendo 9:16
         k = min(bh / max(crop_h, 1), bw / max(crop_w, 1))
         crop_w, crop_h = crop_w * k, crop_h * k
-    cur_crop_w = max(min(int(crop_w / zoom_factor), bw), 2)
-    cur_crop_h = max(min(int(crop_h / zoom_factor), bh), 2)
+    # tamanho e posição com fração (ver crop_scaled): sem degrau de pixel
+    # inteiro no pan e no zoom
+    cur_crop_w = float(max(min(crop_w / zoom_factor, bw), 2.0))
+    cur_crop_h = float(max(min(crop_h / zoom_factor, bh), 2.0))
 
-    x0 = int(np.clip(smoothed_x - cur_crop_w / 2, bx0, max(bx1 - cur_crop_w, bx0)))
+    x0 = float(np.clip(smoothed_x - cur_crop_w / 2, bx0, max(bx1 - cur_crop_w, bx0)))
     # posiciona verticalmente para que o rosto rastreado (smoothed_y) caia
     # em HEADROOM_RATIO da altura do crop, em vez de sempre exibir a altura
     # inteira da fonte (o que antes tornava HEADROOM_RATIO inofensivo: com
     # crop_h == src_h, y0 era sempre 0 e a config nunca fazia diferença).
-    y0 = int(np.clip(smoothed_y - cur_crop_h * config.HEADROOM_RATIO,
-                      by0, max(by1 - cur_crop_h, by0)))
-
-    cropped = frame[y0:y0 + cur_crop_h, x0:x0 + cur_crop_w]
-    if cropped.shape[0] == 0 or cropped.shape[1] == 0:
-        cropped = frame
-    interp = cv2.INTER_AREA if cur_crop_w > out_w else cv2.INTER_LINEAR
-    return cv2.resize(cropped, (out_w, out_h), interpolation=interp)
+    y0 = float(np.clip(smoothed_y - cur_crop_h * config.HEADROOM_RATIO,
+                       by0, max(by1 - cur_crop_h, by0)))
+    return crop_scaled(frame, x0, y0, cur_crop_w, cur_crop_h, out_w, out_h)
 
 
 def _compose_screen_frame(frame, region, src_w: int, src_h: int,
@@ -1272,9 +1328,7 @@ def _compose_split_frame(frame, shot, out_w: int, out_h: int, zoom: float = 1.0)
     cx0 = int(np.clip(fcx - crop_w / 2, mx0, mx1 - crop_w))
     cy0 = int(np.clip(fcy - crop_h * 0.42, my0, my1 - crop_h))
     cam = frame[cy0:cy0 + max(int(crop_h), 2), cx0:cx0 + max(int(crop_w), 2)]
-    up = out_w / float(max(cam.shape[1], 1))
-    bot = cv2.resize(cam, (out_w, bot_h), interpolation=cv2.INTER_CUBIC if up > 1.5 else
-                     (cv2.INTER_AREA if up < 1 else cv2.INTER_LINEAR))
+    bot = hq_resize(cam, out_w, bot_h)
 
     out = np.empty((out_h, out_w, 3), np.uint8)
     out[:top_h] = top
@@ -1434,7 +1488,9 @@ def render_vertical_clip(source_path: str, start: float, end: float,
     # cada plano do vídeo original decididos ANTES de renderizar. Só os planos
     # de conversa (2+ pessoas) usam o rastreamento quadro a quadro abaixo.
     plan = shot_plan_obj  # já feito antes (video_editor.py, com a transcrição)
-    if plan is None and getattr(config, "SHOT_PLAN_ENABLED", True):
+    # react/gameplay no clipe inteiro: o plano por cena nunca seria usado
+    react_full = react_plan is not None and react_plan.active_fraction >= 0.98
+    if plan is None and not react_full and getattr(config, "SHOT_PLAN_ENABLED", True):
         from . import shot_plan
         try:
             plan = shot_plan.build_plan(source_path, start, duration, src_w, src_h, fps,

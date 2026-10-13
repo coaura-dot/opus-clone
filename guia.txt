@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — escrito em 13/10/2026, versão atual v40
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v41
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -98,7 +98,22 @@ f) Na mensagem: o que mudou, o que foi testado (com números) e o que
     * feed RSS do canal com data e VIEWS de cada vídeo:
       https://www.youtube.com/feeds/videos.xml?channel_id=UCnzQodo_5H7ija_cvrrF7cQ
       (foi assim que achei a queda de views com 1 post por hora).
-- Scratchpad desta sessão (pode sumir se o container for reciclado):
+- Scratchpad da sessão da v41 (pode sumir se o container for reciclado):
+    /tmp/claude-0/-home-user-opus-clone/897ba170-869c-4932-84c1-70fa99faf944/scratchpad
+    cas/cas.mp4 (formato do Casimiro: cartela de pergunta + pessoa à direita,
+      closes, marca d'água, webcam real 390x263 no canto sup. direito, 60 qps)
+    cas/cut.mp4 (pessoa à esq. num plano, à dir. no outro: troca no corte)
+    base/ (cópia da v40, pra comparar antes x depois: rr.py ... base/)
+    tools/rr.py <vídeo> <início> <dur> <saída.mp4> [repo]  -> render react
+    tools/plandbg.py <vídeo> <início> <dur>  -> planos do conteúdo + geometria
+    tools/battery.py "<vídeo>@t1,t2" ...      -> plano react em vários trechos
+    tools/cutcheck.py <vídeo> <saída> --rerender -> troca no quadro do corte?
+    tools/camshift.py <saída> y0 y1 x0:x1     -> quanto o fundo do painel anda
+    tools/smooth.py <saída>                   -> degrau no pan (podcast)
+    tools/gen_cas.py / gen_cut.py             -> geram os casos acima
+    tools/run_here.py (main.py com vídeo local + transcrição em cache:
+      LOCAL_VIDEO=... TRANSCRIPT_CACHE=... python3 run_here.py --url X --clips 2 --out DIR)
+- Scratchpad das sessões anteriores (vídeos reais de teste; pode sumir):
     /tmp/claude-0/-home-user-opus-clone/e9241813-debd-5b2b-8320-4051eaa8f429/scratchpad
   Vídeos reais de teste lá dentro:
     multi_src/lex.webm (Lex Fridman + Trump), multi_src/bam.mp4 (podcast do
@@ -157,7 +172,14 @@ src/shot_plan.py ... plano por cena: single/multi/speaker/broll/text/facefit/
                      conteúdo (_window_shot) + filtro de "piscar" (<2 s)
 src/content_window.py janela de conteúdo por cima da câmera (v37)
 src/react_layout.py  react clássico (facecam em caixa sobre o conteúdo);
-                     _content_over_cam evita confundir janela de vídeo com facecam
+                     _content_over_cam evita confundir janela de vídeo com facecam.
+                     v41: plan_clip analisa a 8 qps (cortes do conteúdo, rostos,
+                     texto), _geometry (painel alto x largura inteira, tamanho
+                     do painel do streamer), _place_shot (enquadramento parado
+                     por plano), _cam_shots (tripé), ReactClipPlan.compose
+                     (troca no quadro exato do corte)
+src/reframer.py .... (também) crop_scaled (recorte com fração, sem degrau) e
+                     hq_resize (Lanczos + realce antes de ampliar)
 src/react_extend.py  (v40) corte pega o conteúdo reagido inteiro
 src/voices.py ...... "impressão digital" da voz (WeSpeaker ONNX no
                      onnxruntime): embed, who_speaks(ref=...), embed_phrases
@@ -206,9 +228,33 @@ v40 (Short lBqOLQdGLZo, mesmo vídeo do orochidois; o usuário AMOU o
   "ele falou/ela disse" (narração), "here's".
 
 
+v41 (Short buX2IcNJcis: Casimiro reage ao Show do Milhão, "Cortes do
+  Casimito"; o usuário mandou o vídeo do Short): "câmera de baixo muito
+  trêmula e de má qualidade" + pergunta e apresentadora cortadas em cima.
+  Medido no Short: o fundo do painel de baixo andava em 67% dos quadros
+  (vai e volta 40-100 px/s); facecam 387x261 ampliada 3,8x; em cima uma
+  janela fixa de 63% da largura. Feito (ver README "v41"):
+  - streamer em TRIPÉ (parado; só corta seco se ele sair do lugar 2 s+);
+    facecam pequena inteira (2,8-2,9x), máx. 2,4x quando dá; < 3,3x
+    impossível -> cartão no meio; Lanczos + realce antes de ampliar;
+  - recorte com fração em todos os modos (sem degrau de pixel inteiro);
+  - conteúdo: enquadramento parado POR PLANO do vídeo reagido, trocando no
+    quadro exato do corte; cobre rostos (>= 6% da altura) e texto; ignora
+    marca d'água (bordas paradas em todos os planos), logo/hashtag no canto
+    e listras; se não cabe, entra inteiro com fundo desfocado;
+  - formato por clipe: painel alto x largura inteira (16:9 inteiro em cima,
+    faixas desfocadas) quando 40%+ do clipe ficaria < 60% do painel alto;
+  - CRF/QP 23 -> 21, teto 8 -> 10 Mbps.
+  Testes: caso Casimiro montado OK; reactA-D (podcast, 8 trechos) em painel
+  alto; hp: só o player; 8/8 cortes no quadro exato; podcast/gameplay/split
+  iguais à v40 (diferença 1-2 níveis, 0-2 px); test_pipeline OK.
+  Decidido NÃO esconder a facecam do original dentro do conteúdo inteiro
+  (borrão/inpaint pareciam censura).
+
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v40 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v41 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);
@@ -218,6 +264,10 @@ v40 (Short lBqOLQdGLZo, mesmo vídeo do orochidois; o usuário AMOU o
     4) reproduzir o caso com vídeos reais do scratchpad, corrigir, rodar a
        bateria inteira (positivos + negativos + gameplay), entregar.
 - Limitações conhecidas (já ditas a ele):
+    * (v41) react: facecam que some no fim/começo do clipe (< 15% dele,
+      troca de cena da live) continua mostrando a região da caixa;
+    * (v41) troca de meia tela no conteúdo (só um lado corta) pode não
+      virar plano novo -> junta com o vizinho (mostra mais, nunca menos);
     * janela de conteúdo aberta > 30 s antes do clipe e sem mudar nada dentro;
     * janela pequena com alguém falando e sem nenhum corte = tratada como facecam;
     * conteúdo reagido sem fala (só música/imagem) não estende o corte;

@@ -30,38 +30,18 @@ Agora, em canal marcado como gameplay ("...|game" na lista de canais):
 Tem a mesma interface do plano do react (active/compose), então o
 reframer.py usa sem mudança nenhuma.
 """
-import subprocess
 from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 from . import config
-from .react_layout import ReactLayout, _analysis_size, _faces
+from .react_layout import ReactLayout, _analysis_size, _faces, _iter_frames
 
 RATE = 8.0           # amostras por segundo (boca: quadros a 125 ms um do outro)
 _MOTION_LAG = 2      # movimento do jogo: compara com 2 amostras atrás (250 ms)
 _MOTION_W = 480      # largura da imagem usada pra medir o movimento do jogo
 GAME, STREAMER = 1, 0
-
-
-def _iter_frames(source_path: str, start: float, duration: float, rate: float, w: int, h: int):
-    """Quadros do trecho, um por vez (não guarda o clipe inteiro na memória)."""
-    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{max(start, 0.0):.3f}", "-i", source_path,
-           "-t", f"{max(duration, 0.1):.3f}", "-vf", f"fps={rate},scale={w}:{h}", "-an",
-           "-f", "rawvideo", "-pix_fmt", "bgr24", "-"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    size = w * h * 3
-    try:
-        while True:
-            buf = proc.stdout.read(size)
-            if len(buf) < size:
-                break
-            yield np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 3)
-    finally:
-        proc.stdout.close()
-        proc.kill()
-        proc.wait()
 
 
 def _runs(lab: np.ndarray) -> List[Tuple[int, int]]:
@@ -198,12 +178,9 @@ class GameplayClipPlan:
 
 
 def _upscale(crop, w, h, scale):
-    out = cv2.resize(crop, (w, h), interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
-    if scale > 2.2:
-        # facecam ampliada várias vezes fica mole: realce leve de nitidez
-        soft = cv2.GaussianBlur(out, (0, 0), 2.0)
-        out = cv2.addWeighted(out, 1.45, soft, -0.45, 0)
-    return out
+    # Lanczos com realce leve na resolução da fonte (ver reframer.hq_resize)
+    from .reframer import hq_resize
+    return hq_resize(crop, w, h)
 
 
 def _game_window(layout: ReactLayout, W: int, H: int, out_w: int, out_h: int) -> Tuple[int, int, int, int]:

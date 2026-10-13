@@ -888,8 +888,8 @@ False` volta pro rastreamento quadro a quadro.
 reagindo): o programa detecta a facecam uma vez por vídeo — um rosto que
 fica sempre no mesmo lugar, numa caixa que não muda enquanto o resto da
 imagem muda — e os clipes saem em **tela dividida**: o vídeo reagido em cima
-(uma janela fixa por clipe, cobrindo quem está falando nele e sem pegar a
-facecam) e o streamer embaixo, com a legenda na divisória e o título logo
+(um enquadramento parado por plano dele, ver v41 abaixo) e o streamer
+embaixo (câmera de tripé), com a legenda na divisória e o título logo
 acima dela. Nos trechos em que a facecam some (troca de cena), volta pro
 enquadramento normal — sempre em trechos de pelo menos 3s, sem pisca-pisca.
 Ajustes em `REACT_*` (`src/config.py`); `REACT_MODE_AUTO_DETECT = False`
@@ -1006,6 +1006,55 @@ nos 5 casos (fim, começo, vídeo longo, limite de tamanho, outro clipe
 depois); sem apresentação ou com a mesma voz, não muda; 4 podcasts reais
 (Lex Fridman, Bam Margera, Inteligência Ltda, Impera) e o Maicon lendo
 histórias: nenhuma extensão. `REACT_EXTEND_ENABLED = False` desliga.
+
+**Câmera de tripé e o conteúdo inteiro — v41** (`src/react_layout.py`).
+Achado real (Casimiro reagindo ao Show do Milhão): em cima, uma janela
+estreita fixa (63% da largura do vídeo 16:9) cortava a pergunta e a
+apresentadora; embaixo, o recorte seguia cada mexida de cabeça do Casimiro
+numa facecam pequena ampliada ~3,8x — borrado e tremendo (medido no Short:
+o fundo andava em 67% dos quadros, 40-100 px por segundo, vai e volta).
+- **Streamer em tripé:** enquadramento PARADO no clipe inteiro. Só muda
+  (em corte seco, uma vez) se ele sair de lugar por 2 s ou mais —
+  levantou, foi pro lado; mexida de cabeça e tropeço de 1 s não mexem a
+  câmera. Medido no teste: o fundo do painel anda 0,06 px por quadro
+  (antes, até 4 px).
+- **Facecam nítida:** nunca ampliada além de `REACT_CAM_MAX_UPSCALE` (2,4x)
+  quando dá. Facecam pequena (o normal: ~20% da largura da tela) entra
+  INTEIRA, com o painel na proporção dela: 2,8-2,9x em vez de 3,8x.
+  Pequena demais (fonte 720p: passaria de 3,3x) vira um cartão nítido no
+  meio, sobre fundo desfocado, em vez de borrão em tela cheia. Ampliação
+  com Lanczos e realce leve feito ANTES de ampliar (o realce forte depois
+  estourava os blocos da compressão). O zoom de edição (momento-chave)
+  no streamer é limitado pra não borrar mais.
+- **Sem degrau de pixel:** todo recorte que anda (podcast, conversa, zoom
+  de edição) agora usa posição com fração. Antes andava de pixel inteiro
+  em pixel inteiro e, ampliado, cada passo virava um degrau de 2-4 px na
+  tela (medido num pan de podcast: oscilação do passo 1,07 px → 0,07 px).
+- **Conteúdo: tudo que importa aparece.** O clipe é analisado a 8
+  quadros/s; cada plano do vídeo reagido (entre dois cortes dele) ganha UM
+  enquadramento parado, que troca no quadro exato do corte (testado: 8 de
+  8 cortes no quadro certo). O enquadramento cobre os rostos em destaque e
+  o texto (pergunta, título, legenda, placar); não contam a marca d'água
+  que fica em todos os planos, a logo/hashtag no canto e listras
+  (bandeira, LED do cenário). Se o que importa não cabe recortado, o plano
+  entra inteiro com fundo desfocado. Plano sem rosto nem texto: a região
+  que mexe (o player, numa live com navegador e chat em volta).
+- **Dois formatos por clipe:** painel alto (conteúdo recortado grande em
+  cima, streamer embaixo) quando o que importa cabe; **largura inteira**
+  (o vídeo 16:9 inteiro em cima, o streamer logo abaixo, faixas
+  desfocadas sobrando em cima e embaixo) quando 40%+ do clipe
+  (`REACT_WIDE_LAYOUT_MIN_FRAC`) ficaria pequeno no painel alto — caso do
+  Show do Milhão (pergunta à esquerda, pessoas à direita). Plano de mesa
+  com 5 pessoas ainda cabe no painel alto (~75%).
+- A legenda fica na divisória dos dois painéis (a altura muda por clipe).
+Testes: caso montado no formato do Casimiro (cartela de pergunta, pessoa
+nas pontas, closes, marca d'água, webcam real 390x263 no canto): pergunta e
+pessoa inteiras, facecam 2,9x parada; 4 reacts de podcast montados (6
+trechos) em painel alto com a pessoa grande; react real (live com navegador
++ chat): só o player em cima; podcast, gameplay e tela dividida do original
+com o mesmo resultado de antes (alinhamento conferido quadro a quadro).
+A facecam do original continua aparecendo pequena dentro do conteúdo
+quando ele entra inteiro (esconder ficava com cara de censura).
 
 **Quando um corte sair com a câmera errada.** Cada corte agora grava:
 - `"versao"` no `.meta.json`: qual versão do programa editou. Clipes que já
