@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v42
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v43
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -276,9 +276,24 @@ v42 (o usuário mandou o vídeo de um Short do Netolab/Felipe Neto: "o
   (inscritos + mediana de views do RSS + data do último vídeo).
 
 
+v43 (pergunta "cortes do Flow, Inteligência e semelhantes estão
+  elegíveis?" + "pode alterar e permitir clipagem de todos estes"):
+  - não achei regra oficial de cortes do Flow/Inteligência (web + descrição
+    dos canais); respondido que toleram mas não há autorização escrita, e
+    que monetização depende da revisão do YouTube (reused content);
+  - AUTOPILOT_MIN_VIEWS 50 mil -> 5 mil pros canais da lista
+    (AUTOPILOT_MIN_VIEWS_SEARCH = 50 mil pra busca). Inteligência: 1 -> 4
+    episódios elegíveis de 12; Flow 6 -> 8; total 107 -> 118;
+  - rights.py: bloqueio = PAUSA (7 dias; 30 se 2º em 30 dias), não mais
+    banimento eterno; vídeo que sumiu (apagado pelo usuário) só vai pro
+    log; banimentos antigos (contagem int em bad_channels) liberados ao
+    ligar (rights.migrate). state: bad_channels[ch] = [timestamps],
+    channel_pause[ch] = até quando.
+
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v42 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v43 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

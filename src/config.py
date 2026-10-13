@@ -1140,7 +1140,13 @@ AUTOPILOT_SEARCHES = []
 AUTOPILOT_VIDEOS_PER_CHANNEL = 12       # últimos N vídeos de cada canal
 AUTOPILOT_CHECK_TOP = 10                # quantos candidatos conferir a fundo (data, live, duração) por rodada
 AUTOPILOT_MAX_AGE_DAYS = 30             # só vídeo publicado nos últimos N dias (0 = qualquer idade)
-AUTOPILOT_MIN_VIEWS = 50000
+# mínimo de views pro vídeo entrar na escolha: canal da lista (você
+# escolheu) x canal achado por busca. Com 50 mil pra todos, o Inteligência
+# Ltda tinha 1 de 6 episódios elegíveis e episódio recém-lançado de
+# qualquer podcast nunca entrava (13/10/2026). Os maiores continuam com
+# prioridade na escolha (AUTOPILOT_POPULARITY_WEIGHT).
+AUTOPILOT_MIN_VIEWS = 5000
+AUTOPILOT_MIN_VIEWS_SEARCH = 50000
 # na escolha do vídeo, quanto pesa o TAMANHO (views por dia, absoluto) contra
 # o "bombando pro canal dele" (relativo ao normal do canal). Antes era 0.25 e
 # podcast pequeno com um vídeo acima da média dele ganhava de episódio do

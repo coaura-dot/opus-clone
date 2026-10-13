@@ -246,7 +246,7 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
     cands, fails = [], 0
     for ch in getattr(config, "AUTOPILOT_CHANNELS", []):
         try:
-            cands += list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 30))
+            cands += [dict(c, listed=True) for c in list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 30))]
         except Exception as e:
             fails += 1
             log(f"    [busca] canal {ch}: {str(e).splitlines()[0][:120]}")
@@ -257,7 +257,11 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
             fails += 1
             log(f"    [busca] '{q}': {str(e).splitlines()[0][:120]}")
 
-    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 20000)
+    # canal da lista (escolhido por você): 5 mil views bastam -- com 50 mil o
+    # Inteligência Ltda tinha 1 de 6 episódios elegíveis e episódio novo de
+    # qualquer podcast nunca entrava. Busca (canal desconhecido): 50 mil.
+    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 5000)
+    min_views_search = getattr(config, "AUTOPILOT_MIN_VIEWS_SEARCH", 50000)
     est_days = getattr(config, "AUTOPILOT_EST_DAYS_PER_VIDEO", 2.0)
     max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 30) or 0
 
@@ -290,7 +294,7 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
     uniq = {}
     for c in cands:
         views = c.get("view_count")
-        if c["id"] in seen or c["id"] in uniq or not views or views < min_views:
+        if c["id"] in seen or c["id"] in uniq or not views or views < (min_views if c.get("listed") else min_views_search):
             continue  # sem número de views = estreia/membros/live: pula
         if not _duration_ok(c.get("duration")):
             continue

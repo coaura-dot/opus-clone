@@ -12,11 +12,16 @@ pergunta pra API do YouTube (1 unidade de cota a cada 50 vídeos):
   - o vídeo está bloqueado no Brasil (ou em quase todo lugar)?
 Se sim:
   - avisa no log;
-  - o canal de origem vai pra lista de canais que dão bloqueio: o piloto
-    não pega mais vídeo dele e tira da fila os clipes dele que já estavam
-    prontos;
+  - o canal de origem fica em PAUSA: 7 dias no 1º bloqueio, 30 dias se for
+    o 2º em 30 dias. Sai da fila o que é do mesmo vídeo (no 2º bloqueio,
+    tudo do canal);
   - libera a próxima postagem na hora (o horário foi desperdiçado num
     vídeo que ninguém vê).
+Antes (até a v42) um bloqueio só banía o canal PRA SEMPRE -- e Short que o
+próprio usuário apagou no Studio ("sumiu do canal") também contava. Pedido
+do usuário: "permitir clipagem de todos estes" (Flow, Inteligência Ltda e
+os outros da lista). Agora vídeo que sumiu só vai pro log, e os banimentos
+antigos foram liberados (migrate()).
 O vídeo bloqueado não é apagado sozinho: dá pra apagar no YouTube Studio.
 """
 import time
@@ -24,6 +29,27 @@ from typing import Optional
 
 _CHECK_EVERY = 15 * 60
 _REJECT_STATUS = ("rejected", "failed", "deleted")
+_PAUSE_FIRST = 7 * 86400      # 1º bloqueio: o canal descansa 7 dias
+_PAUSE_REPEAT = 30 * 86400    # 2º bloqueio em 30 dias: 30 dias
+_REPEAT_WINDOW = 30 * 86400
+
+
+def migrate(state, log) -> None:
+    """Banimentos permanentes antigos (contagem por canal) viram passado:
+    todos os canais da lista voltam a valer."""
+    bc = state.data.get("bad_channels") or {}
+    old = sorted(ch for ch, v in bc.items() if not isinstance(v, list))
+    if old:
+        for ch in old:
+            bc[ch] = []
+        state.save()
+        log(f"  [direitos] canais liberados de novo (antes um bloqueio só banía pra sempre): {', '.join(old)}.")
+
+
+def avoid_channels(state) -> set:
+    """Canais em pausa por bloqueio de direitos agora."""
+    now = time.time()
+    return {ch for ch, until in (state.data.get("channel_pause") or {}).items() if until > now}
 
 
 def _blocked_reason(item: dict) -> Optional[str]:
@@ -74,28 +100,37 @@ def check_recent_posts(state, service, log) -> int:
     for p in todo:
         it = got.get(p["youtube_id"])
         if it is None:
-            if now - p["at"] > 2 * 3600:
-                p["blocked"] = "vídeo sumiu do canal (removido)"
-            else:
-                continue
-        else:
-            reason = _blocked_reason(it)
-            if reason is None:
-                continue
-            p["blocked"] = reason
+            # sumiu: pode ter sido o próprio usuário apagando no Studio -- não
+            # é bloqueio de direitos, não pausa o canal
+            if now - p["at"] > 2 * 3600 and not p.get("gone_logged"):
+                p["gone_logged"] = True
+                log(f"  [direitos] o vídeo \"{p.get('title', '')}\" não está mais no canal (apagado?).")
+            continue
+        reason = _blocked_reason(it)
+        if reason is None:
+            continue
+        p["blocked"] = reason
         bad += 1
         ch = p.get("channel") or "?"
         bc = state.data.setdefault("bad_channels", {})
-        bc[ch] = bc.get(ch, 0) + 1
-        gone = [c for c in state.data["queue"] if _queue_channel(state, c) == ch]
+        hist = bc.get(ch) if isinstance(bc.get(ch), list) else []
+        hist = [t for t in hist if now - t < _REPEAT_WINDOW] + [now]
+        bc[ch] = hist
+        repeat = len(hist) >= 2
+        pause = _PAUSE_REPEAT if repeat else _PAUSE_FIRST
+        state.data.setdefault("channel_pause", {})[ch] = now + pause
+        src = p.get("source_id")
+        gone = [c for c in state.data["queue"]
+                if (repeat and _queue_channel(state, c) == ch) or (src and c.get("source_id") == src)]
         state.data["queue"] = [c for c in state.data["queue"] if c not in gone]
         replace_now = now - p["at"] < 6 * 3600
         if replace_now:
             state.data["last_post_at"] = 0  # o horário foi perdido: posta outro já
         log(f"  [!] O YouTube bloqueou o vídeo \"{p.get('title', '')}\" (https://youtube.com/shorts/"
             f"{p['youtube_id']}): {p['blocked']}.")
-        log(f"      Canal de origem \"{ch}\" vai pra lista de canais que dão bloqueio: não pego mais vídeo "
-            f"dele" + (f" e tirei {len(gone)} clipe(s) dele da fila" if gone else "")
+        log(f"      Canal de origem \"{ch}\" fica {pause // 86400} dias sem vídeo novo"
+            + (" (2º bloqueio em 30 dias)" if repeat else "")
+            + (f"; tirei {len(gone)} clipe(s) " + ("dele" if repeat else "do mesmo vídeo") + " da fila" if gone else "")
             + "." + (" Posto outro no lugar agora." if replace_now else "")
             + " (O bloqueado pode ser apagado no YouTube Studio.)")
     state.save()

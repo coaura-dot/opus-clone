@@ -992,6 +992,8 @@ def _run_forever(upload: bool = True):
             f"views (antes ~{b.get('base', 0):.0f}) -- 1 post a cada {reach.brake_hours():.0f} h até voltar.")
     log("=" * 60)
 
+    from . import rights
+    rights.migrate(state, log)  # banimentos permanentes antigos: liberados
     prune_blocked(state, log)
     prune_hook_clips(state, log)
     from . import manual_post
@@ -1099,7 +1101,7 @@ def _run_forever(upload: bool = True):
                     for ch in {_channel_of(state, c) for c in state.data["queue"]}:
                         recent[ch] = recent.get(ch, 0) + 1
                     source = discovery.pick_source(state.seen_ids(), recent, log=log,
-                                                   avoid_channels=set(state.data.get("bad_channels", {})))
+                                                   avoid_channels=rights.avoid_channels(state))
                 state.data.pop("retry_source", None)
                 if source:
                     try:

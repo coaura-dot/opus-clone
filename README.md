@@ -319,10 +319,17 @@ pergunta pra API do YouTube se o vídeo foi rejeitado (reivindicação do
 Content ID, direitos autorais, duplicado) ou se está bloqueado no Brasil
 (`src/rights.py`, 1 unidade de cota a cada 50 vídeos). Se foi:
 - o log avisa;
-- o canal de origem entra na lista de canais que dão bloqueio: o piloto
-  não pega mais vídeo dele e tira da fila os clipes dele;
+- o canal de origem fica em **pausa**: 7 dias sem vídeo novo no 1º
+  bloqueio, 30 dias se for o 2º em 30 dias. Sai da fila o que é do mesmo
+  vídeo (no 2º bloqueio, tudo do canal);
 - se o post foi nas últimas 6 h, o próximo sai na hora, no lugar do que
   ninguém vê.
+
+Até a v42, um bloqueio só banía o canal pra sempre, e Short apagado por
+você no Studio ("sumiu do canal") também contava. Pedido do usuário
+("permitir clipagem de todos estes": Flow, Inteligência Ltda...): agora é
+pausa, vídeo apagado só vai pro log, e os banimentos antigos foram
+liberados na v43.
 
 O vídeo bloqueado não é apagado sozinho; dá pra apagar no YouTube Studio.
 Achado real que motivou: o primeiro corte do The Noite (SBT) foi postado,
@@ -409,10 +416,10 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, PrimoCast; TV e famosos: Diva Depressão; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Joe Rogan, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês; `"\|game"` = gameplay com facecam). Canal que der bloqueio de direitos autorais sai sozinho (abaixo) |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, PrimoCast; TV e famosos: Diva Depressão; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Joe Rogan, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês; `"\|game"` = gameplay com facecam). Canal que der bloqueio de direitos autorais fica em pausa 7 dias (30 se repetir) |
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
-| `AUTOPILOT_MIN_VIEWS` | 50000 | só vídeos com pelo menos N views |
+| `AUTOPILOT_MIN_VIEWS` / `AUTOPILOT_MIN_VIEWS_SEARCH` | 5000 / 50000 | mínimo de views: canal da sua lista / canal achado por busca. Com 50 mil pra todos, o Inteligência Ltda tinha 1 de 6 episódios elegíveis e episódio recém-lançado nunca entrava |
 | `AUTOPILOT_POPULARITY_WEIGHT` | 0.65 | na escolha, quanto pesa o tamanho do vídeo (views por dia) contra o "bombando pro canal dele"; mais alto = mais conteúdo de gente grande |
 | `AUTOPILOT_FOREIGN_FACTOR` | 0.5 | peso dos canais gringos (`\|en`) na escolha, pra não tomarem a fila |
 | `AUTOPILOT_DROP_QUEUED_FROM` | PodPeople, Os Sócios, Market Makers, Roda Viva | clipes já prontos desses canais saem da fila ao ligar |
