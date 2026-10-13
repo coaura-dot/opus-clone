@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v41
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v42
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -252,9 +252,33 @@ v41 (Short buX2IcNJcis: Casimiro reage ao Show do Milhão, "Cortes do
   (borrão/inpaint pareciam censura).
 
 
+v42 (o usuário mandou o vídeo de um Short do Netolab/Felipe Neto: "o
+  programa tá fazendo uma facecam pro boneco"): react_layout aceitava o
+  boneco do relógio (Bela e a Fera) na estante como facecam -- "mexia" 0,65
+  porque o vídeo corta entre câmeras e ele muda de lugar a cada uma. Agora
+  a caixa da facecam precisa de TODOS os lados achados (nenhum 'g' de
+  chute), 1+ borda l/v, rosto >= 6% da altura (REACT_MIN_FACE_HEIGHT;
+  gameplay 3,5%). Boneco: lados ggeg, rosto 4,5%; apresentador nos closes:
+  egev. 14 facecams reais: 0 chutes, rosto 10,6-23,5%. (Reproduzido
+  recortando o painel de cima do Short: boneco/src.mp4; script
+  boneco/sides.py no scratchpad e9241813...)
+  Canais (pedido "melhore a qualidade dos canais"; dados do RSS + "Corte
+  de:" de cada Short + oEmbed pro nome do canal): saíram Felipe Neto (1 em
+  cada 4 Shorts, 3 do mesmo vídeo; o @felipeneto nem era o canal principal),
+  Ciência Sem Fim (parado desde out/2025) e Ilha de Barbados (desde
+  abr/2026); entraram PrimoCast (o corte dele fez 1.300 views) e Joe Rogan
+  (|en). BLOCK_WORDS += "felipe neto", "netolab". Novo
+  AUTOPILOT_SAME_SOURCE_GAP_HOURS = 24 (mesmo vídeo de origem no máx 1
+  Short a cada 24 h, inclusive no só postar). Views voltaram a ~1.000/Short
+  depois da v38 (ritmo de 4 h). Corte do Casimiro (Show do Milhão) teve 1
+  view: provável bloqueio de direitos do SBT.
+  Pra conferir canal novo: scratchpad e9241813.../canais/check.py @handle
+  (inscritos + mediana de views do RSS + data do último vídeo).
+
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v41 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v42 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

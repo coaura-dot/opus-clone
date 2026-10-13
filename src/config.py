@@ -959,6 +959,7 @@ SPEAKER_MIN_HOLD_SECONDS = 2.0      # conversa em plano aberto: cada pessoa fica
 SPEAKER_MIN_ACTIVITY = 1.5          # boca mexendo (abaixo disso ninguém fala claro: grupo grande = cena inteira)
 REACT_MIN_FACE_JITTER = 0.06        # rosto da facecam tem que MEXER (boneco/quadro na parede: <0,05)
 REACT_MIN_FACE_CHANGE = 6.0         # ... e a imagem dele mudar (expressão; boneco/foto: <2)
+REACT_MIN_FACE_HEIGHT = 0.06        # rosto da facecam: pelo menos 6% da altura (boneco na estante do Netolab: 4,5%)
 REACT_MIN_CLIP_PRESENCE = 0.85      # tela dividida só se a facecam está em 85%+ do clipe -- e aí no clipe inteiro
 # Tela dividida NO VÍDEO ORIGINAL (foto/print de um lado, pessoa do outro --
 # ex.: Maicon Küster analisando perfis do Tinder): sai com a imagem em cima e
@@ -1093,14 +1094,15 @@ AUTOPILOT_CHANNELS = [
     "@InteligenciaLtda",                                         # Inteligência Ltda -- 5,8 mi
     "@podpah",                                                   # Podpah -- 10,2 mi
     "@Ticaracaticast",                                           # Ticaracaticast -- 3 mi, episódios de 2 h
-    "@cienciasemfim",                                            # Ciência Sem Fim -- 1,3 mi (ciência)
+    # PrimoCast voltou (13/10/2026): no seu canal, o corte do Eike Batista fez
+    # 1.300 views, entre os 3 melhores -- conteúdo de substância, convidados
+    # conhecidos. 1,7 mi inscritos, ativo.
+    "@PrimoCast",                                                # PrimoCast -- 1,7 mi
     # Humor, TV e assunto do momento (pedido do usuário: "vídeos engraçados,
     # momentos engraçados em podcasts, programas de TV recentes, acontecimentos
     # recentes"). The Noite (SBT) saiu: o 1º corte dele foi bloqueado pelo
     # Content ID da emissora. Canal que der bloqueio sai sozinho (src/rights.py).
-    "@IlhadeBarbados",                                           # Ilha de Barbados (humor) -- ~180 mil views/vídeo
-    "@DivaDepressao",                                            # Diva Depressão (TV, reality, famosos) -- ~250 mil views/vídeo
-    "@felipeneto",                                               # Felipe Neto (react do que está bombando) -- ~880 mil views/vídeo
+    "@DivaDepressao",                                            # Diva Depressão (TV, reality, famosos) -- ~950-1.000 views/Short no seu canal
     # Reacts grandes
     "https://www.youtube.com/channel/UCgSAH94ZjV6-w46hPJ0-ffQ",  # orochidois (Orochinho) -- ~780 mil views/vídeo
     "@MaiconKuster",                                             # Maicon Küster -- ~940 mil views/vídeo
@@ -1108,17 +1110,29 @@ AUTOPILOT_CHANNELS = [
     # Gringos ("|en" = canal em inglês: transcrição/legenda em inglês)
     # "|game" = gameplay com facecam: câmera alterna entre o streamer e o jogo
     "https://www.youtube.com/channel/UCldCI5K_HmwS_iQX7xqIlPg|en|game",  # DrDonut Clips -- ~420 mil views/vídeo
-    "@TheoVon|en",                                               # Theo Von -- ~1,1 mi views/episódio
-    "@lexfridman|en",                                            # Lex Fridman -- ~950 mil views/episódio
-    # Saíram por serem pequenos demais (views típicas de 4 mil a 20 mil):
-    # PrimoCast, PodPeople, Os Sócios, Market Makers; Roda Viva (sem views na listagem)
+    "@TheoVon|en",                                               # Theo Von -- o que mais rende no seu canal (1.100-1.500 views/Short)
+    "@joerogan|en",                                              # Joe Rogan (JRE) -- 21 mi inscritos, ~1,2 mi views/episódio
+    "@lexfridman|en",                                            # Lex Fridman -- ~1 mi views/episódio
+    # Saíram (13/10/2026): Felipe Neto (pedido do usuário; era 1 em cada 4
+    # Shorts, 3 do mesmo vídeo); Ciência Sem Fim (sem vídeo novo desde
+    # out/2025) e Ilha de Barbados (desde abr/2026) -- o piloto só pega
+    # vídeo dos últimos 30 dias, não rendiam nada.
+    # Saíram antes por serem pequenos demais (views típicas de 4 mil a 20 mil):
+    # PodPeople, Os Sócios, Market Makers; Roda Viva (sem views na listagem)
 ]
 # clipes JÁ PRONTOS na fila destes canais saem dela quando o piloto liga
 # (canais tirados da lista acima por serem pequenos)
-AUTOPILOT_DROP_QUEUED_FROM = ["PrimoCast", "PodPeople", "Os Sócios", "Market Makers", "Roda Viva", "The Noite"]
+AUTOPILOT_DROP_QUEUED_FROM = ["PodPeople", "Os Sócios", "Market Makers", "Roda Viva", "The Noite"]
 # vídeo cujo título ou canal tenha alguma destas palavras é ignorado
 # (pedido do usuário: nada de programa de zoeira)
-AUTOPILOT_BLOCK_WORDS = ["defante", "rango brabo", "aqueles caras", "pegadinha", "trollagem"]
+AUTOPILOT_BLOCK_WORDS = ["defante", "rango brabo", "aqueles caras", "pegadinha", "trollagem",
+                         # pedido do usuário (13/10/2026): nada do Felipe Neto, nem
+                         # de outro canal com ele no título; os clipes dele na fila saem
+                         "felipe neto", "netolab"]
+# mesmo vídeo de origem: no máximo 1 Short a cada N horas (achado: 3 Shorts
+# do mesmo vídeo da pizza em menos de 24 h). Vale também no "só postar": o
+# clipe vai pro fim da fila até passar o prazo (se só tiver ele, posta). 0 = desliga
+AUTOPILOT_SAME_SOURCE_GAP_HOURS = 24
 # Buscas no YouTube ("esta semana, mais vistos", só títulos em português)
 # pra achar vídeo bombando fora da lista acima. Vazio = só os canais.
 # Atenção: a busca traz canais que você não conhece -- confira se liberam corte.

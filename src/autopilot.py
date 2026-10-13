@@ -565,9 +565,18 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     # nota combinada (viralidade + qualidade)
     weights = _learned_weights(state)
 
+    # mesmo vídeo de origem postado há pouco: vai pro fim (achado: 3 Shorts do
+    # mesmo vídeo em menos de 24 h deixavam o canal repetitivo). Vale também
+    # no só postar -- a ordem da nota continua entre os outros
+    gap = getattr(config, "AUTOPILOT_SAME_SOURCE_GAP_HOURS", 24) * 3600
+    now = time.time()
+    recent_src = {p.get("source_id") for p in state.data["posted"]
+                  if gap and p.get("source_id") and now - p.get("at", 0) < gap}
+
     def key(c):
         div = 0.0 if strict else _diversity_penalty(state, c)
-        return (-_prio(c), -(rank_key(c, weights) - div), c.get("added", 0))
+        same = 1 if (c.get("source_id") in recent_src and not _prio(c)) else 0
+        return (-_prio(c), same, -(rank_key(c, weights) - div), c.get("added", 0))
     _ai_compare(state, queue, key, log)
     queue.sort(key=key)
     item = queue[0]

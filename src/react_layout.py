@@ -378,6 +378,24 @@ def detect_react_layout(source_path: str, duration: float, src_w: int, src_h: in
             if verbose:
                 print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) mas caixa implausível {box}")
             continue
+        # caixa de verdade: TODO lado achado (nenhum no chute) e pelo menos 1
+        # borda de verdade (linha fixa ou fronteira parado|mexendo; a borda
+        # da tela também fecha a caixa), e rosto de webcam (não miniatura).
+        # Achado real (Netolab, canal do Felipe Neto): o boneco do relógio da
+        # Bela e a Fera na estante virava "facecam" -- caixa com 3 lados no
+        # chute e 1 na borda da tela, rosto de 4,5% da altura; e "mexia" porque
+        # o vídeo corta entre câmeras e ele muda de lugar a cada uma. Depois
+        # dele, um dos apresentadores nos closes (1 lado no chute). Medido nas
+        # 12 facecams reais testadas (reacts, hp, speedrun, SMP, Casimiro,
+        # webcam em faixa na lateral): 0 lados no chute, rosto de 10,6-23,5%.
+        guesses = sum(1 for k in sides[:4] if k == "g")
+        borders = sum(1 for k in sides[:4] if k in "lv")
+        min_face = 0.035 if relaxed else getattr(config, "REACT_MIN_FACE_HEIGHT", 0.06)
+        if guesses > 0 or borders < 1 or face[3] < min_face * H:
+            if verbose:
+                print(f"    [react] rosto fixo em ({face[0]:.0f},{face[1]:.0f}) sem caixa de facecam de verdade "
+                      f"(lados={sides}, rosto {face[3] / H * 100:.1f}% da altura) -- boneco/quadro do cenário")
+            continue
         if _content_over_cam(box, face, idx, all_faces, grays, W, H):
             if verbose:
                 print(f"    [react] caixa {tuple(int(v) for v in box)} é o CONTEÚDO por cima da câmera "

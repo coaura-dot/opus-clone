@@ -409,13 +409,15 @@ programa, faça o login (opção 3) uma vez de novo.
 
 | Opção | Padrão | O que faz |
 |---|---|---|
-| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, Ciência Sem Fim; humor e assunto do momento: Ilha de Barbados, Diva Depressão, Felipe Neto; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês; `"\|game"` = gameplay com facecam). Canal que der bloqueio de direitos autorais sai sozinho (abaixo) |
+| `AUTOPILOT_CHANNELS` | Flow, Inteligência Ltda, Podpah, Ticaracaticast, PrimoCast; TV e famosos: Diva Depressão; reacts: orochidois, Maicon Küster, Cortes do Casimito; gringos: DrDonut Clips, Theo Von, Joe Rogan, Lex Fridman | canais acompanhados (`"link\|en"` = canal em inglês; `"\|game"` = gameplay com facecam). Canal que der bloqueio de direitos autorais sai sozinho (abaixo) |
 | `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras... | título ou canal com essas palavras é ignorado |
 | `AUTOPILOT_SEARCHES` | vazio | buscas extras ("esta semana, mais vistos", só títulos em português) |
 | `AUTOPILOT_MIN_VIEWS` | 50000 | só vídeos com pelo menos N views |
 | `AUTOPILOT_POPULARITY_WEIGHT` | 0.65 | na escolha, quanto pesa o tamanho do vídeo (views por dia) contra o "bombando pro canal dele"; mais alto = mais conteúdo de gente grande |
 | `AUTOPILOT_FOREIGN_FACTOR` | 0.5 | peso dos canais gringos (`\|en`) na escolha, pra não tomarem a fila |
-| `AUTOPILOT_DROP_QUEUED_FROM` | PrimoCast, PodPeople, Os Sócios, Market Makers, Roda Viva | clipes já prontos desses canais saem da fila ao ligar |
+| `AUTOPILOT_DROP_QUEUED_FROM` | PodPeople, Os Sócios, Market Makers, Roda Viva | clipes já prontos desses canais saem da fila ao ligar |
+| `AUTOPILOT_BLOCK_WORDS` | defante, rango brabo, aqueles caras, pegadinha, trollagem, felipe neto, netolab | vídeo (ou clipe na fila) com isso no título ou no nome do canal é ignorado |
+| `AUTOPILOT_SAME_SOURCE_GAP_HOURS` | 24 | mesmo vídeo de origem: no máximo 1 Short a cada N horas (também no "só postar"); 0 desliga |
 | `AUTOPILOT_MAX_AGE_DAYS` | 30 | só vídeos de até N dias; entre eles vence o que está indo **melhor que o normal do próprio canal** (views por dia), no máximo 2 por canal na disputa; 0 = qualquer idade |
 | `AUTOPILOT_CLIPS_PER_VIDEO` | 3 | cortes por vídeo |
 | `AUTOPILOT_PREFER_EPISODE_MINUTES` | 35 | vídeo mais curto que isso (provável corte, não o episódio inteiro) perde até 40% na escolha |
@@ -836,6 +838,16 @@ Agora:
 - **Clipe inteiro ou nada:** só divide a tela se a facecam está em 85% ou
   mais do clipe (`REACT_MIN_CLIP_PRESENCE`), e aí no clipe inteiro. Nunca
   liga e desliga no meio.
+- **Caixa de facecam de verdade (v42).** O boneco voltou num vídeo do
+  Netolab (relógio da *Bela e a Fera* na estante, embaixo e ampliado): o
+  vídeo corta entre câmeras e o boneco muda de lugar a cada uma, o que
+  parecia "rosto mexendo" (0,65). Agora a caixa da facecam tem que ter
+  **todos os lados achados** (linha fixa, fronteira parado|mexendo ou a
+  borda da tela; nenhum no chute) e o rosto pelo menos 6% da altura da tela
+  (`REACT_MIN_FACE_HEIGHT`; gameplay 3,5%). O boneco tinha 3 lados no chute
+  e rosto de 4,5%; um apresentador nos closes, 1 lado no chute. As 14
+  facecams reais testadas (reacts, Casimiro, speedrun, SMP, DrDonut,
+  webcam em faixa na lateral): 0 lados no chute, rosto de 10,6-23,5%.
 
 **Tamanho do rosto decide o enquadramento** (vídeo comum/podcast):
 
