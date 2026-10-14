@@ -97,8 +97,20 @@ class State:
 
     def save(self):
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, self.path)  # troca atômica: nunca fica um arquivo pela metade
+        text = json.dumps(self.data, ensure_ascii=False, indent=1)
+        # troca atômica: nunca fica um arquivo pela metade. No Windows a troca
+        # dá "Access is denied" se outro programa está com o arquivo aberto
+        # naquele instante (a interface lendo, antivírus) -- achado real
+        # (14/out, WinError 5 em state.tmp -> state.json): tenta de novo.
+        for i in range(40):
+            try:
+                tmp.write_text(text, encoding="utf-8")
+                os.replace(tmp, self.path)
+                return
+            except PermissionError:
+                if i == 39:
+                    raise
+                time.sleep(0.25)
 
     # --- vídeos de origem
     def seen_ids(self) -> set:
@@ -164,6 +176,36 @@ class Interrupted(Exception):
 
 _PRIO = {"low": None}
 _AUTO = {"on": False}
+# login do YouTube caído: o piloto acorda assim que o arquivo do login mudar
+# (botão "Conectar canal do YouTube" da interface), sem esperar 1 h
+_AUTH = {"down": False, "mtime": None}
+
+
+def _token_mtime():
+    from . import youtube_uploader as yt
+    try:
+        return yt.token_path().stat().st_mtime
+    except OSError:
+        return None
+
+
+def _auth_lost(state, log: Log, msg: str) -> None:
+    """Login morto: avisa uma vez (log + interface) e espera um login novo."""
+    _AUTH.update(down=True, mtime=_token_mtime())
+    if state is not None and (state.data.get("auth_down") or {}).get("msg") != msg:
+        state.data["auth_down"] = {"at": time.time(), "msg": msg}
+        state.save()
+    log(f"  [!] YouTube: {msg}")
+
+
+def _auth_back(state) -> None:
+    _AUTH.update(down=False, mtime=None)
+    if state is not None and state.data.pop("auth_down", None) is not None:
+        state.save()
+
+
+def _relogged() -> bool:
+    return _AUTH["down"] and _token_mtime() != _AUTH["mtime"]
 
 
 def low_priority(on: bool) -> None:
@@ -600,6 +642,8 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         if str(e).startswith("quotaExceeded"):
             _quota_hit(state, e, key, log)
             return False
+        if yt.dead_login(e):
+            raise yt.AuthError(yt.DEAD_LOGIN_HINT) from e
         state.data["blocked_until"] = time.time() + 10 * 60
         state.save()
         log(f"    [!] não consegui conferir no canal se \"{meta['title']}\" já foi postado ({e}); "
@@ -926,11 +970,11 @@ def _sleep_until(ts: float, log: Log, why: str):
         # para o piloto em ~2 s mesmo no meio de uma espera longa; trocar
         # entre "só postar" e o modo completo acorda o piloto na hora
         time.sleep(max(min(2.0, end - time.time()), 0))
-        if control.post_only() != mode:
+        if control.post_only() != mode or _relogged():
             return
 
 
-def _get_service(log: Log, upload: bool):
+def _get_service(log: Log, upload: bool, state=None):
     if not upload:
         return None
     from . import youtube_uploader as yt
@@ -938,12 +982,13 @@ def _get_service(log: Log, upload: bool):
         svc = yt.get_service(interactive=False)
         name, problem = yt.channel_check(svc)
         if problem:
-            log(f"  [!] YouTube: {problem}")
+            _auth_lost(state, log, problem)
             return None
         log(f"  YouTube conectado: canal \"{name}\"")
+        _auth_back(state)
         return svc
     except yt.UploadError as e:
-        log(f"  [!] YouTube: {e}")
+        _auth_lost(state, log, str(e))
         return None
 
 
@@ -1010,7 +1055,7 @@ def _run_forever(upload: bool = True):
     from . import housekeeping
     housekeeping.clean_work_dir(log)
     housekeeping.cleanup(state, out_root, log)
-    service = _get_service(log, upload)
+    service = _get_service(log, upload, state)
     next_auth_try = time.time() + 3600
     failures = 0
     startup = True
@@ -1018,9 +1063,21 @@ def _run_forever(upload: bool = True):
     _AUTO["on"] = True  # só o modo automático para a edição ao trocar pra "só postar"
     while True:
         try:
-            if upload and service is None and time.time() >= next_auth_try:
-                service = _get_service(log, upload)
+            if upload and service is None and (time.time() >= next_auth_try or _relogged()):
+                if _relogged():
+                    log("  Login do YouTube novo: conectando...")
+                service = _get_service(log, upload, state)
                 next_auth_try = time.time() + 3600
+            if service is not None:
+                # o acesso vence a cada hora: renova antes de usar (login
+                # morto -> para de tentar e avisa, em vez de errar em tudo)
+                from . import youtube_uploader as yt
+                try:
+                    yt.ensure_fresh(service)
+                except yt.AuthError as e:
+                    _auth_lost(state, log, str(e))
+                    service = None
+                    next_auth_try = time.time() + 3600
 
             # 0) vídeos que subiram privados: confere a auditoria / solta aos poucos
             if service is not None:
@@ -1072,8 +1129,9 @@ def _run_forever(upload: bool = True):
                     try:
                         post_next(state, service, log, strict=only_post)
                     except yt.AuthError as e:
-                        log(f"  [!] {e}")
+                        _auth_lost(state, log, str(e))
                         service = None
+                        next_auth_try = time.time() + 3600
                     housekeeping.cleanup(state, out_root, log)
                     continue
 
@@ -1173,6 +1231,12 @@ def _run_forever(upload: bool = True):
             keep_awake(False)
             return
         except Exception as e:  # nada derruba o loop
+            from . import youtube_uploader as yt
+            if service is not None and yt.dead_login(e):
+                _auth_lost(state, log, yt.DEAD_LOGIN_HINT)
+                service = None
+                next_auth_try = time.time() + 3600
+                continue
             failures += 1
             wait = min(60 * 2 ** failures, 3600)
             log(f"  [!] erro inesperado: {e.__class__.__name__}: {e} -- tentando de novo em {wait // 60:.0f} min")

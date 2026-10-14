@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v44
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v45
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -300,11 +300,30 @@ v44 (log do JRE #2560 com David Grusch, "parece bom"):
     people find you", "final thoughts", "brought to you by", "promo code",
     "go to x.com", "welcome to the show"...). Testados em frases do JRE e
     no Lex/Bam em cache: 0 falsos positivos.
+  (v44 foi entregue mas o usuário ainda não tinha instalado quando veio a v45)
+
+
+v45 (log: "invalid_grant: Token has been expired or revoked" desde 01:18 e,
+  depois de reconectar, "PermissionError WinError 5 state.tmp -> state.json"):
+  - login morto: o serviço velho ficava preso e o piloto repetia "confiro
+    de novo em 10 min" por 8 h sem dizer que era o login. Agora
+    youtube_uploader.ensure_fresh renova o acesso no começo de cada volta;
+    invalid_grant -> AuthError com DEAD_LOGIN_HINT, service = None,
+    state["auth_down"] (alerta vermelho na interface; some quando o
+    youtube_token.json fica mais novo que o aviso);
+  - o piloto acorda em ~2 s quando o youtube_token.json muda (_AUTH,
+    _relogged em _sleep_until) -- antes esperava até 1 h depois do login;
+  - causa provável: app do Google Cloud em "Teste" (login vence a cada 7
+    dias). Pedido ao usuário: Google Auth Platform -> Público-alvo ->
+    Publicar app, e conectar de novo;
+  - State.save: no Windows os.replace dá "Access is denied" se outro
+    programa está com o state.json aberto (interface lendo, antivírus):
+    tenta de novo até 40 x 0,25 s.
 
 
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v44 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v45 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

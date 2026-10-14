@@ -654,10 +654,19 @@ class App:
         self.sheet_link.config(text="ver quadros do original" if self._sheet else "")
         self._show_posts()
         b = st.get("reach_brake")
-        self.alert.config(text=(f"⚠ O YouTube parou de entregar os Shorts: os últimos tiveram "
-                                f"{', '.join(map(str, b.get('recent', [])))} views (antes ~{b.get('base', 0):.0f}). "
-                                f"Freio ligado: 1 post a cada {ap.reach.brake_hours():.0f} h até voltar.")
-                          if b and getattr(config, "AUTOPILOT_REACH_BRAKE", True) else "")
+        a = st.get("auth_down")
+        if a and (ap._token_mtime() or 0) > a.get("at", 0):
+            a = None  # conectou de novo depois do aviso: o piloto pega o login novo sozinho
+        if a:
+            self.alert.config(fg="#fca5a5", text="⚠ O login do YouTube caiu: nada está sendo postado. Clique em "
+                              "\"Conectar canal do YouTube\" (se cai a cada 7 dias, publique o app no Google "
+                              "Cloud: README, \"Postagem automática\", passo 3).")
+        else:
+            self.alert.config(fg=AMBER, text=(f"⚠ O YouTube parou de entregar os Shorts: os últimos tiveram "
+                                              f"{', '.join(map(str, b.get('recent', [])))} views (antes "
+                                              f"~{b.get('base', 0):.0f}). Freio ligado: 1 post a cada "
+                                              f"{ap.reach.brake_hours():.0f} h até voltar.")
+                              if b and getattr(config, "AUTOPILOT_REACH_BRAKE", True) else "")
 
     def _posts_step(self, d: int):
         n = int(min(max(ap.daily_limit() + d, 1), 24))
@@ -721,6 +730,8 @@ class App:
             lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("=")]
             msg = "\n".join(lines[-6:]) or "Terminou."
             ok = "Conectado ao canal" in out
+            if ok and control.running_info():
+                msg += "\n\nO piloto ligado já pega o login novo e volta a postar em instantes."
             self.root.after(0, lambda: (messagebox.showinfo if ok else messagebox.showwarning)("Conectar canal", msg))
         threading.Thread(target=wait, daemon=True).start()
 

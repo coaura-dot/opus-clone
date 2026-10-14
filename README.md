@@ -253,6 +253,13 @@ crédito do vídeo original e da música.
   - **Por que não tem atalho:** vários projetos do Google ou robô no
     navegador pra passar da cota quebram as regras do YouTube e arriscam o
     canal. Por isso o programa não faz.
+- **Login que cai ("Token has been expired or revoked"):** com o app do
+  Google Cloud em "Teste", o Google derruba o login a cada 7 dias. O piloto
+  para de tentar, avisa em vermelho na interface e espera. Clique em
+  **Conectar canal do YouTube**: o piloto ligado pega o login novo em
+  segundos e volta a postar. Pra não cair mais, publique o app
+  (**Google Auth Platform → Público-alvo → Publicar app**) e conecte de
+  novo uma vez: o login feito depois de publicar não vence.
 - **Direitos:** use canais que **liberam cortes**. Clipe de canal que não
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.

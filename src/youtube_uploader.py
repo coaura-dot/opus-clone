@@ -52,6 +52,22 @@ class AuthError(UploadError):
     """Login do Google inválido/expirado -- precisa autorizar de novo."""
 
 
+# achado real (14/out): "invalid_grant: Token has been expired or revoked"
+# no meio da madrugada -- com o app do Google Cloud em "Teste" o Google
+# derruba o login a cada 7 dias. O piloto ficou 8 h repetindo "confiro de
+# novo em 10 min" sem dizer que o problema era o login.
+DEAD_LOGIN_HINT = ("o login do YouTube venceu ou foi revogado pelo Google. Clique em 'Conectar canal do "
+                   "YouTube' na interface (ou rode 'python autopilot.py --login'). Se isso se repete a cada "
+                   "7 dias, o app do Google Cloud está em 'Teste': publique o app (README, 'Postagem "
+                   "automática', passo 3) e conecte de novo")
+
+
+def dead_login(e: BaseException) -> bool:
+    """O Google recusou o login salvo (venceu/revogado): só um login novo resolve."""
+    t = f"{e.__class__.__name__} {e}"
+    return "invalid_grant" in t or ("RefreshError" in t and "expired or revoked" in t)
+
+
 def credentials_dir() -> Path:
     d = Path(getattr(config, "YOUTUBE_CREDENTIALS_DIR", "credentials"))
     if not d.is_absolute():
@@ -99,6 +115,8 @@ def get_service(interactive: bool = True):
             creds.refresh(Request())
         except Exception as e:
             if not interactive:
+                if dead_login(e):
+                    raise AuthError(DEAD_LOGIN_HINT) from e
                 raise AuthError(f"não consegui renovar o login do YouTube ({e}). "
                                 "Rode 'python autopilot.py --login' pra autorizar de novo.") from e
             creds = None
@@ -118,7 +136,23 @@ def get_service(interactive: bool = True):
     service = build("youtube", "v3", credentials=creds, cache_discovery=False)
     scopes = set(getattr(creds, "granted_scopes", None) or creds.scopes or granted or [])
     service.autoclipper_can_manage = MANAGE_SCOPE in scopes
+    service.autoclipper_creds = creds
     return service
+
+
+def ensure_fresh(service) -> None:
+    """Renova o acesso (vale 1 h) antes de usar o serviço. Login morto ->
+    AuthError (o piloto para de tentar e avisa na interface); sem rede, deixa
+    passar (as chamadas tentam de novo)."""
+    creds = getattr(service, "autoclipper_creds", None)
+    if creds is None or creds.valid:
+        return
+    from google.auth.transport.requests import Request
+    try:
+        creds.refresh(Request())
+    except Exception as e:
+        if dead_login(e):
+            raise AuthError(DEAD_LOGIN_HINT) from e
 
 
 def channel_check(service) -> tuple:
