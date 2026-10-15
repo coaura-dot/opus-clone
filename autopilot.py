@@ -44,19 +44,36 @@ from src import control
 
 
 def _login():
+    """Conecta um canal: canal novo entra na lista (src/accounts.py), canal
+    que já estava só troca o login."""
+    from src import accounts
     from src import youtube_uploader as yt
     try:
-        svc = yt.get_service(interactive=True)
+        acc = accounts.login()
     except yt.UploadError as e:
         print(f"\n[ERRO] {e}")
         return False
-    name, problem = yt.channel_check(svc)
-    if problem:
-        print(f"\n[!] Login feito, mas: {problem}")
+    except Exception as e:  # navegador fechado, porta ocupada...
+        print(f"\n[ERRO] o login não terminou ({e.__class__.__name__}: {e})")
         return False
-    print(f"\nConectado ao canal: {name}")
-    print(f"Login salvo em {yt.token_path()} -- não precisa repetir.")
+    if acc is None:
+        return False
+    print(f"Login salvo em {accounts.token_file(acc)} -- não precisa repetir.")
     return True
+
+
+def _accounts():
+    from src import accounts
+    accs = accounts.load()
+    if not accs:
+        print("\nNenhum canal conectado ainda (opção 3 do menu, ou '+ Adicionar canal' na interface).")
+        return
+    st = autopilot.State(autopilot.DATA_DIR / "state.json")
+    print(f"\nCanais do YouTube ({len(accs)}):")
+    for a in accs:
+        n = len(autopilot.posts_last_24h(st, a["id"]))
+        print(f"  • {accounts.label(a)}{'' if a.get('on', True) else ' (pausado)'} -- "
+              f"{n}/{autopilot.daily_limit()} nas últimas 24 h")
 
 
 def _status():
@@ -75,10 +92,14 @@ def _status():
         print(f"\nDescartados pela nota de qualidade: {len(rej)} (últimos 5)")
         for r in rej[-5:]:
             print(f"  • [nota {r['quality']}] {r['title']} -- {', '.join(r.get('reasons', []))}")
-    print(f"\nPostados: {len(posted)} (hoje: {st.uploads_today()}/{autopilot.daily_limit()})")
+    from src import accounts
+    print(f"\nPostados: {len(posted)} (hoje pela API: {st.uploads_today()}/{autopilot.total_per_day()})")
+    many = len(accounts.load()) > 1
     for p in posted[-10:]:
+        where = f"[{accounts.label(accounts.acc_of(p))}] " if many else ""
         print(f"  • {datetime.fromtimestamp(p['at']):%d/%m %H:%M}  https://youtube.com/shorts/{p['youtube_id']}"
-              f"  {p['title']}")
+              f"  {where}{p['title']}")
+    _accounts()
     priv = [p for p in posted if p.get("privacy") not in (None, "public")
             and not p.get("replaced") and not p.get("gave_up")]
     if priv:
@@ -90,24 +111,30 @@ def _status():
 
 
 def _release_now():
+    from src import accounts
     from src import release
     from src import youtube_uploader as yt
     st = autopilot.State(autopilot.DATA_DIR / "state.json")
+    accounts.migrate_state(st)
     log = autopilot.Log(autopilot.DATA_DIR / "autopilot.log")
-    try:
-        svc = yt.get_service(interactive=True)
-    except yt.UploadError as e:
-        print(f"\n[ERRO] {e}")
-        return
-    if not release._pending(st) and st.data["posted"]:
-        release.refresh_unknown(st, svc)
-    if not release._pending(st):
+    any_pending = False
+    for a in accounts.active():
+        try:
+            svc = yt.get_service(interactive=False, token=accounts.token_file(a))
+        except yt.UploadError as e:
+            print(f"\n[ERRO] {accounts.label(a)}: {e}")
+            continue
+        if not release._pending(st, a["id"]) and st.data["posted"]:
+            release.refresh_unknown(st, svc, a["id"])
+        if not release._pending(st, a["id"]):
+            continue
+        any_pending = True
+        try:
+            release.release_step(st, svc, log, force=True, acc=a["id"])
+        except yt.UploadError as e:
+            print(f"\n[ERRO] {accounts.label(a)}: {e}")
+    if not any_pending:
         print("\nNenhum vídeo privado esperando liberação.")
-        return
-    try:
-        release.release_step(st, svc, log, force=True)
-    except yt.UploadError as e:
-        print(f"\n[ERRO] {e}")
 
 
 def _parse_gpu(v: str):
@@ -191,7 +218,7 @@ def main():
 
     print("\n  1) Colar um link: baixa, edita e posta os cortes")
     print("  2) Modo automático: procura vídeos bombando e posta sem parar")
-    print("  3) Conectar / trocar o canal do YouTube")
+    print("  3) Conectar um canal do YouTube (canal novo entra na lista; um que já está troca o login)")
     print("  4) Ver fila e vídeos postados")
     print("  5) Conferir agora se a auditoria saiu e liberar vídeos privados")
     print(f"  6) Modo: 25% / 50% / 70% / sem limite / só postar (agora: "

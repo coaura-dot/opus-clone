@@ -11,8 +11,10 @@ Desenho (pensado pra rodar dias seguidos sem ninguém olhando):
     desligou o PC no meio, ao abrir de novo continua de onde parou.
   - postagem espaçada (AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS) e só dentro do
     horário configurado; fora dele continua produzindo clipes pra fila.
-  - respeita a cota diária da API do YouTube (6 uploads/dia no padrão);
-    acabou a cota, espera zerar (meia-noite do horário do Pacífico).
+  - respeita a cota diária da API do YouTube; acabou a cota, espera zerar
+    (meia-noite do horário do Pacífico).
+  - vários canais (src/accounts.py): alterna entre eles, cada um no ritmo
+    dele (4 por dia em cada com vários canais: 6 canais = 1 post por hora).
   - mantém o PC acordado enquanto roda (Windows).
 """
 import json
@@ -29,6 +31,7 @@ from typing import Optional
 
 from . import config
 from . import reach
+from .accounts import FIRST, label, posted_by, sub
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = ROOT / "autopilot_data"
@@ -176,36 +179,55 @@ class Interrupted(Exception):
 
 _PRIO = {"low": None}
 _AUTO = {"on": False}
-# login do YouTube caído: o piloto acorda assim que o arquivo do login mudar
-# (botão "Conectar canal do YouTube" da interface), sem esperar 1 h
-_AUTH = {"down": False, "mtime": None}
+# login do YouTube caído: o piloto acorda assim que o arquivo do login do
+# canal mudar (botão "Reconectar" da interface), sem esperar 1 h. Canal novo
+# adicionado com o piloto ligado também acorda (contas.json mudou).
+_AUTH = {}            # canal -> data do arquivo de login quando caiu
+_DEAD = {}            # canal -> o último erro foi login morto (False = rede etc.: tenta em 10 min)
+_REG = {"mtime": None}
 
 
-def _token_mtime():
-    from . import youtube_uploader as yt
+def _token_mtime(acc: str = FIRST):
+    from . import accounts
+    a = accounts.get(acc)
     try:
-        return yt.token_path().stat().st_mtime
+        return accounts.token_file(a).stat().st_mtime if a else None
     except OSError:
         return None
 
 
-def _auth_lost(state, log: Log, msg: str) -> None:
-    """Login morto: avisa uma vez (log + interface) e espera um login novo."""
-    _AUTH.update(down=True, mtime=_token_mtime())
-    if state is not None and (state.data.get("auth_down") or {}).get("msg") != msg:
-        state.data["auth_down"] = {"at": time.time(), "msg": msg}
+def _auth_lost(state, log: Log, msg: str, acc: str = FIRST) -> None:
+    """Login morto: avisa (log + interface) e espera um login novo. No log,
+    o mesmo aviso do mesmo canal no máximo a cada 6 h."""
+    _AUTH[acc] = _token_mtime(acc)
+    if state is None:
+        log(f"  [!] YouTube [{label(acc)}]: {msg}")
+        return
+    me = sub(state, acc)
+    old = me.get("auth_down") or {}
+    # login trocado depois do aviso e ainda ruim: aviso novo (a interface
+    # esconde o aviso mais velho que o arquivo do login)
+    fresh = (_AUTH[acc] or 0) > old.get("at", 0)
+    if old.get("msg") != msg or fresh or time.time() - old.get("logged", 0) > 6 * 3600:
+        log(f"  [!] YouTube [{label(acc)}]: {msg}")
+        me["auth_down"] = {"at": time.time() if old.get("msg") != msg or fresh else old.get("at"), "msg": msg,
+                           "logged": time.time()}
         state.save()
-    log(f"  [!] YouTube: {msg}")
 
 
-def _auth_back(state) -> None:
-    _AUTH.update(down=False, mtime=None)
-    if state is not None and state.data.pop("auth_down", None) is not None:
+def _auth_back(state, acc: str = FIRST) -> None:
+    _AUTH.pop(acc, None)
+    if state is not None and sub(state, acc).pop("auth_down", None) is not None:
         state.save()
 
 
-def _relogged() -> bool:
-    return _AUTH["down"] and _token_mtime() != _AUTH["mtime"]
+def _relogged(acc: Optional[str] = None) -> bool:
+    """Algum canal caído ganhou login novo (ou entrou canal novo na lista)?"""
+    from . import accounts
+    if acc is not None:
+        return acc in _AUTH and _token_mtime(acc) != _AUTH[acc]
+    return any(_token_mtime(a) != m for a, m in list(_AUTH.items())) or \
+        (_REG["mtime"] is not None and accounts.mtime() != _REG["mtime"])
 
 
 def low_priority(on: bool) -> None:
@@ -369,21 +391,23 @@ def _in_post_window() -> bool:
 
 
 def daily_limit() -> int:
-    """Posts por dia: o que foi escolhido na interface (autopilot_data/
-    posts_por_dia.txt) ou AUTOPILOT_POSTS_PER_DAY (6). O piloto tenta até o
-    próprio YouTube recusar (se a cota for aumentada, já posta mais sem
-    mudar nada) e o que passar vai pra pasta "postar à mão"
-    (src/manual_post.py). Já foi 24 por pedido do usuário; voltou a 6 porque
-    com 1 post por hora o YouTube parou de entregar os Shorts (src/reach.py).
-    AUTOPILOT_LIMIT_BY_QUOTA = True volta ao limite calculado pela cota
-    (1.600 por upload)."""
+    """Shorts por dia EM CADA CANAL: o que foi escolhido na interface
+    (autopilot_data/posts_por_dia.txt) ou AUTOPILOT_POSTS_PER_DAY (6). Já foi
+    24 num canal só por pedido do usuário; voltou a 6 porque com 1 post por
+    hora o YouTube parou de entregar os Shorts (src/reach.py). Com vários
+    canais (src/accounts.py) o padrão vira 4 em cada: 6 canais = 24 por dia,
+    1 por hora no total."""
     from . import control
     want = control.posts_per_day() or getattr(config, "AUTOPILOT_POSTS_PER_DAY", 6)
-    if not getattr(config, "AUTOPILOT_LIMIT_BY_QUOTA", False):
-        return max(want, 0)
-    reserve = getattr(config, "AUTOPILOT_RELEASE_PER_DAY", 3) * 50 + 100
-    by_quota = max(getattr(config, "YOUTUBE_DAILY_QUOTA", 10000) - reserve, 0) // 1600
-    return max(min(want, by_quota), 0)
+    return max(want, 0)
+
+
+def total_per_day(n_channels: Optional[int] = None) -> int:
+    """Shorts por dia somando todos os canais ligados."""
+    if n_channels is None:
+        from . import accounts
+        n_channels = len(accounts.active())
+    return daily_limit() * max(n_channels, 1)
 
 
 def _window_hours() -> float:
@@ -391,39 +415,102 @@ def _window_hours() -> float:
     return float((end - start) % 24 or 24)
 
 
-def post_gap_seconds(state=None) -> float:
-    """Intervalo entre posts: espalha o limite do dia pela janela de
-    postagem inteira (com 6/dia em 24h: 1 a cada 4h; com 24/dia: 1 por
-    hora), nunca menos que AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS. Sem isso,
-    "1 por hora" com cota de 6 postava tudo de madrugada e parava.
-    Com o freio de alcance ligado (src/reach.py), no máximo 1 a cada
-    AUTOPILOT_REACH_BRAKE_HOURS. `state`: State ou o dict do state.json."""
-    from . import reach
+def _base_gap() -> float:
     minimum = getattr(config, "AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS", 60) * 60
     limit = daily_limit()
     spread = _window_hours() * 3600 / limit if limit else minimum
-    gap = max(minimum, spread)
-    data = getattr(state, "data", state)
-    if data is not None and reach.braked(data):
+    return max(minimum, spread)
+
+
+def post_gap_seconds(state=None, acc: str = FIRST) -> float:
+    """Intervalo entre posts NO MESMO CANAL: espalha o limite do dia pela
+    janela de postagem inteira (com 6/dia em 24h: 1 a cada 4h; com 4/dia: 1
+    a cada 6h), nunca menos que AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS. Sem
+    isso, "1 por hora" com cota de 6 postava tudo de madrugada e parava.
+    Com o freio de alcance do canal ligado (src/reach.py), no máximo 1 a
+    cada AUTOPILOT_REACH_BRAKE_HOURS. `state`: State ou o dict do state.json."""
+    gap = _base_gap()
+    if state is not None and reach.braked(state, acc):
         gap = max(gap, reach.brake_hours() * 3600)
     return gap
 
 
-def can_post_now(state: State, ignore_schedule: bool = False) -> tuple:
-    """(pode?, motivo/hora da próxima tentativa)."""
+def global_gap_seconds(n_live: int) -> float:
+    """Entre posts de canais DIFERENTES: os canais se revezam dentro do
+    intervalo de cada um (6 canais com 1 post a cada 6 h em cada = 1 post
+    por hora no total, alternando)."""
+    return _base_gap() / max(n_live, 1)
+
+
+def posts_last_24h(data, acc: str) -> list:
+    now = time.time()
+    return sorted(p.get("at", 0) for p in posted_by(data, acc)
+                  if not p.get("found_on_channel") and now - p.get("at", 0) < 86400)
+
+
+def account_next(data, acc: str) -> float:
+    """Quando o canal pode postar de novo, pelo ritmo dele (sem contar os outros)."""
+    me = sub(data, acc)
+    t = max(me.get("last_post_at", 0) + post_gap_seconds(data, acc), me.get("blocked_until", 0))
+    recent, limit = posts_last_24h(data, acc), daily_limit()
+    if limit <= 0:
+        return time.time() + 86400
+    if len(recent) >= limit:  # já postou o limite nas últimas 24 h (ex.: link colado na mão)
+        t = max(t, recent[-limit] + 86400)
+    return t
+
+
+def next_slot(data, live: list) -> tuple:
+    """(canal, hora) do próximo post: o canal que espera há mais tempo, sem
+    dois posts mais perto que global_gap_seconds. `live`: ids dos canais com
+    login funcionando."""
+    d = getattr(data, "data", data)
+    now = time.time()
+    if not live:
+        return None, now + 1800
+    best = min(live, key=lambda a: (account_next(d, a), sub(d, a).get("last_post_at", 0)))
+    t = max(account_next(d, best), d.get("last_post_at", 0) + global_gap_seconds(len(live)),
+            d.get("blocked_until", 0))
+    if t <= now and not _in_post_window():
+        t = now + 15 * 60
+    return best, t
+
+
+def projected(data, live: list) -> dict:
+    """{canal: hora do próximo post dele} simulando o revezamento (pra
+    interface mostrar a ordem certa: só um canal posta de cada vez)."""
+    import copy
+    d = getattr(data, "data", data) or {}
+    now = time.time()
+    sim = {"accounts": copy.deepcopy(d.get("accounts", {})), "last_post_at": d.get("last_post_at", 0),
+           "blocked_until": d.get("blocked_until", 0),
+           "posted": [dict(p) for p in d.get("posted", []) if now - p.get("at", 0) < 86400]}
+    out = {}
+    for _ in range(2 * len(live)):
+        acc, t = next_slot(sim, live)
+        if acc is None:
+            break
+        out.setdefault(acc, t)
+        if len(out) == len(live):
+            break
+        sub(sim, acc)["last_post_at"] = t
+        sim["last_post_at"] = t
+        sim["posted"].append({"account": acc, "at": t})
+    return out
+
+
+def can_post_now(state: State, ignore_schedule: bool = False, live: Optional[list] = None) -> tuple:
+    """(pode?, hora da próxima tentativa) -- algum canal pode postar agora?"""
     now = time.time()
     if now < state.data.get("blocked_until", 0):
         return False, state.data["blocked_until"]
-    if state.uploads_today() >= daily_limit():
-        return False, _next_pacific_midnight()
     if ignore_schedule:
         return True, now
-    nxt = state.data.get("last_post_at", 0) + post_gap_seconds(state)
-    if now < nxt:
-        return False, nxt
-    if not _in_post_window():
-        return False, now + 15 * 60
-    return True, now
+    if live is None:
+        from . import accounts
+        live = [a["id"] for a in accounts.active()] or [FIRST]
+    _, t = next_slot(state, live)
+    return t <= now, t
 
 
 def _prio(c: dict) -> int:
@@ -497,10 +584,10 @@ def _pool_deadline(state: State) -> float:
     return since + getattr(config, "AUTOPILOT_POOL_MAX_WAIT_HOURS", 3) * 3600 if since else 0.0
 
 
-def _diversity_penalty(state: State, item: dict) -> float:
-    """Não posta o mesmo vídeo/podcast em sequência (achado real: os 2
-    últimos posts eram do mesmo vídeo do Market Makers)."""
-    posted = state.data["posted"]
+def _diversity_penalty(state: State, item: dict, acc: str = FIRST) -> float:
+    """Não posta o mesmo vídeo/podcast em sequência NO MESMO CANAL (achado
+    real: os 2 últimos posts eram do mesmo vídeo do Market Makers)."""
+    posted = posted_by(state, acc)
     if not posted:
         return 0.0
     ch, now = _channel_of(state, item), time.time()
@@ -549,35 +636,44 @@ def _ai_compare(state: State, queue: list, key, log: Log) -> None:
     state.save()
 
 
-def _quota_hit(state: State, e, key, log: Log) -> None:
-    """A API do YouTube recusou por cota/limite: para de postar até a cota
-    zerar e manda o que faltava pra meta do dia pra pasta "postar à mão"."""
+def _quota_hit(state: State, e, key, log: Log, acc: str = FIRST) -> None:
+    """O YouTube recusou por limite. Limite do CANAL (uploadLimitExceeded):
+    só esse canal para até a meia-noite do Pacífico. Cota do PROJETO da API:
+    todos param e o que faltava pra meta do dia vai pra pasta "postar à mão"."""
     until = _next_pacific_midnight()
+    day = _pacific_day()
+    if "uploadLimitExceeded" in str(e):
+        me = sub(state, acc)
+        me["blocked_until"] = until
+        state.save()
+        log(f"    [!] {e} -- o canal \"{label(acc)}\" chegou no limite de uploads dele hoje; volto a postar "
+            f"nele em {datetime.fromtimestamp(until):%d/%m %H:%M} (os outros canais continuam).")
+        if me.get("limit_explained_day") != day:
+            me["limit_explained_day"] = day
+            state.save()
+            log("        Esse é o limite de uploads do CANAL no dia (não da API). Canal verificado por "
+                "telefone tem limite maior: youtube.com/verify")
+        return
     state.data["blocked_until"] = until
     state.save()
     done = state.uploads_today()
     log(f"    [!] {e} -- {done} postado(s) hoje pela API; volto a postar em "
         f"{datetime.fromtimestamp(until):%d/%m %H:%M}.")
-    day = _pacific_day()
     if state.data.get("quota_explained_day") != day:
         state.data["quota_explained_day"] = day
         state.save()
-        if "uploadLimitExceeded" in str(e):
-            log("        Esse é o limite de uploads do CANAL no dia (não da API). Canal verificado por "
-                "telefone tem limite maior: youtube.com/verify")
-        else:
-            log("        A cota padrão da API do YouTube (10.000 unidades) dá ~6 uploads por dia. Pra postar "
-                f"{daily_limit()} sozinho, peça o aumento de cota (é grátis): "
-                "https://support.google.com/youtube/contact/yt_api_form -- peça 40.000 unidades. "
-                "Quando aprovarem, o piloto já posta mais sem mudar nada.")
+        log("        A cota do projeto da API do YouTube acabou por hoje (o padrão é 100 uploads por dia "
+            "por projeto, somando todos os canais). Se acontecer sempre, peça aumento (é grátis): "
+            "https://support.google.com/youtube/contact/yt_api_form. Vários projetos pra somar cota é "
+            "proibido pelas regras da API -- o programa não faz.")
     from . import manual_post
-    manual_post.export(state, daily_limit() - done, day, key, log)
+    manual_post.export(state, total_per_day() - done, day, key, log)
 
 
 def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
-              strict: bool = False) -> bool:
-    """Posta o melhor clipe da fila. True se postou. `strict` (modo só
-    postar): ordem pura da nota, do maior pro menor, sem a regra de
+              strict: bool = False, acc: str = FIRST) -> bool:
+    """Posta o melhor clipe da fila no canal `acc`. True se postou. `strict`
+    (modo só postar): ordem pura da nota, do maior pro menor, sem a regra de
     variedade de podcast."""
     from . import youtube_uploader as yt
     from . import channel_check
@@ -612,11 +708,11 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     # no só postar -- a ordem da nota continua entre os outros
     gap = getattr(config, "AUTOPILOT_SAME_SOURCE_GAP_HOURS", 24) * 3600
     now = time.time()
-    recent_src = {p.get("source_id") for p in state.data["posted"]
+    recent_src = {p.get("source_id") for p in posted_by(state, acc)
                   if gap and p.get("source_id") and now - p.get("at", 0) < gap}
 
     def key(c):
-        div = 0.0 if strict else _diversity_penalty(state, c)
+        div = 0.0 if strict else _diversity_penalty(state, c, acc)
         same = 1 if (c.get("source_id") in recent_src and not _prio(c)) else 0
         return (-_prio(c), same, -(rank_key(c, weights) - div), c.get("added", 0))
     _ai_compare(state, queue, key, log)
@@ -637,14 +733,14 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     # postou o vídeo em questão" -- ver src/channel_check.py)
     # (repostagem de vídeo travado como privado tem o MESMO título de propósito)
     try:
-        dup = None if item.get("replaces") else channel_check.already_posted(service, state, meta["title"])
+        dup = None if item.get("replaces") else channel_check.already_posted(service, state, meta["title"], acc)
     except channel_check.CheckFailed as e:
         if str(e).startswith("quotaExceeded"):
-            _quota_hit(state, e, key, log)
+            _quota_hit(state, e, key, log, acc)
             return False
         if yt.dead_login(e):
             raise yt.AuthError(yt.DEAD_LOGIN_HINT) from e
-        state.data["blocked_until"] = time.time() + 10 * 60
+        sub(state, acc)["blocked_until"] = time.time() + 10 * 60
         state.save()
         log(f"    [!] não consegui conferir no canal se \"{meta['title']}\" já foi postado ({e}); "
             "confiro de novo em 10 min (não posto às cegas).")
@@ -654,7 +750,8 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         if not any(p.get("youtube_id") == dup["id"] for p in state.data["posted"]):
             state.data["posted"].append({"youtube_id": dup["id"], "title": meta["title"], "at": dup["at"],
                                          "source_id": item.get("source_id"), "video": item["video"],
-                                         "channel": _channel_of(state, item), "found_on_channel": True})
+                                         "channel": _channel_of(state, item), "found_on_channel": True,
+                                         "account": dup.get("account") or acc})
         state.save()
         log(f"    \"{meta['title']}\" já está no canal ({dup['where']}): https://youtube.com/shorts/{dup['id']} "
             "-- tirei da fila, vou pro próximo.")
@@ -663,11 +760,11 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         others = len({_channel_of(state, c) for c in queue})
         log(f"  >> Escolhido entre {len(queue)} clipe(s) de {others} podcast(s): nota final "
             f"{rank_key(item, weights):.0f}" + (f" (IA: {item['ai_compare']}/100)" if "ai_compare" in item else ""))
-    log(f"  >> Postando no YouTube: \"{meta['title']}\"")
+    log(f"  >> Postando no YouTube [{label(acc)}]: \"{meta['title']}\"")
     try:
         vid = yt.upload_video(service, item["video"], meta, progress=log)
     except yt.QuotaExceeded as e:
-        _quota_hit(state, e, key, log)
+        _quota_hit(state, e, key, log, acc)
         return False
     except yt.AuthError:
         raise
@@ -677,7 +774,7 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         if item["attempts"] >= 3:
             queue.pop(0)
             log("    desisti desse clipe.")
-        state.data["blocked_until"] = time.time() + 15 * 60
+        sub(state, acc)["blocked_until"] = time.time() + 15 * 60
         state.save()
         return False
     queue.pop(0)
@@ -689,7 +786,7 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     entry = {"youtube_id": vid, "title": meta["title"], "at": time.time(),
              "source_id": item.get("source_id"), "video": item["video"],
              "video_sem_musica": item.get("video_sem_musica"), "privacy": privacy,
-             "channel": _channel_of(state, item)}
+             "channel": _channel_of(state, item), "account": acc}
     # a nota que ele teve, pra conferir com as views reais (src/feedback.py)
     for k in ("viral", "viral_parts", "quality", "ai_score", "ai_compare"):
         if k in item:
@@ -700,14 +797,11 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     if privacy == "?":
         del entry["privacy"]  # confere depois
     state.data["posted"].append(entry)
+    sub(state, acc)["last_post_at"] = time.time()
     state.count_upload()
     note = "" if privacy in ("public", "?") else f" [{privacy} -- libera sozinho quando a auditoria sair]"
     log(f"    postado: https://youtube.com/shorts/{vid}  "
-        f"({state.uploads_today()}/{daily_limit()} hoje){note}")
-    if queue:
-        _, nxt = can_post_now(state)
-        log(f"    próxima postagem às {datetime.fromtimestamp(max(nxt, time.time())):%H:%M} "
-            f"(1 a cada {post_gap_seconds(state) / 60:.0f} min, até {daily_limit()} por dia)")
+        f"({len(posts_last_24h(state, acc))}/{daily_limit()} nas últimas 24 h nesse canal){note}")
     if getattr(config, "AUTOPILOT_DELETE_POSTED_FILES", False):
         for f in (item["video"], item.get("video_sem_musica")):
             if f and Path(f).exists():
@@ -974,22 +1068,63 @@ def _sleep_until(ts: float, log: Log, why: str):
             return
 
 
-def _get_service(log: Log, upload: bool, state=None):
+def _get_service(log: Log, upload: bool, state=None, acc: Optional[dict] = None):
+    """Conecta um canal (sem abrir navegador). None se o login não serve."""
     if not upload:
         return None
+    from . import accounts
     from . import youtube_uploader as yt
+    acc = acc or accounts.get(FIRST) or {"id": FIRST, "token": accounts.LEGACY_TOKEN}
+    aid = acc["id"]
     try:
-        svc = yt.get_service(interactive=False)
-        name, problem = yt.channel_check(svc)
+        svc = yt.get_service(interactive=False, token=accounts.token_file(acc))
+        cid, name, problem = yt.channel_info(svc)
+        if not problem:
+            problem = accounts.learn(aid, cid, name)
         if problem:
-            _auth_lost(state, log, problem)
+            _auth_lost(state, log, problem, aid)
             return None
         log(f"  YouTube conectado: canal \"{name}\"")
-        _auth_back(state)
+        _auth_back(state, aid)
         return svc
     except yt.UploadError as e:
-        _auth_lost(state, log, str(e))
+        _DEAD[aid] = yt.dead_login(e) or "sem login" in str(e) or "falta o arquivo" in str(e)
+        _auth_lost(state, log, str(e), aid)
         return None
+
+
+def _sync_services(svcs: dict, next_try: dict, state, log: Log, upload: bool) -> list:
+    """Conecta os canais da lista (canal novo, login novo, uma vez por hora os
+    caídos), renova o acesso dos conectados e solta os que saíram da lista
+    ou foram pausados. Devolve os ids dos canais prontos pra postar."""
+    from . import accounts
+    from . import youtube_uploader as yt
+    accs = accounts.active() if upload else []
+    _REG["mtime"] = accounts.mtime()
+    ids = [a["id"] for a in accs]
+    for gone in [k for k in svcs if k not in ids]:
+        svcs.pop(gone, None)
+        _AUTH.pop(gone, None)
+    now = time.time()
+    for a in accs:
+        aid = a["id"]
+        if svcs.get(aid) is None:
+            if now >= next_try.get(aid, 0) or _relogged(aid):
+                if _relogged(aid):
+                    log(f"  Login novo do canal \"{label(a)}\": conectando...")
+                _DEAD[aid] = True
+                svcs[aid] = _get_service(log, upload, state, a)
+                next_try[aid] = now + (3600 if _DEAD.get(aid, True) else 600)
+            continue
+        # o acesso vence a cada hora: renova antes de usar (login morto ->
+        # para de tentar nesse canal e avisa, em vez de errar em tudo)
+        try:
+            yt.ensure_fresh(svcs[aid])
+        except yt.AuthError as e:
+            _auth_lost(state, log, str(e), aid)
+            svcs[aid] = None
+            next_try[aid] = now + 3600
+    return [aid for aid in ids if svcs.get(aid) is not None]
 
 
 def run_forever(upload: bool = True):
@@ -1026,15 +1161,22 @@ def _run_forever(upload: bool = True):
         "(ou feche a janela do .bat)")
     log(f"  canais: {', '.join(getattr(config, 'AUTOPILOT_CHANNELS', [])) or '(nenhum)'}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
+    from . import accounts
+    accounts.migrate_state(state)  # antes da v46: um canal só
+    accs = accounts.active() if upload else []
     log(f"  postagem: {'LIGADA' if upload else 'DESLIGADA (só gera os clipes)'} -- até "
-        f"{daily_limit()}/dia, 1 a cada {post_gap_seconds(state) / 60:.0f} min, "
-        f"das {getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[0]}h às "
-        f"{getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[1]}h")
+        f"{daily_limit()}/dia{' em cada canal' if len(accs) > 1 else ''}, 1 a cada {_base_gap() / 60:.0f} min"
+        f"{' no mesmo canal' if len(accs) > 1 else ''}, das {getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[0]}h "
+        f"às {getattr(config, 'AUTOPILOT_POST_HOURS', (0, 24))[1]}h")
+    if len(accs) > 1:
+        log(f"  canais do YouTube ({len(accs)}): {', '.join(label(a) for a in accs)}")
     log(f"  fila atual: {len(state.data['queue'])} clipe(s) | já postados: {len(state.data['posted'])}")
-    if reach.braked(state.data):
-        b = state.data["reach_brake"]
-        log(f"  [alcance] FREIO LIGADO: os últimos Shorts tiveram {', '.join(map(str, b.get('recent', [])))} "
-            f"views (antes ~{b.get('base', 0):.0f}) -- 1 post a cada {reach.brake_hours():.0f} h até voltar.")
+    for a in accs:
+        b = reach.brake_of(state, a["id"])
+        if b:
+            log(f"  [alcance] FREIO LIGADO em \"{label(a)}\": os últimos Shorts tiveram "
+                f"{', '.join(map(str, b.get('recent', [])))} views (antes ~{b.get('base', 0):.0f}) -- "
+                f"1 post a cada {reach.brake_hours():.0f} h nesse canal até voltar.")
     log("=" * 60)
 
     from . import rights
@@ -1055,54 +1197,52 @@ def _run_forever(upload: bool = True):
     from . import housekeeping
     housekeeping.clean_work_dir(log)
     housekeeping.cleanup(state, out_root, log)
-    service = _get_service(log, upload, state)
-    next_auth_try = time.time() + 3600
+    svcs, next_try = {}, {}  # canal -> serviço do YouTube (None = sem login agora)
+    live = _sync_services(svcs, next_try, state, log, upload)
+    if len(live) > 1:
+        log(f"  {len(live)} canais conectados: {daily_limit()} Shorts por dia em cada, alternando "
+            f"(1 post a cada {global_gap_seconds(len(live)) / 60:.0f} min no total).")
+    cur = {"acc": None}  # canal em uso agora (erro de login inesperado = desse canal)
     failures = 0
     startup = True
     last_mode = None
     _AUTO["on"] = True  # só o modo automático para a edição ao trocar pra "só postar"
+    from . import youtube_uploader as yt
     while True:
         try:
-            if upload and service is None and (time.time() >= next_auth_try or _relogged()):
-                if _relogged():
-                    log("  Login do YouTube novo: conectando...")
-                service = _get_service(log, upload, state)
-                next_auth_try = time.time() + 3600
-            if service is not None:
-                # o acesso vence a cada hora: renova antes de usar (login
-                # morto -> para de tentar e avisa, em vez de errar em tudo)
-                from . import youtube_uploader as yt
-                try:
-                    yt.ensure_fresh(service)
-                except yt.AuthError as e:
-                    _auth_lost(state, log, str(e))
-                    service = None
-                    next_auth_try = time.time() + 3600
+            live = _sync_services(svcs, next_try, state, log, upload)
 
             # 0) vídeos que subiram privados: confere a auditoria / solta aos poucos
-            if service is not None:
+            acted = False
+            if live:
                 from . import release
-                from . import youtube_uploader as yt
-                try:
-                    acted = release.release_step(state, service, log, startup=startup)
-                except yt.QuotaExceeded as e:
-                    state.data["blocked_until"] = _next_pacific_midnight()
-                    state.save()
-                    log(f"  [!] {e}")
-                    acted = False
+                for aid in live:
+                    cur["acc"] = aid
+                    try:
+                        acted = release.release_step(state, svcs[aid], log, startup=startup, acc=aid) or acted
+                    except yt.QuotaExceeded as e:
+                        state.data["blocked_until"] = _next_pacific_midnight()
+                        state.save()
+                        log(f"  [!] {e}")
+                        break
                 startup = False
                 if acted:
                     continue
 
             expire_queue(state, log)
-            if service is not None:
-                # a nota de viralidade acerta? confere com as views reais (1x por dia)
+            if live:
+                # a nota de viralidade acerta? confere com as views reais (1x por dia;
+                # views de vídeo público: qualquer login lê)
                 from . import feedback
-                feedback.refresh_views(state, service, log)
+                cur["acc"] = live[0]
+                feedback.refresh_views(state, svcs[live[0]], log)
                 feedback.calibrate(state, log)
-                # o vídeo postado está visível ou o Content ID bloqueou? (src/rights.py)
+                # o vídeo postado está visível ou o Content ID bloqueou? (src/rights.py;
+                # cada canal com o login dele)
                 from . import rights
-                rights.check_recent_posts(state, service, log)
+                for aid in live:
+                    cur["acc"] = aid
+                    rights.check_recent_posts(state, svcs[aid], log, aid)
 
             # modo SÓ POSTAR (src/control.py): lido a cada volta -- a interface
             # troca com o piloto ligado
@@ -1114,30 +1254,35 @@ def _run_forever(upload: bool = True):
                 last_mode = only_post
             low_priority(only_post)
 
-            # 1) postar, se estiver na hora -- e se o banco de clipes já tem
-            # opção de podcasts diferentes pra escolher o mais viral (no só
-            # postar não chega clipe novo: posta o melhor que tiver)
+            # 1) postar, se estiver na hora de algum canal -- e se o banco de
+            # clipes já tem opção de podcasts diferentes pra escolher o mais
+            # viral (no só postar não chega clipe novo: posta o melhor que tiver)
             waiting_pool = False
-            if service is not None and state.data["queue"]:
+            if live and state.data["queue"]:
                 # o YouTube está entregando os últimos Shorts? (freio
-                # automático, src/reach.py -- confere a cada 2 h)
-                reach.check(service, state, log)
-                ok, _ = can_post_now(state)
+                # automático de cada canal, src/reach.py -- confere a cada 2 h)
+                for aid in live:
+                    cur["acc"] = aid
+                    reach.check(svcs[aid], state, log, acc=aid, name=label(aid) if len(live) > 1 else "")
+                aid, nxt = next_slot(state, live)
+                ok = aid is not None and nxt <= time.time()
                 waiting_pool = ok and not only_post and not pool_ready(state, log)
                 if ok and not waiting_pool:
-                    from . import youtube_uploader as yt
+                    cur["acc"] = aid
                     try:
-                        post_next(state, service, log, strict=only_post)
+                        post_next(state, svcs[aid], log, strict=only_post, acc=aid)
                     except yt.AuthError as e:
-                        _auth_lost(state, log, str(e))
-                        service = None
-                        next_auth_try = time.time() + 3600
+                        _auth_lost(state, log, str(e), aid)
+                        svcs[aid] = None
+                        next_try[aid] = time.time() + 3600
                     housekeeping.cleanup(state, out_root, log)
                     continue
+            cur["acc"] = None
 
             # 2) produzir, se a fila estiver curta (e o YouTube não estiver
-            # bloqueando downloads -- ver YoutubeBlocked)
-            target = getattr(config, "AUTOPILOT_QUEUE_TARGET", 8)
+            # bloqueando downloads -- ver YoutubeBlocked). Com vários canais a
+            # fila precisa de mais clipes (até 1 dia de posts).
+            target = max(getattr(config, "AUTOPILOT_QUEUE_TARGET", 8), total_per_day(len(live)) if live else 0)
             local_until = state.data.get("local_fail_until", 0)
             blocked_until = max(state.data.get("download_blocked_until", 0), local_until)
             if (not only_post and len(state.data["queue"]) < target and time.time() >= blocked_until
@@ -1201,17 +1346,17 @@ def _run_forever(upload: bool = True):
                 continue
 
             # 3) fila cheia (ou downloads pausados): espera a próxima postagem
-            if only_post and service is None:
-                _sleep_until(time.time() + 1800, log, "só postar: postagem indisponível (confira o login do "
+            if only_post and not live:
+                _sleep_until(time.time() + 1800, log, "só postar: postagem indisponível (confira os canais do "
                              "YouTube na interface)")
             elif only_post and not state.data["queue"]:
                 _sleep_until(time.time() + 1800, log, "só postar: a fila acabou, nada pra postar (ligue um "
                              "modo de GPU pra fazer mais clipes)")
-            elif time.time() < blocked_until and not (service is not None and state.data["queue"]):
+            elif time.time() < blocked_until and not (live and state.data["queue"]):
                 _sleep_until(blocked_until, log, "edição pausada (problema no PC)" if blocked_until == local_until
                              else "downloads pausados pelo bloqueio do YouTube")
-            elif service is not None and state.data["queue"]:
-                _, nxt = can_post_now(state)
+            elif live and state.data["queue"]:
+                nxt_acc, nxt = next_slot(state, live)
                 if waiting_pool:
                     nxt = _pool_deadline(state)  # posta o melhor que tiver nessa hora
                 wake = min(nxt, time.time() + 3600)
@@ -1219,23 +1364,24 @@ def _run_forever(upload: bool = True):
                     wake = min(wake, blocked_until)  # volta a baixar assim que a pausa acabar
                 if not only_post:
                     score_idle(state, log, wake)
+                where = f" no canal \"{label(nxt_acc)}\"" if len(live) > 1 and nxt_acc else ""
                 _sleep_until(wake, log,
                              f"fila com {len(state.data['queue'])} clipe(s); próxima postagem às "
-                             f"{datetime.fromtimestamp(max(nxt, time.time())):%H:%M}")
+                             f"{datetime.fromtimestamp(max(nxt, time.time())):%H:%M}{where}")
             else:
                 _sleep_until(time.time() + 1800, log,
-                             "fila cheia e postagem indisponível (confira o login do YouTube)")
+                             "fila cheia e postagem indisponível (confira os canais do YouTube na interface)")
         except KeyboardInterrupt:
             from . import control
             log("  Piloto automático desligado" + (" (botão Desligar)." if control.stop_requested() else " (Ctrl+C)."))
             keep_awake(False)
             return
         except Exception as e:  # nada derruba o loop
-            from . import youtube_uploader as yt
-            if service is not None and yt.dead_login(e):
-                _auth_lost(state, log, yt.DEAD_LOGIN_HINT)
-                service = None
-                next_auth_try = time.time() + 3600
+            aid = cur["acc"]
+            if aid and svcs.get(aid) is not None and yt.dead_login(e):
+                _auth_lost(state, log, yt.DEAD_LOGIN_HINT, aid)
+                svcs[aid] = None
+                next_try[aid] = time.time() + 3600
                 continue
             failures += 1
             wait = min(60 * 2 ** failures, 3600)
@@ -1266,17 +1412,17 @@ def _run_once(url: str, n_clips: int, upload: bool = True):
     log = Log(DATA_DIR / "autopilot.log")
     state = State(DATA_DIR / "state.json")
     keep_awake(True)
-    service = None
+    svcs, live = {}, []
     if upload:
-        from . import youtube_uploader as yt
-        try:
-            service = yt.get_service(interactive=True)
-            name, problem = yt.channel_check(service)
-            if problem:
-                raise yt.UploadError(problem)
-            log(f"  YouTube conectado: canal \"{name}\"")
-        except yt.UploadError as e:
-            log(f"  [!] YouTube: {e}")
+        from . import accounts
+        accounts.migrate_state(state)
+        if not accounts.load():  # nenhum canal ainda: conecta o primeiro agora
+            try:
+                accounts.login(out=log)
+            except Exception as e:
+                log(f"  [!] YouTube: {e}")
+        live = _sync_services(svcs, {}, state, log, upload)
+        if not live:
             log("  Vou gerar os clipes mesmo assim; eles ficam na fila pra postar depois.")
     vid = _video_id(url) or f"manual_{int(time.time())}"
     source = {"id": vid, "url": url, "title": url}
@@ -1287,10 +1433,11 @@ def _run_once(url: str, n_clips: int, upload: bool = True):
         log(f"  [!] {e}")
         keep_awake(False)
         return
-    if not made or service is None:
+    if not made or not live:
         keep_awake(False)
         return
-    # posta os clipes deste vídeo agora (o resto da fila continua esperando)
+    # posta os clipes deste vídeo agora (o resto da fila continua esperando),
+    # um em cada canal, começando pelo que postou há mais tempo
     mine = [c for c in state.data["queue"][before:]]
     for c in mine:
         ok, nxt = can_post_now(state, ignore_schedule=True)
@@ -1298,9 +1445,14 @@ def _run_once(url: str, n_clips: int, upload: bool = True):
             log(f"  Limite diário do YouTube atingido; os outros clipes ficam na fila "
                 f"(o modo automático posta depois de {datetime.fromtimestamp(nxt):%d/%m %H:%M}).")
             break
+        free = [a for a in live if sub(state, a).get("blocked_until", 0) <= time.time()]
+        if not free:
+            log("  Nenhum canal pode receber agora; os outros clipes ficam na fila.")
+            break
+        aid = min(free, key=lambda a: sub(state, a).get("last_post_at", 0))
         state.data["queue"].remove(c)
         state.data["queue"].insert(0, dict(c, priority=2))  # este primeiro
-        post_next(state, service, log, ignore_schedule=True)
+        post_next(state, svcs[aid], log, ignore_schedule=True, acc=aid)
     keep_awake(False)
 
 

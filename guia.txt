@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 13/10/2026, versão atual v45
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 15/10/2026, versão atual v46
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -79,7 +79,10 @@ f) Na mensagem: o que mudou, o que foi testado (com números) e o que
 - Não baixar música comercial.
 - Não fazer spam nem burlar limites da plataforma: nada de vários projetos
   do Google pra somar cota, nada de automação de navegador pra passar da
-  cota da API ou da auditoria.
+  cota da API ou da auditoria. Vários CANAIS (v46) estão ok porque: um
+  projeto só (client_secret.json), cada clipe vai pra UM canal só (repetir
+  o mesmo vídeo em vários canais é spam pelas regras do YouTube) e cada
+  canal no ritmo que já funcionou (4-6 por dia).
 - Não usar proxy de terceiros pra furar o bloqueio "não sou um robô" do YouTube.
 - O servidor de PO token (bgutil) e a leitura de ia_search.py foram negados
   pelo classificador: não insistir.
@@ -160,7 +163,15 @@ src/control.py ..... arquivos de controle em autopilot_data/: piloto_ligado.json
 src/reach.py ....... freio automático: lê views dos próprios Shorts (API, 1
                      unidade a cada 2 h); 3 últimos maduros (8 h+) com <5% da
                      mediana anterior -> 1 post a cada 8 h até voltar
-src/channel_check.py "já está no canal?" antes de cada upload
+src/channel_check.py "já está no canal?" antes de cada upload (histórico de
+                     todos os canais + uploads do canal que recebe)
+src/accounts.py .... (v46) vários canais: credentials/contas.json (c1 = canal
+                     antigo, youtube_token.json; novos = id UC..., token
+                     youtube_token_<id>.json), login() (escolhe conta, canal
+                     repetido só troca o login), sub(state, acc) = pedaço do
+                     state.json de cada canal (last_post_at, blocked_until,
+                     reach_brake, uploads_playlist, auth_down...),
+                     posted[].account (sem = c1), migrate_state
 src/throttle.py .... limite de GPU (suspende/retoma processos)
 src/video_editor.py  build_clip: jump cuts, legenda, música, plano de cenas,
                      render; grava .meta.json ("versao") e clip_XX.origem.jpg
@@ -321,9 +332,36 @@ v45 (log: "invalid_grant: Token has been expired or revoked" desde 01:18 e,
     tenta de novo até 40 x 0,25 s.
 
 
+v46 (pedido: "multiconta: postar em 6 contas diferentes, 1 vídeo por hora,
+  alternando; interface pra colocar o login de cada conta"):
+  - API: desde dez/2025 videos.insert tem balde próprio de 100 uploads/dia
+    por projeto (antes 1.600 unidades cada). 24/dia cabem num projeto só;
+  - src/accounts.py (ver mapa); interface: card CANAIS DO YOUTUBE (linha por
+    canal: situação, posts em 24 h, próximo; Reconectar / Pausar / Remover;
+    + Adicionar canal = autopilot.py --login com prompt select_account);
+  - ritmo: daily_limit() = por canal (vira 4 ao adicionar o 2º canal);
+    post_gap_seconds(state, acc) = por canal (+ freio do canal);
+    global_gap_seconds(n) = gap / n canais vivos; next_slot(data, live) =
+    canal que espera há mais tempo; projected() = horários pra interface.
+    Simulado: 6 canais x 4 = 24/dia, exatamente 1 por hora, cada canal a
+    cada 6 h; freio num canal não acelera os outros;
+  - loop: _sync_services (conecta/renova/solta cada canal; _AUTH por canal;
+    acorda quando o token do canal ou contas.json muda); release, rights e
+    reach por canal com o login dele; feedback com qualquer login;
+    uploadLimitExceeded = só aquele canal até a meia-noite do Pacífico;
+    quotaExceeded = projeto inteiro;
+  - feedback.calibrate centraliza o log das views por canal;
+  - fila alvo = max(AUTOPILOT_QUEUE_TARGET, posts/dia somados); pasta de
+    cortes = 1 GB por canal ativo;
+  - "cortar um link" posta cada clipe num canal (o que postou há mais tempo).
+  - testes no scratchpad e9241813.../multi: sched.py (revezamento), acc.py
+    (cadastro/login/migração), loop.py (piloto com 3 canais), post.py,
+    gui.py (interface com 6 canais), legacy.py (1 canal, state antigo).
+
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v45 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v46 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

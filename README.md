@@ -167,11 +167,16 @@ crédito do vídeo original e da música.
   - **Ligar / Desligar:** desligar para em segundos e salva tudo; o vídeo
     que estava sendo editado volta pra lista. Se o piloto não responder em
     90 s, é encerrado à força.
-  - **Painel:** postados hoje (de 24), clipes na fila, próximo post, clipes
-    pra postar à mão, último post (clique abre no YouTube) e o log ao vivo,
-    com avisos em vermelho.
-  - **Atalhos:** cortar um link, conectar o canal do YouTube, abrir as
-    pastas "postar à mão" e dos cortes, YouTube Studio.
+  - **Canais do YouTube:** um por linha, com a situação (verde = postando,
+    amarelo = freio de alcance, vermelho = login caiu, cinza = pausado),
+    posts nas últimas 24 h e a hora do próximo post de cada um. Botões
+    **+ Adicionar canal**, **Reconectar**, **Pausar/Ativar** e **Remover**.
+    Ver "Vários canais" abaixo.
+  - **Painel:** postados hoje (somando os canais), clipes na fila, próximo
+    post, clipes pra postar à mão, último post (clique abre no YouTube) e o
+    log ao vivo, com avisos em vermelho.
+  - **Atalhos:** cortar um link, abrir as pastas "postar à mão" e dos
+    cortes, YouTube Studio.
   - O piloto roda escondido, sem janela preta. Se cair, a interface mostra
     o motivo no log (completo em `autopilot_data\piloto_saida.txt`) e religa
     em 60 s. Ao fechar a janela ela pergunta se é pra desligar o piloto ou
@@ -211,10 +216,13 @@ crédito do vídeo original e da música.
    4. em **Credenciais → Criar credenciais → ID do cliente OAuth**, tipo
       **App para computador**; baixe o JSON e salve como
       `credentials/client_secret.json` (dentro da pasta do programa).
-3. Rode `AUTO_CLIPPER_MENU.bat` → opção **3** (ou `python autopilot.py --login`).
-   Abre o navegador: escolha o canal e autorize. Como o app é seu e não é
+3. Na interface, em **CANAIS DO YOUTUBE**, clique em **+ Adicionar canal**
+   (ou `AUTO_CLIPPER_MENU.bat` → opção **3**, ou `python autopilot.py --login`).
+   Abre o navegador: escolha a conta e o canal e autorize. Como o app é seu e não é
    verificado, o Google mostra um aviso -- clique em **Avançado → Acessar**.
-   O login fica salvo em `credentials/youtube_token.json`.
+   O login fica salvo em `credentials/` (`youtube_token.json` no primeiro
+   canal; `youtube_token_<canal>.json` nos outros; a lista em
+   `credentials/contas.json`).
 
 **Importante -- regras do YouTube, não do programa:**
 
@@ -237,11 +245,13 @@ crédito do vídeo original e da música.
   ele posta no máximo 1 a cada 8 h até um Short novo voltar a pegar views.
   A interface mostra o aviso em amarelo. `AUTOPILOT_REACH_BRAKE = False`
   desliga.
-- **Cota:** a cota padrão é de 10.000 unidades por dia, e cada upload gasta
-  1.600, então a API aceita ~6 postagens por dia.
-  - **Pela API:** o piloto posta até o próprio YouTube recusar. Com a cota
-    aumentada, ele já posta mais sem mudar nada. Peça 40.000 unidades no
-    mesmo formulário da auditoria; é grátis.
+- **Cota:** desde dez/2025 o upload tem um balde próprio na API: **100
+  uploads por dia por projeto**, somando todos os canais conectados (antes
+  cada upload gastava 1.600 das 10.000 unidades e dava ~6 por dia). As
+  outras consultas (conferir canal, views, direitos) gastam as 10.000
+  unidades, bem longe do limite.
+  - **Pela API:** o piloto posta até o próprio YouTube recusar. Se um dia
+    precisar de mais, peça no formulário da auditoria; é grátis.
   - **Pasta "postar à mão":** quando o YouTube recusa, os melhores clipes da
     fila (o que falta pra chegar na meta do dia) vão para
     `output\postar_a_mao\<data>\`, com o `.mp4` e um `.txt` com título,
@@ -255,14 +265,51 @@ crédito do vídeo original e da música.
     canal. Por isso o programa não faz.
 - **Login que cai ("Token has been expired or revoked"):** com o app do
   Google Cloud em "Teste", o Google derruba o login a cada 7 dias. O piloto
-  para de tentar, avisa em vermelho na interface e espera. Clique em
-  **Conectar canal do YouTube**: o piloto ligado pega o login novo em
-  segundos e volta a postar. Pra não cair mais, publique o app
+  para de tentar nesse canal, avisa em vermelho na interface e espera.
+  Clique em **Reconectar** na linha do canal: o piloto ligado pega o login
+  novo em segundos e volta a postar. Pra não cair mais, publique o app
   (**Google Auth Platform → Público-alvo → Publicar app**) e conecte de
   novo uma vez: o login feito depois de publicar não vence.
 - **Direitos:** use canais que **liberam cortes**. Clipe de canal que não
   libera pode render reivindicação ou strike no seu canal. A descrição de cada
   vídeo já leva o crédito do vídeo original e da música.
+
+### Vários canais: o piloto alterna entre eles
+
+Pedido do usuário: postar em 6 canais, 1 vídeo por hora, alternando. Na
+interface, **CANAIS DO YOUTUBE → + Adicionar canal** pra cada canal (o
+Google mostra a lista de contas e de canais: escolha o certo). Pode
+adicionar com o piloto ligado: ele conecta o canal novo em segundos.
+
+- **Ritmo:** "Shorts por dia" vira **por canal**. Ao adicionar o 2º canal
+  ele passa sozinho pra **4 por canal**: com 6 canais são 24 por dia, **1
+  post por hora no total**, e cada canal posta **1 a cada 6 h** (o ritmo
+  que funcionou no canal principal; 1 por hora NUM canal só derrubou o
+  alcance). O canal que espera há mais tempo posta primeiro.
+- **Cada clipe vai pra um canal só.** O mesmo vídeo em vários canais é
+  spam pelas regras do YouTube ("conteúdo repetido em um ou mais canais").
+  Antes de cada post o piloto confere o histórico de todos os canais e a
+  lista de uploads do canal que vai receber.
+- **Cada canal com o seu:** freio de alcance (canal novo, sem views ainda,
+  não freia os outros), conferência de direitos autorais, liberação de
+  privados e limite de uploads do canal (se um bater no limite, os outros
+  continuam). A nota de viralidade aprende com as views **relativas a cada
+  canal** (o canal grande não ensina que todo clipe dele é melhor).
+- **Login caiu num canal:** a linha dele fica vermelha e os outros seguem
+  postando; **Reconectar** resolve.
+- **Pausar** tira o canal do revezamento sem perder o login; **Remover**
+  apaga o login dele deste PC (os vídeos postados continuam no canal).
+- **Um projeto do Google Cloud só.** Todos os canais usam o mesmo
+  `client_secret.json`. Usar vários projetos pra somar cota é proibido
+  pelas regras da API (o Google bloqueia os projetos), e o programa não faz.
+  Com o app do Google Cloud em "Teste", cada conta do Google que for logar
+  precisa estar em **Usuários de teste**, e o login cai a cada 7 dias. O
+  melhor é publicar o app (passo 3 da configuração).
+- **Produção:** com 24 posts por dia o PC precisa editar ~8 vídeos por dia.
+  A fila e a pasta de cortes crescem com o número de canais (até 1 dia de
+  clipes, 1 GB por canal). Use "Sem limite" se a fila esvaziar.
+- **Tamanho dos canais:** canal novo começa do zero; o freio de alcance dele
+  só liga depois que ele tiver histórico de views.
 
 ### Antes de cada post: esse vídeo já está no canal?
 
@@ -279,7 +326,7 @@ conferência, ele **não posta às cegas**: espera 10 min e confere de novo.
 A repostagem pública de um vídeo que ficou travado como privado não passa
 por essa conferência, porque usa o mesmo título de propósito.
 
-### Faxina automática: a pasta de cortes não passa de 1 GB
+### Faxina automática: a pasta de cortes não passa de 1 GB (por canal)
 
 O piloto limpa `output\autopiloto` sozinho (`src/housekeeping.py`): ao
 ligar, antes de cada vídeo novo, depois de cada edição e depois de cada
@@ -438,11 +485,10 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_EXPERT_BONUS` | 1.3 | título com convidado especialista (cientista, médico, economista, CEO, delegado...) ganha na escolha |
 | `AUTOPILOT_WEAK_TOPIC_FACTOR` | 0.7 | título de desafio, zoeira ou pegadinha perde na escolha |
 | `AUTOPILOT_QUEUE_TARGET` / `AUTOPILOT_POOL_MIN` / `AUTOPILOT_POOL_MIN_SOURCES` | 15 / 6 / 3 | banco de clipes: quantos gera e o mínimo (de quantos podcasts) pra escolher o mais viral |
-| `AUTOPILOT_POSTS_PER_DAY` | 6 | meta do dia (a interface muda); posta pela API até o YouTube recusar (cota padrão: ~6/dia), o resto vai pra `output\postar_a_mao`. Com 24/dia o canal parou de receber views |
+| `AUTOPILOT_POSTS_PER_DAY` | 6 | Shorts por dia **em cada canal** (a interface muda; vira 4 ao adicionar o 2º canal). Com 24/dia num canal só ele parou de receber views |
 | `AUTOPILOT_REACH_BRAKE` / `AUTOPILOT_REACH_BRAKE_HOURS` | True / 8 | freio automático: Shorts recentes sem views → no máximo 1 post a cada 8 h até voltar |
-| `AUTOPILOT_LIMIT_BY_QUOTA` | False | True = nem tenta passar do que `YOUTUBE_DAILY_QUOTA` comporta |
 | `AUTOPILOT_MANUAL_EXPORT` | True | cota acabou: os melhores clipes do dia vão pra pasta "postar à mão" |
-| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo; o real espalha a meta do dia pela janela (6/dia em 24h = 1 a cada 4 h) |
+| `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo no mesmo canal; o real espalha a meta do dia pela janela (6/dia em 24h = 1 a cada 4 h). Entre canais diferentes: esse intervalo dividido pelo número de canais |
 | `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
 | `AUTOPILOT_QUEUE_TARGET` | 30 | clipes prontos esperando na fila |
 | `AUTOPILOT_MIN_QUALITY` | 45 | nota mínima (0-100) pra um clipe ser postado; ver "Nota de qualidade" abaixo |

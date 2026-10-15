@@ -3,11 +3,10 @@ Pasta "postar à mão": quando o YouTube não aceita mais uploads pela API no
 dia, os melhores clipes da fila vão pra cá com título, descrição e hashtags
 prontos, pra completar a meta do dia postando pelo celular/YouTube Studio.
 
-Por que existe: o usuário pediu 24 posts por dia. A API do YouTube, na cota
-padrão de um projeto (10.000 unidades), aceita ~6 uploads por dia (cada um
-custa 1.600). O piloto tenta postar até o próprio YouTube recusar (se a cota
-for aumentada, ele já posta mais sem mudar nada); o que passar disso vem pra
-esta pasta. Não dá pra contornar a cota de outro jeito (vários projetos,
+Por que existe: o usuário pediu 24 posts por dia, e até dez/2025 a cota
+padrão de um projeto da API aceitava só ~6 uploads por dia (hoje são 100).
+O piloto tenta postar até o próprio YouTube recusar; o que passar disso
+vem pra esta pasta. Não dá pra contornar a cota de outro jeito (vários projetos,
 robô no navegador) sem quebrar as regras do YouTube e arriscar o canal.
 
   output/postar_a_mao/AAAA-MM-DD/

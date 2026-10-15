@@ -77,7 +77,7 @@ def cleanup(state, out_root: Path, log, quiet: bool = False) -> float:
     now = time.time()
     keep_days = getattr(config, "AUTOPILOT_KEEP_POSTED_DAYS", 2)
     keep_no_music = getattr(config, "AUTOPILOT_KEEP_NO_MUSIC", False)
-    cap = getattr(config, "AUTOPILOT_OUTPUT_MAX_GB", 1.0) * 1024 ** 3
+    cap = cap_gb() * 1024 ** 3
 
     queued = {_base(Path(c["video"])) for c in state.data["queue"] if c.get("video")}
     pending, public = [], []  # postados: (data, base, entrada)
@@ -150,23 +150,34 @@ def cleanup(state, out_root: Path, log, quiet: bool = False) -> float:
     if removed and not quiet:
         log(f"  Faxina: {removed} arquivo(s) apagado(s), {freed / 1024 ** 2:.0f} MB liberados "
             f"-- pasta de cortes com {size * 1024:.0f} MB "
-            f"(limite {getattr(config, 'AUTOPILOT_OUTPUT_MAX_GB', 1.0) * 1024:.0f} MB).")
+            f"(limite {cap_gb() * 1024:.0f} MB).")
     return size
+
+
+def cap_gb() -> float:
+    """Limite da pasta de cortes: AUTOPILOT_OUTPUT_MAX_GB por canal ligado
+    (com 6 canais a fila precisa de ~1 dia de clipes)."""
+    try:
+        from .accounts import active
+        n = max(len(active()), 1)
+    except Exception:
+        n = 1
+    return getattr(config, "AUTOPILOT_OUTPUT_MAX_GB", 1.0) * n
 
 
 def has_room(state, out_root: Path, log) -> bool:
     """Cabe mais um vídeo editado na pasta sem passar do limite?"""
-    cap_gb = getattr(config, "AUTOPILOT_OUTPUT_MAX_GB", 1.0)
+    cap_gb_ = cap_gb()
     size = cleanup(state, out_root, log)
     clips = [Path(c["video"]) for c in state.data["queue"] if c.get("video")]
     sizes = [f.stat().st_size for f in clips if f.exists()]
     per_clip = (sum(sizes) / len(sizes) / 1024 ** 3) if sizes else 0.05
     need = per_clip * getattr(config, "AUTOPILOT_CLIPS_PER_VIDEO", 3)
-    if size + need <= cap_gb:
+    if size + need <= cap_gb_:
         return True
     if state.data.get("_full_logged") != round(size, 2):
         state.data["_full_logged"] = round(size, 2)
-        log(f"  Pasta de cortes cheia ({size * 1024:.0f} MB de {cap_gb * 1024:.0f} MB) com clipes "
+        log(f"  Pasta de cortes cheia ({size * 1024:.0f} MB de {cap_gb_ * 1024:.0f} MB) com clipes "
             "esperando postagem -- volto a produzir quando liberar espaço.")
     return False
 

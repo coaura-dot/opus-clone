@@ -8,8 +8,8 @@ escrita à mão é chute calibrado; quem diz se acertou é o público. Então:
   1. cada vídeo postado guarda a nota que teve e cada item dela (gancho,
      conteúdo, fechamento...);
   2. uma vez por dia o piloto busca as views de cada vídeo com 2 a 10 dias
-     de vida (API do YouTube: 1 unidade de cota a cada 50 vídeos -- nada
-     perto das 1600 de um upload) e guarda a de ~48 h;
+     de vida (API do YouTube: 1 unidade de cota a cada 50 vídeos) e guarda
+     a de ~48 h;
   3. com 8+ vídeos medidos, mostra no log o quanto a nota acerta a ordem
      das views (correlação de Spearman: 0 = chute, 1 = acerta tudo);
   4. com 15+ vídeos, ajusta os pesos: item que anda junto com as views ganha
@@ -98,6 +98,18 @@ def refresh_views(state, service, log) -> int:
     return n
 
 
+def _centered(rows: list) -> List[float]:
+    """log das views menos a média do canal: com vários canais (src/accounts.py)
+    o canal grande teria todas as views altas e o novo todas baixas -- isso é
+    tamanho do canal, não qualidade do clipe."""
+    from .accounts import acc_of
+    by = {}
+    for p in rows:
+        by.setdefault(acc_of(p), []).append(math.log1p(p["views_48h"]))
+    mean = {a: sum(v) / len(v) for a, v in by.items()}
+    return [math.log1p(p["views_48h"]) - mean[acc_of(p)] for p in rows]
+
+
 def calibrate(state, log) -> Optional[Dict[str, float]]:
     """Mede o acerto da nota e devolve os pesos aprendidos (ou None)."""
     from .virality import DEFAULT_WEIGHTS
@@ -109,7 +121,7 @@ def calibrate(state, log) -> Optional[Dict[str, float]]:
         return fb.get("weights")
     if fb.get("calibrated_n") == len(rows):
         return fb.get("weights")
-    views = [math.log1p(p["views_48h"]) for p in rows]
+    views = _centered(rows)
     rho = spearman([p["viral"] for p in rows], views)
     fb["calibrated_n"] = len(rows)
     fb["rho"] = round(rho, 2) if rho is not None else None
@@ -123,7 +135,7 @@ def calibrate(state, log) -> Optional[Dict[str, float]]:
     if len(with_parts) < _MIN_LEARN:
         state.save()
         return fb.get("weights")
-    v = [math.log1p(p["views_48h"]) for p in with_parts]
+    v = _centered(with_parts)
     alpha = min(len(with_parts) / 60.0, 0.7)
     learned, notes = {}, []
     for k, w0 in DEFAULT_WEIGHTS.items():

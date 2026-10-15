@@ -11,8 +11,11 @@ O que precisa existir antes (passo a passo no README, "Postagem automática"):
   "App para computador").
 
 Limites do YouTube que o programa respeita:
-  - cota da API: 10.000 unidades/dia por projeto; cada upload gasta 1.600
-    -> no máximo 6 vídeos por dia (zera à meia-noite do horário do Pacífico);
+  - cota da API por projeto (zera à meia-noite do horário do Pacífico):
+    upload tem um balde próprio, 100 por dia (desde dez/2025; antes cada
+    upload gastava 1.600 das 10.000 unidades e dava ~6 por dia); as outras
+    consultas gastam as 10.000 unidades. Vale somando TODOS os canais
+    conectados (src/accounts.py): é o mesmo projeto;
   - projeto da API não verificado pelo Google: o YouTube trava os vídeos
     enviados como PRIVADOS até o projeto passar pela auditoria (formulário
     no README). Isso é regra do YouTube, não do programa.
@@ -31,7 +34,6 @@ SCOPES = ["https://www.googleapis.com/auth/youtube.upload",
           # depois da auditoria; ver src/release.py)
           "https://www.googleapis.com/auth/youtube"]
 MANAGE_SCOPE = "https://www.googleapis.com/auth/youtube"
-UPLOAD_QUOTA_COST = 1600
 _RETRIABLE_STATUS = {500, 502, 503, 504}
 
 
@@ -56,10 +58,10 @@ class AuthError(UploadError):
 # no meio da madrugada -- com o app do Google Cloud em "Teste" o Google
 # derruba o login a cada 7 dias. O piloto ficou 8 h repetindo "confiro de
 # novo em 10 min" sem dizer que o problema era o login.
-DEAD_LOGIN_HINT = ("o login do YouTube venceu ou foi revogado pelo Google. Clique em 'Conectar canal do "
-                   "YouTube' na interface (ou rode 'python autopilot.py --login'). Se isso se repete a cada "
-                   "7 dias, o app do Google Cloud está em 'Teste': publique o app (README, 'Postagem "
-                   "automática', passo 3) e conecte de novo")
+DEAD_LOGIN_HINT = ("o login do YouTube venceu ou foi revogado pelo Google. Na interface, em CANAIS DO "
+                   "YOUTUBE, clique em 'Reconectar' nesse canal. Se isso se repete a cada 7 dias, o app do "
+                   "Google Cloud está em 'Teste': publique o app (README, 'Postagem automática', passo 3) e "
+                   "conecte de novo")
 
 
 def dead_login(e: BaseException) -> bool:
@@ -84,20 +86,19 @@ def token_path() -> Path:
     return credentials_dir() / "youtube_token.json"
 
 
-def get_service(interactive: bool = True):
+def get_service(interactive: bool = True, token: Optional[Path] = None):
     """Serviço autenticado da API. `interactive=False` (modo automático
     rodando sozinho) nunca abre navegador: sem login válido, levanta
-    AuthError."""
+    AuthError. `token`: o login de um dos canais (src/accounts.py); sem ele,
+    o do canal principal."""
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from googleapiclient.discovery import build
     except ImportError as e:
         raise UploadError("Bibliotecas do Google não instaladas. Rode: pip install -r requirements.txt") from e
 
     creds = None
-    tok = token_path()
+    tok = Path(token) if token else token_path()
     granted = set()
     if tok.exists():
         try:
@@ -118,21 +119,38 @@ def get_service(interactive: bool = True):
                 if dead_login(e):
                     raise AuthError(DEAD_LOGIN_HINT) from e
                 raise AuthError(f"não consegui renovar o login do YouTube ({e}). "
-                                "Rode 'python autopilot.py --login' pra autorizar de novo.") from e
+                                "Na interface, em CANAIS DO YOUTUBE, clique em 'Reconectar' nesse canal.") from e
             creds = None
     if not creds or not creds.valid:
         if not interactive:
-            raise AuthError("sem login do YouTube. Rode 'python autopilot.py --login' uma vez.")
-        secret = client_secret_path()
-        if not secret.exists():
-            raise AuthError(f"falta o arquivo {secret} (credencial OAuth do Google Cloud). "
-                            "Veja o passo a passo no README, seção 'Postagem automática'.")
-        flow = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES)
-        print("    Abrindo o navegador pra você autorizar o seu canal do YouTube...")
-        creds = flow.run_local_server(port=0, open_browser=True,
-                                      authorization_prompt_message="",
-                                      success_message="Pronto! Pode fechar esta aba e voltar pro programa.")
+            raise AuthError("sem login do YouTube. Na interface, em CANAIS DO YOUTUBE, clique em "
+                            "'Reconectar' nesse canal (ou '+ Adicionar canal').")
+        creds = new_login(pick=False)
     tok.write_text(creds.to_json(), encoding="utf-8")
+    return service_from(creds, granted)
+
+
+def new_login(pick: bool = True):
+    """Abre o navegador pra autorizar um canal. `pick`: o Google mostra a
+    lista de contas/canais (pra adicionar um canal diferente do que já está
+    logado no navegador)."""
+    try:
+        from google_auth_oauthlib.flow import InstalledAppFlow
+    except ImportError as e:
+        raise UploadError("Bibliotecas do Google não instaladas. Rode: pip install -r requirements.txt") from e
+    secret = client_secret_path()
+    if not secret.exists():
+        raise AuthError(f"falta o arquivo {secret} (credencial OAuth do Google Cloud). "
+                        "Veja o passo a passo no README, seção 'Postagem automática'.")
+    flow = InstalledAppFlow.from_client_secrets_file(str(secret), SCOPES)
+    print("    Abrindo o navegador pra você autorizar o seu canal do YouTube...")
+    extra = {"prompt": "select_account consent"} if pick else {}
+    return flow.run_local_server(port=0, open_browser=True, authorization_prompt_message="",
+                                 success_message="Pronto! Pode fechar esta aba e voltar pro programa.", **extra)
+
+
+def service_from(creds, granted=None):
+    from googleapiclient.discovery import build
     service = build("youtube", "v3", credentials=creds, cache_discovery=False)
     scopes = set(getattr(creds, "granted_scopes", None) or creds.scopes or granted or [])
     service.autoclipper_can_manage = MANAGE_SCOPE in scopes
@@ -158,24 +176,31 @@ def ensure_fresh(service) -> None:
 def channel_check(service) -> tuple:
     """(nome do canal, problema). Sem canal ou sem acesso, `problema` diz o
     que fazer (achado real: login OK mas "não consegui ler o nome")."""
+    _, name, problem = channel_info(service)
+    return name, problem
+
+
+def channel_info(service) -> tuple:
+    """(id do canal, nome, problema)."""
     try:
         r = service.channels().list(part="snippet", mine=True).execute()
     except Exception as e:
         reason = _error_reason(e) if hasattr(e, "content") else ""
         if reason in ("accessNotConfigured", "SERVICE_DISABLED") or "has not been used" in str(e):
-            return None, ("a YouTube Data API v3 não está ativada no seu projeto do Google Cloud: "
-                          "busque 'YouTube Data API v3' no console e clique em Enable (ou Ativar)")
+            return None, None, ("a YouTube Data API v3 não está ativada no seu projeto do Google Cloud: "
+                                "busque 'YouTube Data API v3' no console e clique em Enable (ou Ativar)")
         if reason in ("insufficientPermissions", "forbidden", "PERMISSION_DENIED"):
-            return None, ("faltou permissão no login: apague credentials\\youtube_token.json, rode "
-                          "'autopilot.py --login' de novo e marque TODAS as caixas na tela do Google")
-        return None, f"erro ao consultar o canal ({reason or e.__class__.__name__}): {str(e)[:200]}"
+            return None, None, ("faltou permissão no login: conecte o canal de novo (interface: CANAIS DO "
+                                "YOUTUBE -> Reconectar) e marque TODAS as caixas na tela do Google")
+        if dead_login(e):
+            return None, None, DEAD_LOGIN_HINT
+        return None, None, f"erro ao consultar o canal ({reason or e.__class__.__name__}): {str(e)[:200]}"
     items = r.get("items") or []
     if not items:
-        return None, ("essa conta do Google não tem canal no YouTube. Crie em "
-                      "https://www.youtube.com/create_channel (ou, se o canal é de uma conta de marca, "
-                      "apague credentials\\youtube_token.json e faça o login de novo escolhendo o CANAL "
-                      "na lista, não a conta pessoal)")
-    return items[0]["snippet"]["title"], None
+        return None, None, ("essa conta do Google não tem canal no YouTube. Crie em "
+                            "https://www.youtube.com/create_channel (ou, se o canal é de uma conta de marca, "
+                            "conecte de novo escolhendo o CANAL na lista, não a conta pessoal)")
+    return items[0].get("id"), items[0]["snippet"]["title"], None
 
 
 def channel_name(service) -> Optional[str]:

@@ -65,9 +65,12 @@ def make_public(service, video_id: str) -> bool:
     return privacy_of(service, [video_id]).get(video_id) == "public"
 
 
-def _pending(state) -> list:
+def _pending(state, acc: str = None) -> list:
+    """Privados esperando liberação (de um canal, ou de todos com acc=None)."""
+    from .accounts import acc_of
     return [p for p in state.data["posted"]
-            if p.get("privacy") != "public" and not p.get("replaced") and not p.get("gave_up")]
+            if p.get("privacy") != "public" and not p.get("replaced") and not p.get("gave_up")
+            and (acc is None or acc_of(p) == acc)]
 
 
 def _rstate(state) -> dict:
@@ -83,9 +86,12 @@ def _rstate(state) -> dict:
     return r
 
 
-def refresh_unknown(state, service) -> None:
-    """Vídeos postados antes deste módulo não têm a visibilidade anotada."""
-    unknown = [p for p in state.data["posted"] if "privacy" not in p and p.get("youtube_id")]
+def refresh_unknown(state, service, acc: str = None) -> None:
+    """Vídeos postados antes deste módulo não têm a visibilidade anotada.
+    Só os do canal `acc`: privado de outro canal não aparece pra este login."""
+    from .accounts import FIRST, acc_of
+    acc = acc or FIRST
+    unknown = [p for p in state.data["posted"] if "privacy" not in p and p.get("youtube_id") and acc_of(p) == acc]
     if not unknown:
         return
     st = privacy_of(service, [p["youtube_id"] for p in unknown])
@@ -96,8 +102,10 @@ def refresh_unknown(state, service) -> None:
     state.save()
 
 
-def release_step(state, service, log, startup: bool = False, force: bool = False) -> bool:
-    """Uma rodada de liberação. True se fez alguma coisa no YouTube."""
+def release_step(state, service, log, startup: bool = False, force: bool = False, acc: str = None) -> bool:
+    """Uma rodada de liberação no canal `acc`. True se fez alguma coisa no YouTube."""
+    from .accounts import FIRST
+    acc = acc or FIRST
     from .autopilot import _in_post_window
     from .youtube_uploader import AuthError
     if not getattr(config, "AUTOPILOT_RELEASE_ENABLED", True) or service is None:
@@ -105,8 +113,8 @@ def release_step(state, service, log, startup: bool = False, force: bool = False
     if not state.data["posted"]:
         return False
     r = _rstate(state)
-    refresh_unknown(state, service)
-    pend = _pending(state)
+    refresh_unknown(state, service, acc)
+    pend = _pending(state, acc)
     if not pend:
         return False
     if r["count"] >= getattr(config, "AUTOPILOT_RELEASE_PER_DAY", 3) and not force:
@@ -183,7 +191,7 @@ def _mark_public(state, r, p, log, first: bool = False):
     r["count"] += 1
     r["last_at"] = time.time()
     state.save()
-    left = len(_pending(state))
+    left = len(_pending(state, p.get("account")))
     if first:
         log("  ✓ Auditoria aprovada! Vídeos privados liberando aos poucos.")
     log(f"    agora público: https://youtube.com/shorts/{p['youtube_id']} \"{p.get('title', '')}\" "

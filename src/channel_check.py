@@ -8,14 +8,18 @@ Como confere, antes de CADA upload:
   1. o histórico do próprio piloto (state.json): mesmo título já postado;
   2. o CANAL de verdade, pela API do YouTube: os ~200 vídeos mais recentes
      da lista de uploads (inclui os privados e os postados à mão pelo
-     YouTube Studio/celular). Custa 1 unidade de cota por página de 50 --
-     nada perto das 1.600 de um upload.
+     YouTube Studio/celular). Custa 1 unidade de cota por página de 50.
 Mesmo título (sem diferença de maiúscula, acento ou pontuação; título
 cortado no limite de 100 letras também conta) = já postado: o clipe sai da
 fila e o piloto passa pro próximo.
 
 Se o YouTube não responder a conferência, o piloto NÃO posta às cegas:
 espera 10 min e confere de novo.
+
+Vários canais (src/accounts.py): o histórico vale pra TODOS (clipe já
+postado em qualquer canal não vai pra outro -- repetir o mesmo vídeo em
+vários canais é spam pelas regras do YouTube); a lista de uploads é a do
+canal que vai receber o post.
 """
 import re
 import time
@@ -45,8 +49,10 @@ def same_title(a: str, b: str) -> bool:
     return len(short) >= 60 and long_.startswith(short)
 
 
-def _uploads_playlist(service, state) -> str:
-    pid = state.data.get("uploads_playlist")
+def _uploads_playlist(service, state, acc: Optional[str] = None) -> str:
+    from .accounts import sub
+    store = sub(state, acc) if acc else state.data
+    pid = store.get("uploads_playlist")
     if pid:
         return pid
     r = service.channels().list(part="contentDetails", mine=True).execute()
@@ -54,15 +60,15 @@ def _uploads_playlist(service, state) -> str:
     if not items:
         raise CheckFailed("o login do YouTube não tem canal")
     pid = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
-    state.data["uploads_playlist"] = pid
+    store["uploads_playlist"] = pid
     state.save()
     return pid
 
 
-def channel_videos(service, state, pages: int = _PAGES) -> list:
+def channel_videos(service, state, pages: int = _PAGES, acc: Optional[str] = None) -> list:
     """[(título, id do vídeo, publicado em)] dos uploads mais recentes do canal."""
     try:
-        pid = _uploads_playlist(service, state)
+        pid = _uploads_playlist(service, state, acc)
         out, token = [], None
         for _ in range(pages):
             kw = {"part": "snippet", "playlistId": pid, "maxResults": 50}
@@ -87,13 +93,14 @@ def channel_videos(service, state, pages: int = _PAGES) -> list:
         raise CheckFailed(f"{e.__class__.__name__}: {msg[:120]}")
 
 
-def already_posted(service, state, title: str) -> Optional[dict]:
+def already_posted(service, state, title: str, acc: Optional[str] = None) -> Optional[dict]:
     """{"id", "at", "where"} do vídeo com esse título que já está no canal,
     ou None. CheckFailed se não deu pra conferir (aí não posta agora)."""
     for p in reversed(state.data.get("posted", [])):
         if p.get("youtube_id") and same_title(p.get("title", ""), title):
-            return {"id": p["youtube_id"], "at": p.get("at") or time.time(), "where": "histórico do piloto"}
-    for t, vid, iso in channel_videos(service, state):
+            return {"id": p["youtube_id"], "at": p.get("at") or time.time(), "where": "histórico do piloto",
+                    "account": p.get("account")}
+    for t, vid, iso in channel_videos(service, state, acc=acc):
         if same_title(t, title):
             return {"id": vid, "at": _published_ts(iso) or time.time(), "where": "canal"}
     return None

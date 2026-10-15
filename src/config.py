@@ -1181,20 +1181,21 @@ AUTOPILOT_MIN_QUALITY = 45
 # (vazio = padrão: gancho 22, picos 12, ritmo 12, conteudo 16, fechamento 8,
 # imagem 12, duracao 10, titulo 8). Ex.: {"gancho": 30} dá mais peso ao começo.
 VIRAL_WEIGHTS = {}
-# Shorts por dia (a interface muda: "Shorts por dia", botões − e +). Achado real
-# (9-10/out): com 6/dia (1 a cada 4 h) os Shorts iam de 369 a ~1.300 views;
-# com 20-24/dia (1 por hora) TODOS os seguintes ficaram com 0-6 views -- o
-# YouTube parou de entregar. Posta pela API até o YouTube recusar (cota
-# padrão: ~6/dia); o resto vai pra output/postar_a_mao
+# Shorts por dia EM CADA CANAL (a interface muda: "Shorts por dia", botões − e
+# +). Achado real (9-10/out): com 6/dia (1 a cada 4 h) os Shorts iam de 369 a
+# ~1.300 views; com 20-24/dia (1 por hora) NUM canal só, TODOS os seguintes
+# ficaram com 0-6 views -- o YouTube parou de entregar. Com vários canais
+# (interface: CANAIS DO YOUTUBE -> + Adicionar canal) o piloto alterna entre
+# eles e o valor vira 4 por canal ao adicionar o 2º: 6 canais = 24 por dia,
+# 1 post por hora no total, cada canal 1 a cada 6 h
 AUTOPILOT_POSTS_PER_DAY = 6
 # freio automático (src/reach.py): se os últimos Shorts param de pegar views,
 # posta no máximo 1 a cada AUTOPILOT_REACH_BRAKE_HOURS até voltar
 AUTOPILOT_REACH_BRAKE = True
 AUTOPILOT_REACH_BRAKE_HOURS = 8
-AUTOPILOT_LIMIT_BY_QUOTA = False        # True = nem tenta passar do que a cota YOUTUBE_DAILY_QUOTA comporta
 AUTOPILOT_MANUAL_EXPORT = True          # cota acabou: os melhores clipes do dia vão pra pasta "postar à mão"
 AUTOPILOT_MANUAL_KEEP_DAYS = 3          # a pasta de cada dia é apagada depois disso
-AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # o intervalo real espalha o limite do dia pela janela toda
+AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # no mesmo canal; o intervalo real espalha o limite do dia pela janela toda
 AUTOPILOT_POST_HOURS = (0, 24)          # posta o dia todo (ex.: (9, 23) = só das 9h às 23h)
 AUTOPILOT_WORKER_TIMEOUT_MINUTES = 150  # vídeo que trava na edição é abandonado
 AUTOPILOT_IDLE_MINUTES = 30             # sem vídeo novo: procura de novo depois de N min
@@ -1204,7 +1205,7 @@ AUTOPILOT_UPDATE_YTDLP = True           # atualiza o yt-dlp 1x por dia (YouTube 
 AUTOPILOT_MIN_FREE_GB = 5               # disco abaixo disso: apaga clipes já postados
 AUTOPILOT_DELETE_POSTED_FILES = False   # True = apaga o .mp4 logo depois de postar
 # faxina automática da pasta de cortes (src/housekeeping.py)
-AUTOPILOT_OUTPUT_MAX_GB = 1.0           # a pasta output/autopiloto não passa disso
+AUTOPILOT_OUTPUT_MAX_GB = 1.0           # a pasta output/autopiloto não passa disso (por canal ligado)
 AUTOPILOT_KEEP_POSTED_DAYS = 2          # clipe postado (público) fica N dias na pasta pra você ver, depois sai
 AUTOPILOT_KEEP_NO_MUSIC = False         # True = guarda a versão _sem_musica.mp4 (pra postar à mão com som do app)
 AUTOPILOT_OUTPUT_DIR = "output/autopiloto"
@@ -1222,6 +1223,6 @@ YOUTUBE_PRIVACY = "public"              # "public", "unlisted" ou "private"
 YOUTUBE_CATEGORY_ID = "24"              # 24 = Entretenimento (22 = Pessoas e blogs)
 YOUTUBE_LANGUAGE = "pt-BR"
 YOUTUBE_NOTIFY_SUBSCRIBERS = True
-YOUTUBE_DAILY_QUOTA = 10000             # cota do seu projeto (padrão 10.000 = 6 uploads/dia).
-                                        # Liberaram mais? Ponha o valor novo: 40000 = 24/dia
+YOUTUBE_DAILY_QUOTA = 10000             # unidades/dia do projeto pras consultas (upload tem balde
+                                        # próprio: 100/dia por projeto, somando todos os canais)
 YOUTUBE_CREDENTIALS_DIR = "credentials"

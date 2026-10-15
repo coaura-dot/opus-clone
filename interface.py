@@ -53,6 +53,7 @@ from src import config
 from src import control
 from src import throttle
 from src import autopilot as ap
+from src import accounts
 
 WIN = sys.platform == "win32"
 LOG = ap.DATA_DIR / "autopilot.log"
@@ -274,7 +275,8 @@ class App:
         r = self.root
         r.title("Auto Clipper")
         r.configure(bg=BG)
-        r.geometry("940x780")
+        # com vários canais a lista de canais ocupa espaço: usa a altura da tela
+        r.geometry(f"940x{max(min(r.winfo_screenheight() - 90, 1000), 700)}")
         r.minsize(760, 620)
 
         head = tk.Frame(r, bg=BG)
@@ -282,7 +284,7 @@ class App:
         left = tk.Frame(head, bg=BG)
         left.pack(side="left")
         tk.Label(left, text="Auto Clipper", bg=BG, fg=TEXT, font=(FONT, 20, "bold")).pack(anchor="w")
-        tk.Label(left, text="Acha vídeo bombando, corta, edita e posta no seu canal", bg=BG, fg=MUTED,
+        tk.Label(left, text="Acha vídeo bombando, corta, edita e posta nos seus canais", bg=BG, fg=MUTED,
                  font=(FONT, 10)).pack(anchor="w")
         self.status = tk.Label(head, text="", bg=CARD, fg=TEXT, font=(FONT, 11, "bold"), padx=16, pady=8)
         self.status.pack(side="right")
@@ -308,15 +310,30 @@ class App:
         # quantos Shorts por dia (pedido do usuário; padrão 6) -- vale na hora
         prow = tk.Frame(body, bg=CARD)
         prow.pack(fill="x", pady=(12, 0))
-        tk.Label(prow, text="Shorts por dia:", bg=CARD, fg=TEXT, font=(FONT, 11, "bold")).pack(side="left")
+        self.posts_label = tk.Label(prow, text="Shorts por dia:", bg=CARD, fg=TEXT, font=(FONT, 11, "bold"))
+        self.posts_label.pack(side="left")
         Button(prow, "−", lambda: self._posts_step(-1), font=(FONT, 13, "bold"), padx=14, pady=2).pack(
             side="left", padx=(12, 0))
         self.posts_val = tk.Label(prow, text="", bg=CARD, fg=TEXT, font=(FONT, 15, "bold"), width=3)
         self.posts_val.pack(side="left")
         Button(prow, "+", lambda: self._posts_step(1), font=(FONT, 13, "bold"), padx=14, pady=2).pack(side="left")
         self.posts_hint = tk.Label(prow, text="", bg=CARD, fg=MUTED, font=(FONT, 9), justify="left", anchor="w",
-                                   wraplength=480)
+                                   wraplength=430)
         self.posts_hint.pack(side="left", padx=14)
+
+        # --- canais do YouTube (v46: vários canais; o piloto alterna entre eles)
+        card, body = self._card(r, "CANAIS DO YOUTUBE")
+        card.pack(fill="x", padx=20, pady=(0, 10))
+        self.acc_box = tk.Frame(body, bg=CARD)
+        self.acc_box.pack(fill="x")
+        arow = tk.Frame(body, bg=CARD)
+        arow.pack(fill="x", pady=(6, 0))
+        Button(arow, "+ Adicionar canal", self._login, bg=TEAL, hover=TEAL_D, font=(FONT, 9, "bold"),
+               pady=5, padx=12).pack(side="left")
+        self.acc_hint = tk.Label(arow, text="", bg=CARD, fg=MUTED, font=(FONT, 9), anchor="w", justify="left",
+                                 wraplength=650)
+        self.acc_hint.pack(side="left", padx=12)
+        self._acc_rows, self._acc_sig, self._login_proc = {}, None, None
 
         # --- agora
         card, body = self._card(r, "AGORA")
@@ -353,7 +370,7 @@ class App:
         # --- ferramentas (antes do log: o log é que estica)
         tools = tk.Frame(r, bg=BG)
         tools.pack(side="bottom", fill="x", padx=20, pady=(0, 16))
-        for text, cmd in [("✂  Cortar um link…", self._cut_link), ("Conectar canal do YouTube", self._login),
+        for text, cmd in [("✂  Cortar um link…", self._cut_link),
                           ("Pasta: postar à mão", lambda: _open(MANUAL_DIR)), ("Pasta dos cortes", lambda: _open(OUT_DIR)),
                           ("▶  YouTube Studio", lambda: webbrowser.open("https://studio.youtube.com"))]:
             Button(tools, text, cmd, font=(FONT, 9), pady=7, padx=12).pack(side="left", padx=(0, 8))
@@ -614,11 +631,20 @@ class App:
         except (OSError, ValueError):
             st = {}
         now = time.time()
+        if "accounts" not in st:  # state de antes da v46 (o piloto converte ao ligar)
+            st["accounts"] = {accounts.FIRST: {k: st[k] for k in ("reach_brake", "auth_down", "last_post_at")
+                                               if k in st}}
         midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         posted = st.get("posted", [])
         queue = st.get("queue", [])
-        target = ap.daily_limit()
+        accs = accounts.load()
+        active = [a for a in accs if a.get("on", True)]
+        down = {a["id"] for a in active if self._login_down(st, a)}
+        live = [a["id"] for a in active if a["id"] not in down]
+        target = ap.total_per_day(len(active))
         today = sum(1 for p in posted if p.get("at", 0) >= midnight)
+        when = ap.projected(st, live) if live else {}
+        self._fill_accounts(st, accs, down, when)
         manual = sum(1 for m in st.get("manual", []) if m.get("at", 0) >= midnight)
         self.kpi["today"].config(text=f"{today} / {target}")
         self.kpi["queue"].config(text=str(len(queue)))
@@ -628,16 +654,10 @@ class App:
             nxt = "desligado"
         elif not queue:
             nxt = "fila vazia"
+        elif not live:
+            nxt = "sem canal"
         else:
-            q = st.get("quota", {})
-            uploads = q.get("uploads", 0) if q.get("day") == ap._pacific_day() else 0
-            if st.get("blocked_until", 0) > now:
-                ts = st["blocked_until"]
-            elif uploads >= target:
-                ts = ap._next_pacific_midnight()
-            else:
-                ts = max(st.get("last_post_at", 0) + ap.post_gap_seconds(st), now)
-            nxt = _when(ts)
+            nxt = _when(max(min(when.values()), now)) if when else "—"
         self.kpi["next"].config(text=nxt, font=(FONT, 18 if len(nxt) <= 6 else 13, "bold"))
         if posted:
             p = posted[-1]
@@ -653,20 +673,84 @@ class App:
             self.last_post.config(text="Nenhum vídeo postado ainda.", fg=MUTED)
         self.sheet_link.config(text="ver quadros do original" if self._sheet else "")
         self._show_posts()
-        b = st.get("reach_brake")
-        a = st.get("auth_down")
-        if a and (ap._token_mtime() or 0) > a.get("at", 0):
-            a = None  # conectou de novo depois do aviso: o piloto pega o login novo sozinho
-        if a:
-            self.alert.config(fg="#fca5a5", text="⚠ O login do YouTube caiu: nada está sendo postado. Clique em "
-                              "\"Conectar canal do YouTube\" (se cai a cada 7 dias, publique o app no Google "
+        brakes = [(a, ap.reach.brake_of(st, a["id"])) for a in active]
+        brakes = [(a, b) for a, b in brakes if b]
+        if down:
+            names = ", ".join(accounts.label(a) for a in active if a["id"] in down)
+            self.alert.config(fg="#fca5a5", text=f"⚠ O login do YouTube caiu em: {names} -- nada é postado nele. "
+                              "Clique em \"Reconectar\" no canal (se cai a cada 7 dias, publique o app no Google "
                               "Cloud: README, \"Postagem automática\", passo 3).")
+        elif len(brakes) == 1 and len(active) == 1:
+            b = brakes[0][1]
+            self.alert.config(fg=AMBER, text=f"⚠ O YouTube parou de entregar os Shorts: os últimos tiveram "
+                                             f"{', '.join(map(str, b.get('recent', [])))} views (antes "
+                                             f"~{b.get('base', 0):.0f}). Freio ligado: 1 post a cada "
+                                             f"{ap.reach.brake_hours():.0f} h até voltar.")
+        elif brakes:
+            self.alert.config(fg=AMBER, text="⚠ Freio de alcance (o YouTube parou de entregar os últimos Shorts) em: "
+                                             + ", ".join(accounts.label(a) for a, _ in brakes)
+                                             + f" -- 1 post a cada {ap.reach.brake_hours():.0f} h nesses canais.")
+        elif not accs:
+            self.alert.config(fg=AMBER, text="⚠ Nenhum canal conectado: clique em \"+ Adicionar canal\".")
         else:
-            self.alert.config(fg=AMBER, text=(f"⚠ O YouTube parou de entregar os Shorts: os últimos tiveram "
-                                              f"{', '.join(map(str, b.get('recent', [])))} views (antes "
-                                              f"~{b.get('base', 0):.0f}). Freio ligado: 1 post a cada "
-                                              f"{ap.reach.brake_hours():.0f} h até voltar.")
-                              if b and getattr(config, "AUTOPILOT_REACH_BRAKE", True) else "")
+            self.alert.config(text="")
+
+    def _login_down(self, st: dict, acc: dict) -> bool:
+        """Login do canal caído (e não reconectado depois do aviso)?"""
+        a = ap.sub(st, acc["id"]).get("auth_down")
+        try:
+            mt = accounts.token_file(acc).stat().st_mtime
+        except OSError:
+            mt = 0
+        return bool(a) and mt <= a.get("at", 0)
+
+    def _fill_accounts(self, st: dict, accs: list, down: set, when: dict):
+        """Uma linha por canal: situação, posts nas últimas 24 h, próximo post."""
+        sig = tuple((a["id"], a.get("on", True)) for a in accs)
+        if sig != self._acc_sig:
+            for w in self.acc_box.winfo_children():
+                w.destroy()
+            self._acc_rows = {}
+            for i, a in enumerate(accs):
+                row = tk.Frame(self.acc_box, bg=CARD2)
+                row.pack(fill="x", pady=(0 if i == 0 else 3, 0))
+                dot = tk.Label(row, text="●", bg=CARD2, fg=MUTED, font=(FONT, 11))
+                dot.pack(side="left", padx=(10, 6))
+                name = tk.Label(row, text="", bg=CARD2, fg=TEXT, font=(FONT, 10, "bold"), anchor="w", width=22)
+                name.pack(side="left")
+                for text, cmd in [("Remover", lambda a=a: self._acc_remove(a)),
+                                  ("Ativar" if not a.get("on", True) else "Pausar", lambda a=a: self._acc_toggle(a)),
+                                  ("Reconectar", lambda a=a: self._login(a))]:
+                    Button(row, text, cmd, bg=CARD, font=(FONT, 8), pady=1, padx=8).pack(side="right", padx=(0, 6),
+                                                                                       pady=3)
+                info = tk.Label(row, text="", bg=CARD2, fg=MUTED, font=(FONT, 9), anchor="w")
+                info.pack(side="left", fill="x", expand=True, padx=(8, 0))
+                self._acc_rows[a["id"]] = (dot, name, info)
+            self._acc_sig = sig
+        per = ap.daily_limit()
+        for a in accs:
+            dot, name, info = self._acc_rows[a["id"]]
+            name.config(text=accounts.label(a)[:30])
+            n24 = len(ap.posts_last_24h(st, a["id"]))
+            if not a.get("on", True):
+                dot.config(fg=DIM)
+                info.config(text="pausado -- não recebe posts", fg=DIM)
+            elif a["id"] in down:
+                dot.config(fg=RED)
+                info.config(text="login caiu -- clique em Reconectar", fg="#fca5a5")
+            else:
+                braked = ap.reach.braked(st, a["id"])
+                dot.config(fg=AMBER if braked else GREEN)
+                nxt = f" · próximo {_when(max(when[a['id']], time.time()))}" if a["id"] in when and self._is_on() else ""
+                info.config(text=f"{n24}/{per} em 24 h{nxt}" + (" · freio de alcance" if braked else ""),
+                            fg=AMBER if braked else MUTED)
+        if not accs:
+            self.acc_hint.config(text="Conecte o canal do YouTube: o navegador abre, você escolhe a conta e o canal.")
+        elif len(accs) == 1:
+            self.acc_hint.config(text="Mais canais: o piloto alterna entre eles (cada clipe vai pra um canal só).")
+        else:
+            self.acc_hint.config(text=f"{len([a for a in accs if a.get('on', True)])} canais ativos: o piloto alterna "
+                                      "entre eles. Cada clipe vai pra um canal só.")
 
     def _posts_step(self, d: int):
         n = int(min(max(ap.daily_limit() + d, 1), 24))
@@ -677,9 +761,21 @@ class App:
     def _show_posts(self):
         """Valor e explicação do "Shorts por dia" (a fila pode mudar por fora)."""
         n = ap.daily_limit()
-        mins = int(round(ap.post_gap_seconds() / 60))
-        gap = f"{mins // 60} h" + (f" {mins % 60} min" if mins % 60 else "") if mins >= 60 else f"{mins} min"
+        n_acc = len(accounts.active())
+
+        def fmt(sec):
+            mins = int(round(sec / 60))
+            return f"{mins // 60} h" + (f" {mins % 60} min" if mins % 60 else "") if mins >= 60 else f"{mins} min"
+        gap = fmt(ap.post_gap_seconds())
         self.posts_val.config(text=str(n))
+        if n_acc > 1:
+            self.posts_label.config(text="Shorts por dia (cada canal):")
+            self.posts_hint.config(text=f"{n_acc} canais × {n} = {n * n_acc} por dia · 1 post a cada "
+                                        f"{fmt(ap.global_gap_seconds(n_acc))}, alternando (cada canal: 1 a cada {gap})"
+                                        + (" · cuidado: acima de 6 por canal o alcance caiu" if n > 6 else ""),
+                                   fg=AMBER if n > 6 else MUTED)
+            return
+        self.posts_label.config(text="Shorts por dia:")
         if n > 6:
             # achado real (9-10/out): com 1 por hora todos os Shorts ficaram com 0-6 views
             self.posts_hint.config(text=f"1 a cada {gap} · cuidado: acima de 6 o canal parou de pegar views",
@@ -717,13 +813,22 @@ class App:
             return
         self._note(f"Cortando {url.strip()} ({n} corte(s)); os clipes são postados assim que ficarem prontos.")
 
-    def _login(self):
+    def _login(self, acc: dict = None):
+        """Conecta um canal: o Google mostra a lista de contas/canais. Canal
+        novo entra na lista; canal que já está nela só troca o login."""
+        if self._login_proc is not None and self._login_proc.poll() is None:
+            messagebox.showinfo("Conectar canal", "Já tem uma janela de login aberta no navegador: termine "
+                                "(ou feche) aquela primeiro.")
+            return
         try:
             proc = _spawn(["--login"], capture=True)
         except OSError as e:
             messagebox.showerror("Auto Clipper", str(e))
             return
-        self._note("Abrindo o navegador pra conectar o canal (escolha a conta do canal e autorize)...")
+        self._login_proc = proc
+        who = f" \"{accounts.label(acc)}\"" if acc else ""
+        self._note(f"Abrindo o navegador pra conectar o canal{who}: escolha a conta e o CANAL certo na lista "
+                   "do Google e autorize...")
 
         def wait():
             out = proc.communicate()[0] or ""
@@ -731,9 +836,26 @@ class App:
             msg = "\n".join(lines[-6:]) or "Terminou."
             ok = "Conectado ao canal" in out
             if ok and control.running_info():
-                msg += "\n\nO piloto ligado já pega o login novo e volta a postar em instantes."
-            self.root.after(0, lambda: (messagebox.showinfo if ok else messagebox.showwarning)("Conectar canal", msg))
+                msg += "\n\nO piloto ligado já pega o login novo e começa a postar nele em instantes."
+            self.root.after(0, lambda: ((messagebox.showinfo if ok else messagebox.showwarning)("Conectar canal", msg),
+                                        self._fill_stats()))
         threading.Thread(target=wait, daemon=True).start()
+
+    def _acc_toggle(self, acc: dict):
+        on = not acc.get("on", True)
+        accounts.set_on(acc["id"], on)
+        self._note(f"Canal \"{accounts.label(acc)}\" " + ("ativado: volta a receber posts." if on else
+                                                             "pausado: não recebe posts até ativar de novo."))
+        self._fill_stats()
+
+    def _acc_remove(self, acc: dict):
+        name = accounts.label(acc)
+        if not messagebox.askyesno("Remover canal", f"Tirar \"{name}\" da lista?\n\nO piloto para de postar nele e "
+                                   "o login dele é apagado deste PC. Os vídeos já postados continuam no canal."):
+            return
+        accounts.remove(acc["id"])
+        self._note(f"Canal \"{name}\" removido da lista.")
+        self._fill_stats()
 
     # ---------------------------------------------------------- fechar ---
     def _on_close(self):

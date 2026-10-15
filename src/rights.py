@@ -69,19 +69,24 @@ def _blocked_reason(item: dict) -> Optional[str]:
     return None
 
 
-def check_recent_posts(state, service, log) -> int:
-    """Confere os vídeos postados nas últimas 24 h. Devolve quantos estão bloqueados."""
+def check_recent_posts(state, service, log, acc: str = None) -> int:
+    """Confere os vídeos postados nas últimas 24 h no canal `acc` (cada canal
+    com o login dele: o motivo do bloqueio só aparece pro dono). Devolve
+    quantos estão bloqueados."""
+    from .accounts import FIRST, posted_by, sub
     if service is None:
         return 0
+    acc = acc or FIRST
+    me = sub(state, acc)
     now = time.time()
-    if now - state.data.get("rights_checked_at", 0) < _CHECK_EVERY:
+    if now - me.get("rights_checked_at", 0) < _CHECK_EVERY:
         return 0
     # reivindicação do Content ID pode chegar horas depois: confere de novo
     # a cada 15 min durante 24 h
-    todo = [p for p in state.data["posted"]
+    todo = [p for p in posted_by(state, acc)
             if p.get("youtube_id") and not p.get("blocked")
             and 20 * 60 <= now - p.get("at", 0) <= 24 * 3600]
-    state.data["rights_checked_at"] = now
+    me["rights_checked_at"] = now
     if not todo:
         state.save()
         return 0
@@ -124,8 +129,9 @@ def check_recent_posts(state, service, log) -> int:
                 if (repeat and _queue_channel(state, c) == ch) or (src and c.get("source_id") == src)]
         state.data["queue"] = [c for c in state.data["queue"] if c not in gone]
         replace_now = now - p["at"] < 6 * 3600
-        if replace_now:
-            state.data["last_post_at"] = 0  # o horário foi perdido: posta outro já
+        if replace_now:  # o horário foi perdido: posta outro já
+            me["last_post_at"] = 0
+            state.data["last_post_at"] = 0
         log(f"  [!] O YouTube bloqueou o vídeo \"{p.get('title', '')}\" (https://youtube.com/shorts/"
             f"{p['youtube_id']}): {p['blocked']}.")
         log(f"      Canal de origem \"{ch}\" fica {pause // 86400} dias sem vídeo novo"
