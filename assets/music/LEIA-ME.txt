@@ -1,0 +1,22 @@
+SUAS MÚSICAS DE FUNDO
+=====================
+
+Jogue aqui os arquivos de música (mp3, wav, m4a, ogg ou flac). Só isso:
+o programa sorteia uma por clipe, sem repetir as últimas, e começa a
+tocar no "drop" (a parte que explode), que ele acha sozinho.
+
+Quer escolher o ponto exato? Crie track_drops.txt nesta pasta com uma
+linha por música:   Nome da música - 0:45
+Música que exige crédito? Crie track_credits.txt:   Nome da música | crédito
+(o crédito vai sozinho na descrição do vídeo).
+
+Pra conferir o que o programa está enxergando:   python diag_music.py
+
+ATENÇÃO: música comercial (hits do TikTok/Instagram/rádio) é detectada pelo
+Content ID do YouTube -- o vídeo pode ser reivindicado (dinheiro vai pra
+gravadora), ficar sem som ou ser bloqueado. Use músicas que você tem
+direito de usar, ou poste o arquivo *_sem_musica.mp4 e escolha o som em
+alta pela biblioteca do próprio app (TikTok/Instagram/YouTube Shorts).
+
+A biblioteca NCS que vinha com o programa está em ncs/ (desligada; pra
+ligar: MUSIC_USE_NCS = True em src/config.py).
