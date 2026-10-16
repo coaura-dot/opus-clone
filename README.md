@@ -311,6 +311,18 @@ adicionar com o piloto ligado: ele conecta o canal novo em segundos.
 - **Tamanho dos canais:** canal novo começa do zero; o freio de alcance dele
   só liga depois que ele tiver histórico de views.
 
+### Canais: lista branca e lista negra
+
+Na interface, botão **☰ Canais: cortar / não cortar** (`src/channel_lists.py`,
+salvo em `autopilot_data/canais.json`, que a atualização não apaga):
+- **Lista branca:** os canais que o piloto corta (@ ou link; marque "canal
+  em inglês" ou "gameplay" se for o caso). Na primeira vez vem da
+  `AUTOPILOT_CHANNELS`.
+- **Lista negra:** canais que ele NUNCA corta (@, link ou nome: "Felipe
+  Neto" pega também "Felipe Neto Clips"). Some da busca, sai da lista
+  branca, e os clipes dele que estão na fila não são postados.
+- Vale na hora, com o piloto ligado.
+
 ### Como cada Short sobe (capa, título, descrição, horário)
 
 Regras do vídeo "a forma certa de enviar Shorts" que o usuário mandou

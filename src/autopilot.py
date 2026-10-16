@@ -960,8 +960,11 @@ def _idle_thumbs(state: State, until: float) -> None:
 
 def prune_blocked(state: State, log: Log) -> int:
     """Tira da fila os clipes de vídeos com palavra bloqueada
-    (AUTOPILOT_BLOCK_WORDS) -- inclusive os feitos antes do bloqueio existir."""
+    (AUTOPILOT_BLOCK_WORDS) ou de canal da lista negra (src/channel_lists.py)
+    -- inclusive os feitos antes do bloqueio existir."""
     from .discovery import blocked
+    from . import channel_lists
+    _BLACK["mtime"] = channel_lists.mtime()
     keep, gone = [], []
     for c in state.data["queue"]:
         src = state.data["sources"].get(c.get("source_id") or "", {})
@@ -970,6 +973,10 @@ def prune_blocked(state: State, log: Log) -> int:
         except (OSError, ValueError):
             title = None
         word = None if _prio(c) else blocked(src.get("title"), src.get("channel"), title)
+        if not word and not _prio(c):
+            hit = channel_lists.is_black(src.get("channel"), src.get("channel_id"), src.get("uploader_id"),
+                                         src.get("spec"), c.get("channel"))
+            word = f"lista negra: {hit}" if hit else None
         if not word and not _prio(c):
             ch = (src.get("channel") or "").lower()
             word = next((n for n in getattr(config, "AUTOPILOT_DROP_QUEUED_FROM", [])
@@ -981,6 +988,15 @@ def prune_blocked(state: State, log: Log) -> int:
         log(f"  Fila: {len(gone)} clipe(s) de vídeo bloqueado ou de canal que saiu da lista removido(s) "
             f"({', '.join(sorted({w for _, w in gone}))}).")
     return len(gone)
+
+
+_BLACK = {"mtime": None}
+
+
+def _lists_changed() -> bool:
+    """A lista de canais mudou na interface desde a última limpeza da fila?"""
+    from . import channel_lists
+    return channel_lists.mtime() != _BLACK["mtime"]
 
 
 def _old_hook(c: dict) -> bool:
@@ -1049,7 +1065,8 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
             state.data["queue"].append(item)
             kept += 1
     state.mark_source(vid, "done", title=source.get("title"), channel=source.get("channel"),
-                      clips=kept)
+                      channel_id=source.get("channel_id"), uploader_id=source.get("uploader_id"),
+                      spec=source.get("spec"), clips=kept)
     log(f"    {kept} de {len(clips)} clipe(s) aprovados pra postar em {(time.time() - t0) / 60:.0f} min -- "
         f"fila: {len(state.data['queue'])}")
     return kept
@@ -1228,7 +1245,11 @@ def _run_forever(upload: bool = True):
     from .version import VERSION
     log(f"  PILOTO AUTOMÁTICO LIGADO ({VERSION}) -- pra parar: botão Desligar na interface "
         "(ou feche a janela do .bat)")
-    log(f"  canais: {', '.join(getattr(config, 'AUTOPILOT_CHANNELS', [])) or '(nenhum)'}")
+    from . import channel_lists
+    lists = channel_lists.load()
+    log(f"  canais (lista branca): {', '.join(channel_lists.label(e) for e in lists['white']) or '(nenhum)'}")
+    if lists["black"]:
+        log(f"  nunca cortar (lista negra): {', '.join(b['canal'] for b in lists['black'])}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
     from . import accounts
     accounts.migrate_state(state)  # antes da v46: um canal só
@@ -1299,6 +1320,8 @@ def _run_forever(upload: bool = True):
                     continue
 
             expire_queue(state, log)
+            if _lists_changed():  # lista negra mudou na interface: limpa a fila na hora
+                prune_blocked(state, log)
             if live:
                 # a nota de viralidade acerta? confere com as views reais (1x por dia;
                 # views de vídeo público: qualquer login lê)

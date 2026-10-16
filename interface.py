@@ -54,6 +54,7 @@ from src import control
 from src import throttle
 from src import autopilot as ap
 from src import accounts
+from src import channel_lists
 
 WIN = sys.platform == "win32"
 LOG = ap.DATA_DIR / "autopilot.log"
@@ -245,6 +246,168 @@ class Button(tk.Label):
         self.config(bg=self._bg, **({"fg": fg} if fg else {}), **({"text": text} if text else {}))
 
 
+class ChannelsWindow:
+    """Lista branca (canais que o piloto corta) e lista negra (nunca cortar)
+    -- src/channel_lists.py. Pedido do usuário (v48). Salva na hora; o piloto
+    ligado usa na próxima busca e tira da fila os clipes da lista negra."""
+
+    _open = None
+
+    def __init__(self, app):
+        if ChannelsWindow._open is not None and ChannelsWindow._open.win.winfo_exists():
+            ChannelsWindow._open.win.lift()
+            ChannelsWindow._open.win.focus_force()
+            return
+        ChannelsWindow._open = self
+        self.app = app
+        w = self.win = tk.Toplevel(app.root)
+        w.title("Canais: cortar / não cortar")
+        w.configure(bg=BG)
+        w.geometry("980x600")
+        w.minsize(760, 460)
+        tk.Label(w, text="Canais", bg=BG, fg=TEXT, font=(FONT, 16, "bold")).pack(anchor="w", padx=20, pady=(14, 0))
+        tk.Label(w, text="Vale na hora, com o piloto ligado. Lista negra ganha da branca: o canal some da busca e os "
+                         "clipes dele que estão na fila não são postados.",
+                 bg=BG, fg=MUTED, font=(FONT, 9), wraplength=900, justify="left").pack(anchor="w", padx=20, pady=(2, 10))
+        cols = tk.Frame(w, bg=BG)
+        cols.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+        cols.columnconfigure(0, weight=1, uniform="c")
+        cols.columnconfigure(1, weight=1, uniform="c")
+        self.white = self._column(cols, 0, "LISTA BRANCA -- canais que o piloto corta",
+                                  "Cole o @ ou o link do canal (ex.: @flowpodcast)", GREEN, self._add_white,
+                                  self._del_white, extras=True)
+        self.black = self._column(cols, 1, "LISTA NEGRA -- nunca cortar",
+                                  "@, link ou o NOME do canal (ex.: Felipe Neto)", RED, self._add_black,
+                                  self._del_black)
+        self._fill()
+
+    def _column(self, parent, col, title, hint, color, add, delete, extras=False):
+        outer = tk.Frame(parent, bg=CARD, highlightthickness=1, highlightbackground=LINE)
+        outer.grid(row=0, column=col, sticky="nsew", padx=(0 if col == 0 else 8, 0))
+        tk.Label(outer, text=title, bg=CARD, fg=color, font=(FONT, 9, "bold")).pack(anchor="w", padx=14, pady=(12, 6))
+        row = tk.Frame(outer, bg=CARD)
+        row.pack(fill="x", padx=14)
+        entry = tk.Entry(row, bg=CARD2, fg=TEXT, insertbackground=TEXT, relief="flat", font=(FONT, 10))
+        entry.pack(side="left", fill="x", expand=True, ipady=6)
+        entry.bind("<Return>", lambda e: add())
+        Button(row, "Adicionar", add, font=(FONT, 9, "bold"), pady=5, padx=12).pack(side="left", padx=(8, 0))
+        tk.Label(outer, text=hint, bg=CARD, fg=DIM, font=(FONT, 8)).pack(anchor="w", padx=14, pady=(3, 0))
+        opts = {}
+        if extras:
+            orow = tk.Frame(outer, bg=CARD)
+            orow.pack(fill="x", padx=14, pady=(4, 0))
+            for key, text in (("en", "canal em inglês"), ("game", "gameplay (facecam + jogo)")):
+                v = tk.BooleanVar(value=False)
+                tk.Checkbutton(orow, text=text, variable=v, bg=CARD, fg=MUTED, selectcolor=CARD2,
+                               activebackground=CARD, activeforeground=TEXT, font=(FONT, 9)).pack(side="left",
+                                                                                                 padx=(0, 12))
+                opts[key] = v
+        lb_wrap = tk.Frame(outer, bg=CARD)
+        lb_wrap.pack(fill="both", expand=True, padx=14, pady=(8, 6))
+        lb = tk.Listbox(lb_wrap, bg="#0b1220", fg=TEXT, selectbackground=BLUE_D, relief="flat", highlightthickness=0,
+                        font=(FONT, 10), activestyle="none")
+        sb = tk.Scrollbar(lb_wrap, command=lb.yview)
+        lb.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        lb.pack(side="left", fill="both", expand=True)
+        lb.bind("<Delete>", lambda e: delete())
+        brow = tk.Frame(outer, bg=CARD)
+        brow.pack(fill="x", padx=14, pady=(0, 12))
+        Button(brow, "Remover selecionado", delete, font=(FONT, 9), pady=4, padx=10).pack(side="left")
+        count = tk.Label(brow, text="", bg=CARD, fg=DIM, font=(FONT, 9))
+        count.pack(side="right")
+        return {"entry": entry, "list": lb, "opts": opts, "count": count, "items": []}
+
+    def _fill(self):
+        d = channel_lists.load()
+        for side, items, fmt in ((self.white, d["white"], channel_lists.label),
+                                 (self.black, d["black"], lambda b: b.get("canal", ""))):
+            side["items"] = list(items)
+            lb = side["list"]
+            lb.delete(0, "end")
+            for it in items:
+                lb.insert("end", fmt(it))
+            side["count"].config(text=f"{len(items)} canal(is)")
+
+    def _selected(self, side):
+        sel = side["list"].curselection()
+        return side["items"][sel[0]] if sel else None
+
+    def _add_white(self):
+        text = self.white["entry"].get().strip()
+        if not text:
+            return
+        if not channel_lists.looks_like_channel(text):
+            messagebox.showinfo("Lista branca", "Cole o @ do canal (ex.: @flowpodcast) ou o link dele "
+                                "(youtube.com/@... ou youtube.com/channel/...).", parent=self.win)
+            return
+        if channel_lists.is_black(text):
+            if not messagebox.askyesno("Lista branca", f"\"{text}\" está na lista negra. Tirar de lá e pôr na "
+                                       "lista branca?", parent=self.win):
+                return
+        o = self.white["opts"]
+        e = channel_lists.add_white(text, en=o["en"].get(), game=o["game"].get())
+        self.white["entry"].delete(0, "end")
+        self._fill()
+        self.app._note(f"Lista branca: {channel_lists.label(e)} adicionado -- conferindo o canal no YouTube...")
+        threading.Thread(target=self._check, args=(e,), daemon=True).start()
+
+    def _check(self, e):
+        """Confere se o canal existe e anota o nome (em segundo plano)."""
+        try:
+            from src import discovery
+            vids = discovery._list_channel(channel_lists.spec(e), 3)
+            name = vids[0]["channel"] if vids else None
+            msg = (f"Lista branca: canal \"{name}\" conferido ({len(vids)} vídeo(s) recentes)." if vids
+                   else "Lista branca: o canal não tem vídeos públicos (confira o link).")
+            if name:
+                channel_lists.set_name(e["canal"], name)
+        except Exception as ex:
+            text = str(ex)
+            if "404" in text or "does not exist" in text or "not found" in text.lower():
+                msg = (f"Lista branca: não achei \"{e['canal']}\" no YouTube -- confira o @ ou o link "
+                       "(ficou na lista; remova se estiver errado).")
+            else:
+                msg = f"Lista branca: não deu pra conferir \"{e['canal']}\" agora; fica na lista mesmo assim."
+
+        def done():
+            self.app._note(msg)
+            if self.win.winfo_exists():
+                self._fill()
+        self.app.root.after(0, done)
+
+    def _del_white(self):
+        it = self._selected(self.white)
+        if it is None:
+            return
+        channel_lists.remove_white(it["canal"])
+        self._fill()
+        self.app._note(f"Lista branca: {channel_lists.label(it)} removido (os clipes dele que já estão na fila "
+                       "continuam; pra tirar também, ponha na lista negra).")
+
+    def _add_black(self):
+        text = self.black["entry"].get().strip()
+        if not text:
+            return
+        if len(channel_lists.norm(text)) < 3:
+            messagebox.showinfo("Lista negra", "Nome curto demais: escreva o nome do canal, o @ ou o link.",
+                                parent=self.win)
+            return
+        gone = channel_lists.add_black(text)
+        self.black["entry"].delete(0, "end")
+        self._fill()
+        self.app._note(f"Lista negra: \"{text}\" adicionado -- nunca mais cortado; clipes dele na fila saem."
+                       + (f" Saiu da lista branca: {', '.join(gone)}." if gone else ""))
+
+    def _del_black(self):
+        it = self._selected(self.black)
+        if it is None:
+            return
+        channel_lists.remove_black(it.get("canal"))
+        self._fill()
+        self.app._note(f"Lista negra: \"{it.get('canal')}\" removido.")
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -371,6 +534,7 @@ class App:
         tools = tk.Frame(r, bg=BG)
         tools.pack(side="bottom", fill="x", padx=20, pady=(0, 16))
         for text, cmd in [("✂  Cortar um link…", self._cut_link),
+                          ("☰  Canais: cortar / não cortar", lambda: ChannelsWindow(self)),
                           ("Pasta: postar à mão", lambda: _open(MANUAL_DIR)), ("Pasta dos cortes", lambda: _open(OUT_DIR)),
                           ("▶  YouTube Studio", lambda: webbrowser.open("https://studio.youtube.com"))]:
             Button(tools, text, cmd, font=(FONT, 9), pady=7, padx=12).pack(side="left", padx=(0, 8))

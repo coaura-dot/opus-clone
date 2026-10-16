@@ -130,7 +130,8 @@ def _list_channel(channel: str, n: int = 10) -> List[dict]:
         if e and e.get("id"):
             out.append({"id": e["id"], "title": e.get("title") or "", "duration": e.get("duration"),
                         "view_count": e.get("view_count"), "channel": info.get("channel") or channel,
-                        "origin": "canal", "rank": rank, "lang": lang, "game": "game" in flags})
+                        "channel_id": info.get("channel_id"), "uploader_id": info.get("uploader_id"),
+                        "spec": channel, "origin": "canal", "rank": rank, "lang": lang, "game": "game" in flags})
     return out
 
 
@@ -181,6 +182,7 @@ def _full_info(video_id: str) -> Optional[dict]:
     return {"timestamp": ts, "view_count": v.get("view_count"), "duration": v.get("duration"),
             "live_status": v.get("live_status"), "availability": v.get("availability"),
             "title": v.get("title"), "channel": v.get("channel"), "language": v.get("language"),
+            "channel_id": v.get("channel_id"), "uploader_id": v.get("uploader_id"),
             "age_limit": v.get("age_limit") or 0}
 
 
@@ -242,11 +244,16 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
     """O melhor vídeo pra cortar agora (ou None se não achou nada novo).
     `seen`: IDs já usados/descartados. `recent_channels`: canal -> quantas
     vezes foi usado nas últimas 24h (pra variar a fonte)."""
+    from . import channel_lists
     recent_channels = recent_channels or {}
     cands, fails = [], 0
-    for ch in getattr(config, "AUTOPILOT_CHANNELS", []):
+    # lista branca (interface: "Canais: cortar / não cortar"; src/channel_lists.py)
+    for ch in channel_lists.white_specs():
         try:
-            cands += [dict(c, listed=True) for c in list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 30))]
+            got = list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 30))
+            cands += [dict(c, listed=True) for c in got]
+            if got and got[0].get("channel"):
+                channel_lists.set_name(ch.split("|")[0], got[0]["channel"])  # a lista mostra o nome
         except Exception as e:
             fails += 1
             log(f"    [busca] canal {ch}: {str(e).splitlines()[0][:120]}")
@@ -300,6 +307,8 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
             continue
         if blocked(c.get("title"), c.get("channel")):
             continue
+        if channel_lists.is_black(c.get("channel"), c.get("channel_id"), c.get("uploader_id"), c.get("spec")):
+            continue  # lista negra (o usuário não quer cortes desse canal)
         if avoid_channels and c.get("channel") in avoid_channels:
             continue  # canal que já deu bloqueio de direitos autorais (src/rights.py)
         est_age = (c.get("rank", 0) + 1) * est_days
@@ -336,11 +345,15 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
                 continue
             if blocked(info.get("title"), info.get("channel")):
                 continue
+            if channel_lists.is_black(info.get("channel"), info.get("channel_id"), info.get("uploader_id")):
+                continue
             if avoid_channels and info.get("channel") in avoid_channels:
                 continue
             ts = info.get("timestamp")
             if max_age_d and ts and time.time() - ts > max_age_d * 86400:
                 continue
+            c.update(channel_id=info.get("channel_id") or c.get("channel_id"),
+                     uploader_id=info.get("uploader_id") or c.get("uploader_id"))
             c.update(title=info.get("title") or c["title"], channel=info.get("channel") or c["channel"],
                      timestamp=ts, view_count=info.get("view_count") or c["view_count"],
                      duration=info.get("duration") or c.get("duration"))

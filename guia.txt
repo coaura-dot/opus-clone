@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v47
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v48
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -390,9 +390,16 @@ v47 (pedido: "aplique o que é dito" no vídeo SysWMs3zfHg -- "a forma certa
   - não dá pela API: música em alta, esconder likes (dito ao usuário).
 
 
+v48 (pedido: lista branca e lista negra de canais na interface):
+  - src/channel_lists.py (autopilot_data/canais.json; 1ª vez = AUTOPILOT_CHANNELS);
+    norm() casa @/link/nome; negra por nome pega substring (5+ letras);
+  - discovery usa white_specs() e is_black(); prune_blocked tira da fila;
+    o loop reaplica quando o arquivo muda (_lists_changed);
+  - interface: ChannelsWindow (botão "☰ Canais: cortar / não cortar").
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v47 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v48 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);
