@@ -384,10 +384,34 @@ def make_room(state: State, out_root: Path, log: Log) -> bool:
 
 
 # -------------------------------------------------------------- postar ---
-def _in_post_window() -> bool:
+def _hour_ok(h: int) -> bool:
+    """Posta nessa hora? AUTOPILOT_POST_HOURS (janela do dia) menos
+    AUTOPILOT_SKIP_HOURS (v47: o vídeo que o usuário mandou aplicar diz que a
+    maioria posta ao meio-dia e à tarde; horário fora do comum entrega mais
+    em canal novo)."""
     start, end = getattr(config, "AUTOPILOT_POST_HOURS", (0, 24))
-    h = datetime.now().hour
-    return start <= h < end if start <= end else (h >= start or h < end)
+    ok = start <= h < end if start <= end else (h >= start or h < end)
+    skip = getattr(config, "AUTOPILOT_SKIP_HOURS", None)
+    if ok and skip:
+        a, b = skip
+        ok = not (a <= h < b if a <= b else (h >= a or h < b))
+    return ok
+
+
+def _in_post_window(ts: Optional[float] = None) -> bool:
+    return _hour_ok(datetime.fromtimestamp(ts if ts is not None else time.time()).hour)
+
+
+def _next_open(ts: float) -> float:
+    """A primeira hora em que pode postar, a partir de `ts`."""
+    if _in_post_window(ts):
+        return ts
+    t = datetime.fromtimestamp(ts).replace(minute=0, second=0, microsecond=0)
+    for _ in range(48):
+        t += timedelta(hours=1)
+        if _hour_ok(t.hour):
+            return t.timestamp()
+    return ts
 
 
 def daily_limit() -> int:
@@ -411,8 +435,7 @@ def total_per_day(n_channels: Optional[int] = None) -> int:
 
 
 def _window_hours() -> float:
-    start, end = getattr(config, "AUTOPILOT_POST_HOURS", (0, 24))
-    return float((end - start) % 24 or 24)
+    return float(sum(1 for h in range(24) if _hour_ok(h)) or 24)
 
 
 def _base_gap() -> float:
@@ -471,8 +494,8 @@ def next_slot(data, live: list) -> tuple:
     best = min(live, key=lambda a: (account_next(d, a), sub(d, a).get("last_post_at", 0)))
     t = max(account_next(d, best), d.get("last_post_at", 0) + global_gap_seconds(len(live)),
             d.get("blocked_until", 0))
-    if t <= now and not _in_post_window():
-        t = now + 15 * 60
+    if not _in_post_window(t):
+        t = _next_open(t)  # fora do horário (ou nas horas puladas): na primeira hora livre
     return best, t
 
 
@@ -760,9 +783,23 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         others = len({_channel_of(state, c) for c in queue})
         log(f"  >> Escolhido entre {len(queue)} clipe(s) de {others} podcast(s): nota final "
             f"{rank_key(item, weights):.0f}" + (f" (IA: {item['ai_compare']}/100)" if "ai_compare" in item else ""))
-    log(f"  >> Postando no YouTube [{label(acc)}]: \"{meta['title']}\"")
+    # capa: o quadro de mais impacto do clipe (src/thumbnail.py)
+    from . import post_kit, thumbnail
+    thumb = thumbnail.ensure(item["video"], item.get("meta"), log) \
+        if getattr(config, "YOUTUBE_THUMBNAIL", True) else None
+    # v47 (vídeo que o usuário mandou aplicar): título em maiúsculas, só
+    # #shorts, descrição com palavras-chave; sobe PRIVADO e o próprio YouTube
+    # deixa público depois de processar em HD
+    up = post_kit.upgrade_meta(dict(meta))
+    up["title"] = post_kit.youtube_title(meta["title"])
+    delay = getattr(config, "YOUTUBE_PUBLISH_DELAY_MINUTES", 25)
+    public_at = time.time() + delay * 60 if delay and getattr(config, "YOUTUBE_PRIVACY", "public") == "public" \
+        else None
+    publish_at = datetime.fromtimestamp(public_at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z") \
+        if public_at else None
+    log(f"  >> Postando no YouTube [{label(acc)}]: \"{up['title']}\"")
     try:
-        vid = yt.upload_video(service, item["video"], meta, progress=log)
+        vid = yt.upload_video(service, item["video"], up, publish_at=publish_at, progress=log)
     except yt.QuotaExceeded as e:
         _quota_hit(state, e, key, log, acc)
         return False
@@ -778,11 +815,24 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         state.save()
         return False
     queue.pop(0)
+    if thumb is not None:
+        try:
+            yt.set_thumbnail(service, vid, thumb)
+            log("    capa posta (quadro de impacto do clipe)")
+        except yt.ThumbNotAllowed as e:
+            me = sub(state, acc)
+            if me.get("thumb_warned_day") != _pacific_day():
+                me["thumb_warned_day"] = _pacific_day()
+                log(f"    [capa] {e} (o vídeo saiu com a capa automática do YouTube)")
+        except yt.UploadError as e:
+            log(f"    [capa] não consegui pôr a capa ({e}); o vídeo saiu com a capa automática.")
     try:
         from .release import privacy_of
         privacy = privacy_of(service, [vid]).get(vid) or "?"
     except Exception:
         privacy = "?"
+    if public_at and privacy in ("private", "?"):
+        privacy = "scheduled"  # fica público sozinho em public_at (src/release.py confere)
     entry = {"youtube_id": vid, "title": meta["title"], "at": time.time(),
              "source_id": item.get("source_id"), "video": item["video"],
              "video_sem_musica": item.get("video_sem_musica"), "privacy": privacy,
@@ -796,10 +846,14 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
         entry["replaces"] = item["replaces"]
     if privacy == "?":
         del entry["privacy"]  # confere depois
+    if public_at:
+        entry["publish_at"] = public_at
     state.data["posted"].append(entry)
     sub(state, acc)["last_post_at"] = time.time()
     state.count_upload()
     note = "" if privacy in ("public", "?") else f" [{privacy} -- libera sozinho quando a auditoria sair]"
+    if privacy == "scheduled":
+        note = f" [fica público às {datetime.fromtimestamp(public_at):%H:%M}, depois de processar em HD]"
     log(f"    postado: https://youtube.com/shorts/{vid}  "
         f"({len(posts_last_24h(state, acc))}/{daily_limit()} nas últimas 24 h nesse canal){note}")
     if getattr(config, "AUTOPILOT_DELETE_POSTED_FILES", False):
@@ -865,6 +919,7 @@ def score_idle(state: State, log: Log, until: float) -> int:
     todo = sorted((c for c in state.data["queue"] if "viral" not in c and not _prio(c)),
                   key=lambda c: -c.get("quality", 50))
     if not todo:
+        _idle_thumbs(state, until)
         return 0
     log(f"  >> Tempo livre: medindo a viralidade de {len(todo)} clipe(s) da fila...")
     done = 0
@@ -886,7 +941,21 @@ def score_idle(state: State, log: Log, until: float) -> int:
         except (OSError, ValueError):
             t = Path(best["video"]).name
         log(f"    próximo a postar (mais viral da fila): \"{t}\" -- nota {rank_key(best, w):.0f}")
+    _idle_thumbs(state, until)
     return done
+
+
+def _idle_thumbs(state: State, until: float) -> None:
+    """Tempo livre: já escolhe a capa (src/thumbnail.py) dos clipes da fila,
+    pra não atrasar a hora do post. Sem log: a capa aparece no post."""
+    if not getattr(config, "YOUTUBE_THUMBNAIL", True):
+        return
+    from . import thumbnail
+    for c in list(state.data["queue"]):
+        if time.time() > until - 120:
+            return
+        if Path(c["video"]).exists() and not thumbnail.thumb_path(c["video"]).exists():
+            thumbnail.ensure(c["video"], c.get("meta"), log=lambda m: None)
 
 
 def prune_blocked(state: State, log: Log) -> int:

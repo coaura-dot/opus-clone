@@ -66,11 +66,36 @@ def make_public(service, video_id: str) -> bool:
 
 
 def _pending(state, acc: str = None) -> list:
-    """Privados esperando liberação (de um canal, ou de todos com acc=None)."""
+    """Privados esperando liberação (de um canal, ou de todos com acc=None).
+    Os agendados (v47: sobem privados e o YouTube publica sozinho depois de
+    processar em HD) não contam: ainda não deu a hora deles."""
     from .accounts import acc_of
     return [p for p in state.data["posted"]
-            if p.get("privacy") != "public" and not p.get("replaced") and not p.get("gave_up")
+            if p.get("privacy") not in ("public", "scheduled") and not p.get("replaced") and not p.get("gave_up")
             and (acc is None or acc_of(p) == acc)]
+
+
+def refresh_scheduled(state, service, acc: str = None) -> None:
+    """Agendado que já passou da hora: confere se ficou público mesmo. Se
+    continuar privado 3 h depois, vira privado comum (o resto deste módulo
+    cuida: projeto sem auditoria trava os vídeos como privados)."""
+    from .accounts import FIRST, acc_of
+    acc = acc or FIRST
+    now = time.time()
+    due = [p for p in state.data["posted"] if p.get("privacy") == "scheduled" and p.get("youtube_id")
+           and acc_of(p) == acc and now > p.get("publish_at", 0) + 10 * 60]
+    if not due:
+        return
+    st = privacy_of(service, [p["youtube_id"] for p in due])
+    for p in due:
+        got = st.get(p["youtube_id"])
+        if got == "public":
+            p["privacy"] = "public"
+        elif got is None:
+            p["privacy"], p["gave_up"] = "removido", True
+        elif now > p.get("publish_at", 0) + 3 * 3600:
+            p["privacy"] = got
+    state.save()
 
 
 def _rstate(state) -> dict:
@@ -114,6 +139,7 @@ def release_step(state, service, log, startup: bool = False, force: bool = False
         return False
     r = _rstate(state)
     refresh_unknown(state, service, acc)
+    refresh_scheduled(state, service, acc)
     pend = _pending(state, acc)
     if not pend:
         return False

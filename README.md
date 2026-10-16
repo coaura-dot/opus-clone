@@ -311,6 +311,46 @@ adicionar com o piloto ligado: ele conecta o canal novo em segundos.
 - **Tamanho dos canais:** canal novo começa do zero; o freio de alcance dele
   só liga depois que ele tiver histórico de views.
 
+### Como cada Short sobe (capa, título, descrição, horário)
+
+Regras do vídeo "a forma certa de enviar Shorts" que o usuário mandou
+aplicar (v47):
+
+- **Capa = quadro de impacto do próprio clipe** (`src/thumbnail.py`): o
+  programa procura a careta, o susto, a gargalhada ou a boca aberta, com o
+  rosto grande, de frente e nítido, de preferência num pico de som. Usa o
+  detector de rosto de sempre e um modelo pequeno de expressão facial (FER+,
+  do ONNX Model Zoo, licença MIT, 35 MB baixado uma vez em
+  `models\expressao`). Sorriso fechado olhando pra baixo, piscada e plano
+  aberto com rosto pequeno perdem. Sem rosto (gameplay), pega o quadro mais
+  nítido e colorido no pico de som. A capa fica em `clip_XX.thumb.jpg` e vai
+  pro YouTube pela API (**o canal precisa estar verificado por telefone**:
+  youtube.com/verify; sem isso o vídeo sai com a capa automática e o log
+  avisa uma vez por dia). Na pasta "postar à mão" vai junto como
+  `.capa.jpg`, com o minuto do quadro pra escolher no app.
+- **Título em MAIÚSCULAS** e começando com 3 palavras fortes e relevantes
+  (nome, número, palavra de impacto): é o pedaço que aparece no feed.
+  `YOUTUBE_TITLE_UPPERCASE = False` desliga as maiúsculas.
+- **Só #shorts** na descrição: muita hashtag em canal novo o YouTube trata
+  como spam (`YOUTUBE_HASHTAGS`). As hashtags de assunto continuam no kit do
+  TikTok/Instagram.
+- **Descrição:** uma frase curta do conteúdo + **5-6 palavras-chave**
+  separadas por vírgula (nomes, assuntos, o programa de origem) + #shorts +
+  crédito. O YouTube lê a descrição pra saber a quem entregar.
+- **Bastante tag:** palavras-chave, assuntos, nome do programa, "cortes de
+  podcast"... até o limite de 500 caracteres.
+- **Sobe privado e fica público sozinho 25 min depois**
+  (`YOUTUBE_PUBLISH_DELAY_MINUTES`): dá tempo de o YouTube processar em HD.
+  Publicado na hora, os primeiros a ver pegam a versão de baixa qualidade e
+  pulam. É o agendamento do próprio YouTube: funciona com o PC desligado.
+- **Horário:** nada das 12h às 17h (`AUTOPILOT_SKIP_HOURS`), quando a
+  maioria posta. Os posts do dia se espalham pelas outras 19 horas: com 6
+  canais × 4, um post a cada ~48 min (cada canal a cada 4 h 45).
+- **O que não dá pela API** (o vídeo fala, mas só existe no app/Studio):
+  música em alta do YouTube no Short (o programa já põe a música dele) e
+  esconder o número de likes (Studio → vídeo → "Mostrar quantos
+  espectadores gostaram deste vídeo"). Remix já vem permitido.
+
 ### Antes de cada post: esse vídeo já está no canal?
 
 Em qualquer modo, antes de cada upload o piloto confere (`src/channel_check.py`):
@@ -490,6 +530,10 @@ programa, faça o login (opção 3) uma vez de novo.
 | `AUTOPILOT_MANUAL_EXPORT` | True | cota acabou: os melhores clipes do dia vão pra pasta "postar à mão" |
 | `AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS` | 60 | intervalo mínimo no mesmo canal; o real espalha a meta do dia pela janela (6/dia em 24h = 1 a cada 4 h). Entre canais diferentes: esse intervalo dividido pelo número de canais |
 | `AUTOPILOT_POST_HOURS` | (0, 24) | horário em que posta (fora dele só produz) |
+| `AUTOPILOT_SKIP_HOURS` | (12, 17) | horas sem post dentro da janela (meio-dia e tarde, quando todo mundo posta); `None` desliga |
+| `YOUTUBE_THUMBNAIL` | True | capa = quadro de impacto do clipe (precisa do canal verificado por telefone) |
+| `YOUTUBE_PUBLISH_DELAY_MINUTES` | 25 | sobe privado e o YouTube publica sozinho depois de processar em HD; 0 = na hora |
+| `YOUTUBE_TITLE_UPPERCASE` / `YOUTUBE_HASHTAGS` | True / ["#shorts"] | título em maiúsculas; hashtags da descrição |
 | `AUTOPILOT_QUEUE_TARGET` | 30 | clipes prontos esperando na fila |
 | `AUTOPILOT_MIN_QUALITY` | 45 | nota mínima (0-100) pra um clipe ser postado; ver "Nota de qualidade" abaixo |
 | `YOUTUBE_PRIVACY` | "public" | "public", "unlisted" ou "private" |

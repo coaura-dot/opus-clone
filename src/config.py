@@ -1197,6 +1197,10 @@ AUTOPILOT_MANUAL_EXPORT = True          # cota acabou: os melhores clipes do dia
 AUTOPILOT_MANUAL_KEEP_DAYS = 3          # a pasta de cada dia é apagada depois disso
 AUTOPILOT_MIN_MINUTES_BETWEEN_POSTS = 60  # no mesmo canal; o intervalo real espalha o limite do dia pela janela toda
 AUTOPILOT_POST_HOURS = (0, 24)          # posta o dia todo (ex.: (9, 23) = só das 9h às 23h)
+# horas SEM post (v47, vídeo "a forma certa de enviar Shorts": a maioria posta
+# ao meio-dia e à tarde; horário fora do comum entrega mais em canal novo).
+# None = posta em qualquer hora da janela acima
+AUTOPILOT_SKIP_HOURS = (12, 17)         # nada das 12h00 às 16h59
 AUTOPILOT_WORKER_TIMEOUT_MINUTES = 150  # vídeo que trava na edição é abandonado
 AUTOPILOT_IDLE_MINUTES = 30             # sem vídeo novo: procura de novo depois de N min
 YTDLP_SLEEP_REQUESTS = 1.0              # pausa (s) entre consultas ao YouTube: menos chance de bloqueio
@@ -1223,6 +1227,13 @@ YOUTUBE_PRIVACY = "public"              # "public", "unlisted" ou "private"
 YOUTUBE_CATEGORY_ID = "24"              # 24 = Entretenimento (22 = Pessoas e blogs)
 YOUTUBE_LANGUAGE = "pt-BR"
 YOUTUBE_NOTIFY_SUBSCRIBERS = True
+# v47 (vídeo "a forma certa de enviar Shorts" que o usuário mandou aplicar):
+YOUTUBE_THUMBNAIL = True                # capa = quadro de impacto do clipe (careta, susto, riso) -- src/thumbnail.py;
+                                        # precisa do canal verificado por telefone (youtube.com/verify)
+YOUTUBE_PUBLISH_DELAY_MINUTES = 25      # sobe PRIVADO e o YouTube publica sozinho N min depois (dá tempo de
+                                        # processar em HD; publicar na hora sai com qualidade baixa). 0 = na hora
+YOUTUBE_TITLE_UPPERCASE = True          # título em MAIÚSCULAS ("no começo do canal é altamente recomendável")
+YOUTUBE_HASHTAGS = ["#shorts"]          # só #shorts: muita hashtag em canal novo o YouTube acha que é spam
 YOUTUBE_DAILY_QUOTA = 10000             # unidades/dia do projeto pras consultas (upload tem balde
                                         # próprio: 100/dia por projeto, somando todos os canais)
 YOUTUBE_CREDENTIALS_DIR = "credentials"

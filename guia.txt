@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 15/10/2026, versão atual v46
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v47
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -165,6 +165,11 @@ src/reach.py ....... freio automático: lê views dos próprios Shorts (API, 1
                      mediana anterior -> 1 post a cada 8 h até voltar
 src/channel_check.py "já está no canal?" antes de cada upload (histórico de
                      todos os canais + uploads do canal que recebe)
+src/thumbnail.py ... (v47) capa = quadro de impacto: YuNet + FER+ (ONNX Model Zoo,
+                     MIT, models/expressao, baixa do HF onnxmodelzoo com sha256),
+                     dentes/boca aberta/olhos/de frente (_face_feats), tamanho do
+                     rosto (trust), nitidez, pico de som; ensure() grava
+                     clip_XX.thumb.jpg e meta["thumb_time"]
 src/accounts.py .... (v46) vários canais: credentials/contas.json (c1 = canal
                      antigo, youtube_token.json; novos = id UC..., token
                      youtube_token_<id>.json), login() (escolhe conta, canal
@@ -359,9 +364,35 @@ v46 (pedido: "multiconta: postar em 6 contas diferentes, 1 vídeo por hora,
     gui.py (interface com 6 canais), legacy.py (1 canal, state antigo).
 
 
+v47 (pedido: "aplique o que é dito" no vídeo SysWMs3zfHg -- "a forma certa
+  de enviar Shorts" -- e "a thumb: escolher um frame de impacto, careta"):
+  - transcrição do vídeo: legendas automáticas via yt-dlp (só as legendas,
+    sem baixar o vídeo); resumo no README ("Como cada Short sobe");
+  - capa: src/thumbnail.py + yt.set_thumbnail (thumbnails.set, 50 unidades;
+    403 = canal sem verificação por telefone -> ThumbNotAllowed, aviso 1x por
+    dia por canal). Testado em 14 clipes reais do scratchpad (thumbs/,
+    sheet_*.jpg; thumbs_eval.py): gargalhada, susto e sorriso grande certos;
+    1ª versão errava plano aberto (rosto pequeno), piscada e sorriso
+    fechado olhando pra baixo -> trust por tamanho, dentes, olhos;
+  - título: _strong_words (3 primeiras palavras) no make_title; MAIÚSCULAS
+    no upload (post_kit.youtube_title); prompt do juiz de IA pede as 3
+    palavras fortes;
+  - descrição: frase curta + make_keywords (5-6) + só #shorts
+    (YOUTUBE_HASHTAGS) + fonte + música; tags bem mais numerosas;
+    post_kit.upgrade_meta refaz a descrição dos clipes que já estavam na
+    fila (meta_v 2), mantendo a música;
+  - upload privado com publishAt = agora + YOUTUBE_PUBLISH_DELAY_MINUTES (25):
+    posted[].privacy = "scheduled" + publish_at; release._pending ignora;
+    release.refresh_scheduled confere depois da hora;
+  - AUTOPILOT_SKIP_HOURS (12, 17): _hour_ok/_next_open; next_slot pula pra
+    primeira hora livre; _window_hours = 19 (6 canais x 4: 1 post a cada
+    ~48 min);
+  - não dá pela API: música em alta, esconder likes (dito ao usuário).
+
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v46 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v47 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

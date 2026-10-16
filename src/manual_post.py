@@ -62,13 +62,32 @@ def export(state, n: int, day: str, key: Callable, log) -> int:
             meta = {}
         title = meta.get("title") or Path(c["video"]).stem
         base = f"{i:02d} - {_safe(title)}"
+        # capa: o quadro de impacto (src/thumbnail.py) -- no app, "Editar capa" -> esse quadro
+        thumb, thumb_at = None, None
+        try:
+            from . import thumbnail
+            thumb = thumbnail.ensure(c["video"], c.get("meta"), log)
+            m2 = json.loads(Path(c["meta"]).read_text(encoding="utf-8")) if thumb else {}
+            thumb_at = m2.get("thumb_time")
+        except Exception:
+            thumb = None
         try:
             shutil.move(c["video"], out / f"{base}.mp4")
         except OSError as e:
             log(f"    [!] não consegui mover {Path(c['video']).name} ({e.__class__.__name__})")
             continue
+        if thumb is not None and thumb.exists():
+            try:
+                shutil.move(str(thumb), out / f"{base}.capa.jpg")
+            except OSError:
+                thumb = None
         kit = Path(c["video"]).with_suffix(".post.txt")
-        txt = [f"TÍTULO:\n{title}\n", f"DESCRIÇÃO:\n{meta.get('description', '')}\n"]
+        from .post_kit import upgrade_meta, youtube_title
+        meta = upgrade_meta(meta)
+        txt = [f"TÍTULO:\n{youtube_title(title)}\n", f"DESCRIÇÃO:\n{meta.get('description', '')}\n"]
+        if thumb is not None and thumb_at is not None:
+            txt.append(f"CAPA:\nno app, \"Editar capa\" -> o quadro em {int(thumb_at) // 60}:{int(thumb_at) % 60:02d} "
+                       f"(é o da imagem {base}.capa.jpg)\n")
         if meta.get("tags"):
             txt.append("TAGS:\n" + ", ".join(meta["tags"]) + "\n")
         if kit.exists():

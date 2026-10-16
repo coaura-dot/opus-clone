@@ -77,7 +77,9 @@ Use a escala toda (0-100) e não dê a mesma nota pra todos.
 
 Para cada trecho escreva também:
 - title: título do corte no idioma da fala, até 70 caracteres, que gere curiosidade \
-SEM mentir sobre o conteúdo; sem hashtag, sem emoji, sem aspas, sem caixa alta inteira;
+SEM mentir sobre o conteúdo; as 3 primeiras palavras precisam ser fortes e relevantes (quem ou o quê: \
+nome, número, fato forte -- é o pedaço que aparece no feed); sem hashtag, sem emoji, sem aspas \
+(o programa põe em maiúsculas sozinho);
 - reason: uma frase curta dizendo por que a nota."""
 
 

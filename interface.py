@@ -767,22 +767,25 @@ class App:
             mins = int(round(sec / 60))
             return f"{mins // 60} h" + (f" {mins % 60} min" if mins % 60 else "") if mins >= 60 else f"{mins} min"
         gap = fmt(ap.post_gap_seconds())
+        skip = getattr(config, "AUTOPILOT_SKIP_HOURS", None)
+        skip_txt = f" · nada das {skip[0]}h às {skip[1]}h" if skip else ""
         self.posts_val.config(text=str(n))
         if n_acc > 1:
             self.posts_label.config(text="Shorts por dia (cada canal):")
             self.posts_hint.config(text=f"{n_acc} canais × {n} = {n * n_acc} por dia · 1 post a cada "
                                         f"{fmt(ap.global_gap_seconds(n_acc))}, alternando (cada canal: 1 a cada {gap})"
+                                        + skip_txt
                                         + (" · cuidado: acima de 6 por canal o alcance caiu" if n > 6 else ""),
                                    fg=AMBER if n > 6 else MUTED)
             return
         self.posts_label.config(text="Shorts por dia:")
         if n > 6:
             # achado real (9-10/out): com 1 por hora todos os Shorts ficaram com 0-6 views
-            self.posts_hint.config(text=f"1 a cada {gap} · cuidado: acima de 6 o canal parou de pegar views",
+            self.posts_hint.config(text=f"1 a cada {gap}{skip_txt} · cuidado: acima de 6 o canal parou de pegar views",
                                    fg=AMBER)
         else:
-            self.posts_hint.config(text=f"1 a cada {gap}" + (" · recomendado" if n == 6 else " · recomendado: 6"),
-                                   fg=MUTED)
+            self.posts_hint.config(text=f"1 a cada {gap}{skip_txt}"
+                                        + (" · recomendado" if n == 6 else " · recomendado: 6"), fg=MUTED)
 
     def _open_last(self):
         if getattr(self, "_last_id", None):

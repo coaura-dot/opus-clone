@@ -12,6 +12,16 @@ filosofia do resto do projeto: sem LLM, sem API, sem custo por vídeo):
   - hashtags de assunto = palavras de conteúdo que mais se repetem no clipe
     (mesmo filtro de stopwords do TextTiling em clip_selector), mais as tags
     fixas de cada rede e as do seu canal (config.POST_EXTRA_HASHTAGS).
+
+YouTube (v47, vídeo "a forma certa de enviar Shorts" que o usuário mandou
+aplicar):
+  - título começando com 3 palavras FORTES e relevantes (nome, número,
+    palavra de impacto) -- é o pedaço que aparece no feed; em MAIÚSCULAS no
+    upload (config.YOUTUBE_TITLE_UPPERCASE);
+  - só #shorts na descrição (muita hashtag em canal novo parece spam);
+  - descrição = frase curta do conteúdo + 5-6 palavras-chave separadas por
+    vírgula (o YouTube lê a descrição pra saber a quem entregar);
+  - bastante tag.
 """
 import json
 import re
@@ -39,6 +49,14 @@ _WEAK_TAG_WORDS = {
     "because", "people", "thing", "things", "something", "really", "right",
     "know", "think", "going", "want", "said", "says", "actually",
 }
+
+# verbo conjugado não é assunto ("falei", "copiou", "pensando") -- fora das
+# palavras-chave, tags e hashtags
+_VERBISH = re.compile(r"(ei|ou|aram|eram|iram|ava|avam|ando|endo|indo|asse|esse|isse|aria|eria|iria)$")
+_WEAK_NAMES = {"deus", "nossa", "senhor", "então", "tipo", "cara", "mano", "olha", "sério", "acha", "importa",
+               "okay", "please", "yeah", "yes", "well", "god", "guys", "dude", "bro", "make", "more", "much",
+               "very", "just", "like", "gonna", "wanna", "kind", "sort", "maybe", "every", "still", "also",
+               "even", "back", "good", "look", "wait", "here", "there", "what"}
 
 PLATFORM_HASHTAGS = {
     "YouTube Shorts": ["#shorts"],
@@ -91,6 +109,26 @@ _HESITATION = re.compile(r"\b(\w+)(?: \1\b)+|\b(tipo|né|assim|sabe|enfim|meio q
                          re.IGNORECASE)
 
 
+_WEAK_START = re.compile(r"^(eu|a gente|nós|tem|tinha|é|era|foi|tá|ta|tô|to|vai|vou|quando|se|i|we|it|there|"
+                         r"what|when)\b", re.IGNORECASE)
+
+
+def _strong_words(cand: str, n: int = 3) -> int:
+    """Quantas das `n` primeiras palavras são fortes: nome próprio, número,
+    palavra de impacto ou palavra de conteúdo comprida."""
+    from .quality import _STRONG_HOOK
+    from .clip_selector import _LEXICAL_STOPWORDS
+    words = re.findall(r"[\wÀ-ÿ]+", cand)[:n]
+    strong = 0
+    for i, w in enumerate(words):
+        lw = w.lower()
+        if any(ch.isdigit() for ch in w) or (i > 0 and w[:1].isupper()) \
+                or any(re.search(pt, lw) for pt in _STRONG_HOOK[1:]) \
+                or (len(lw) >= 5 and lw not in _LEXICAL_STOPWORDS and lw not in _WEAK_TAG_WORDS):
+            strong += 1
+    return strong
+
+
 def make_title(clip_text: str, hook: Optional[str] = None) -> str:
     """Título sem IA: a frase do COMEÇO do clipe (o que a pessoa ouve
     primeiro) que mais funciona sozinha como título -- gancho, pergunta,
@@ -134,6 +172,10 @@ def make_title(clip_text: str, hook: Optional[str] = None) -> str:
         score -= 0.8 * len(_HESITATION.findall(cand))
         if cand.endswith("?"):
             score += 1.0
+        # as 3 primeiras palavras são as que aparecem no feed: fortes e relevantes
+        score += 0.6 * _strong_words(cand)
+        if _WEAK_START.match(cand):
+            score -= 1.0
         if _hits(_CLOSING, cand) or _hits(_PROMO, cand) or _hits(_OPENING, cand):
             score -= 10.0
         if score > best_score:
@@ -144,13 +186,45 @@ def make_title(clip_text: str, hook: Optional[str] = None) -> str:
 def make_topic_hashtags(clip_text: str, max_tags: int = 4) -> List[str]:
     counts = Counter(
         w for w in _content_words(clip_text)
-        if len(w) >= 4 and not w.isdigit() and w not in _WEAK_TAG_WORDS
+        if len(w) >= 4 and not w.isdigit() and w not in _WEAK_TAG_WORDS and not _VERBISH.search(w)
+        and w not in _WEAK_NAMES
     )
     # repetição pesa mais, mas palavra longa (substantivo/nome próprio)
     # ganha de palavra curta com a mesma contagem
     ranked = sorted(counts.items(), key=lambda kv: (kv[1] * (1 + min(len(kv[0]), 12) / 12), len(kv[0])),
                     reverse=True)
     return ["#" + w for w, c in ranked if c >= 2][:max_tags]
+
+
+def make_keywords(clip_text: str, source_title: Optional[str] = None, n: int = 6) -> List[str]:
+    """5-6 palavras-chave: nomes que aparecem no clipe, assuntos que se
+    repetem e o nome do programa/convidado do vídeo de origem."""
+    from .clip_selector import _LEXICAL_STOPWORDS
+    out = []
+    names = Counter(m.group(0) for m in re.finditer(r"(?<![.!?]\s)(?<!^)\b[A-ZÀ-Ý][a-zà-ÿ]{2,}(?:\s[A-ZÀ-Ý][a-zà-ÿ]{2,})?",
+                                                   clip_text))
+    for name, c in names.most_common():
+        if c >= 2 and name.lower() not in _LEXICAL_STOPWORDS and name.lower() not in _WEAK_TAG_WORDS \
+                and name.lower() not in _WEAK_NAMES:
+            out.append(name)
+    for h in make_topic_hashtags(clip_text, max_tags=8):
+        w = h.lstrip("#")
+        if all(w.lower() not in o.lower() for o in out):
+            out.append(w)
+    if source_title:
+        for chunk in re.split(r"\s*[|\-–—:#(),]\s*", source_title):
+            chunk = chunk.strip()
+            if 4 <= len(chunk) <= 30 and not chunk.isdigit() and all(chunk.lower() != o.lower() for o in out):
+                out.append(chunk)
+    if len(out) < n:  # completa com as palavras de conteúdo mais compridas do clipe
+        counts = Counter(w for w in _content_words(clip_text) if len(w) >= 6 and w not in _WEAK_TAG_WORDS
+                         and not _VERBISH.search(w) and w not in _WEAK_NAMES)
+        for w, _ in counts.most_common():
+            if len(out) >= n:
+                break
+            if all(w not in o.lower() for o in out):
+                out.append(w)
+    return out[:n]
 
 
 def make_description(clip_text: str) -> str:
@@ -183,7 +257,10 @@ def build_post_text(clip_text: str, music_credit: Optional[str] = None,
         "",
     ]
     for platform, platform_tags in PLATFORM_HASHTAGS.items():
-        tags = list(dict.fromkeys(topic_tags + extra_tags + platform_tags))
+        if platform == "YouTube Shorts":  # só #shorts no YouTube (v47)
+            tags = list(getattr(config, "YOUTUBE_HASHTAGS", ["#shorts"]))
+        else:
+            tags = list(dict.fromkeys(topic_tags + extra_tags + platform_tags))
         lines += [f"HASHTAGS — {platform}", " ".join(tags), ""]
     if music_credit:
         lines += ["MÚSICA (obrigatório colocar na descrição — licença de atribuição)",
@@ -243,12 +320,15 @@ def build_youtube_meta(clip_text: str, music_credit: Optional[str] = None,
         full = _full_title(title[:-1], clip_text)
         if full:
             title = full
-    topic_tags = make_topic_hashtags(clip_text)
-    extra_tags = [t if t.startswith("#") else f"#{t}"
-                  for t in getattr(config, "POST_EXTRA_HASHTAGS", [])]
-    hashtags = list(dict.fromkeys(["#shorts"] + topic_tags + extra_tags))
+    topic_tags = make_topic_hashtags(clip_text, max_tags=10)
+    keywords = make_keywords(clip_text, source_title)
+    # só #shorts (v47: "muita hashtag em canal novo o YouTube acha que é spam")
+    hashtags = list(getattr(config, "YOUTUBE_HASHTAGS", ["#shorts"]))
 
-    parts = [make_description(clip_text), "", " ".join(hashtags)]
+    parts = [_trim_at_word(make_description(clip_text), 150)]
+    if keywords:
+        parts += ["", ", ".join(keywords)]
+    parts += ["", " ".join(hashtags)]
     if source_title or source_url:
         parts += ["", "Corte de: " + " — ".join(x for x in (source_title, source_url) if x)]
     if music_credit:
@@ -257,9 +337,14 @@ def build_youtube_meta(clip_text: str, music_credit: Optional[str] = None,
     while len(description.encode("utf-8")) > YT_DESCRIPTION_MAX:
         description = description[:-50]
 
+    # bastante tag (v47): palavras-chave, assuntos, o programa de origem
+    src_tags = [c.strip() for c in re.split(r"\s*[|\-–—:#(),]\s*", source_title or "")
+                if 3 <= len(c.strip()) <= 30 and not c.strip().isdigit()]
     tags, used = [], 0
-    for t in [h.lstrip("#") for h in hashtags if h != "#shorts"] + ["shorts", "cortes"]:
-        if t and t not in tags and used + len(t) + 1 <= YT_TAGS_MAX_CHARS:
+    for t in keywords + [h.lstrip("#") for h in topic_tags] + src_tags + ["cortes", "cortes de podcast", "podcast",
+                                                                         "shorts"]:
+        t = t.replace("<", "").replace(">", "").strip()
+        if t and t.lower() not in (x.lower() for x in tags) and used + len(t) + 1 <= YT_TAGS_MAX_CHARS:
             tags.append(t)
             used += len(t) + 1
     return {
@@ -268,7 +353,27 @@ def build_youtube_meta(clip_text: str, music_credit: Optional[str] = None,
         "tags": tags,
         "source_title": source_title,
         "source_url": source_url,
+        "meta_v": 2,
     }
+
+
+def upgrade_meta(meta: dict) -> dict:
+    """Clipe que já estava na fila (descrição/tags do jeito antigo): refaz
+    com as regras da v47, mantendo título, crédito da música e fonte."""
+    if meta.get("meta_v", 1) >= 2 or not meta.get("text"):
+        return meta
+    m = re.search(r"^Música: (.+)$", meta.get("description", ""), re.MULTILINE)
+    new = build_youtube_meta(meta["text"], m.group(1) if m else None, meta.get("source_title"),
+                             meta.get("source_url"), title=meta.get("title"))
+    return dict(meta, description=new["description"], tags=new["tags"], meta_v=2)
+
+
+def youtube_title(title: str) -> str:
+    """Título na hora do upload: em MAIÚSCULAS no começo do canal (v47)."""
+    t = (title or "").strip()
+    if getattr(config, "YOUTUBE_TITLE_UPPERCASE", True):
+        t = t.upper()
+    return t[:YT_TITLE_MAX]
 
 
 def write_post_meta(path: str, clip_text: str, music_credit: Optional[str] = None,

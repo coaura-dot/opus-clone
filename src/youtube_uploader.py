@@ -54,6 +54,10 @@ class AuthError(UploadError):
     """Login do Google inválido/expirado -- precisa autorizar de novo."""
 
 
+class ThumbNotAllowed(UploadError):
+    """O canal ainda não pode ter capa personalizada (falta verificar por telefone)."""
+
+
 # achado real (14/out): "invalid_grant: Token has been expired or revoked"
 # no meio da madrugada -- com o app do Google Cloud em "Teste" o Google
 # derruba o login a cada 7 dias. O piloto ficou 8 h repetindo "confiro de
@@ -271,6 +275,28 @@ def upload_video(service, video_path: str, meta: dict, privacy: Optional[str] = 
     if not video_id:
         raise UploadError(f"resposta inesperada do YouTube: {response}")
     return video_id
+
+
+def set_thumbnail(service, video_id: str, path) -> None:
+    """Põe a capa (src/thumbnail.py) no vídeo. 50 unidades de cota.
+    Canal sem verificação por telefone não pode ter capa personalizada:
+    ThumbNotAllowed."""
+    from googleapiclient.errors import HttpError
+    from googleapiclient.http import MediaFileUpload
+    try:
+        service.thumbnails().set(videoId=video_id,
+                                 media_body=MediaFileUpload(str(path), mimetype="image/jpeg")).execute()
+    except HttpError as e:
+        reason = _error_reason(e)
+        code = int(getattr(e.resp, "status", 0) or 0)
+        if reason in ("quotaExceeded", "dailyLimitExceeded"):
+            raise QuotaExceeded(f"limite do YouTube atingido ({reason})") from e
+        if code == 401 or reason in ("authError", "unauthorized"):
+            raise AuthError(f"login do YouTube recusado ({reason or code})") from e
+        if code == 403:
+            raise ThumbNotAllowed("o canal ainda não pode ter capa personalizada -- verifique o canal por "
+                                  "telefone em youtube.com/verify") from e
+        raise UploadError(f"YouTube recusou a capa ({code} {reason})") from e
 
 
 def _backoff(retry: int, max_retries: int, why: str, progress) -> int:

@@ -29,7 +29,7 @@ from typing import Iterable, Optional
 
 from . import config
 
-_SUFFIXES = ("_sem_musica.mp4", ".meta.json", ".post.txt", ".contexto.txt", ".origem.jpg", ".mp4")
+_SUFFIXES = ("_sem_musica.mp4", ".meta.json", ".post.txt", ".contexto.txt", ".origem.jpg", ".thumb.jpg", ".mp4")
 
 
 def _base(path: Path) -> Optional[str]:
