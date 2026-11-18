@@ -423,6 +423,8 @@ v50 (pedido: conferir o gameplay com vídeos reais tipo GTA V; atalho; papel de 
     na largura toda; faixa = formato da webcam entre 28% e 40%);
   - achado: sem webcam, o enquadramento comum pegava o minimapa e o carro saía ->
     CenterGamePlan (recorte do centro, legenda a 30% da altura);
+  - achado: streamer fora da cadeira -> fundo da webcam 24-25 (limite 22) e o clipe
+    saía 77% sem o layout -> GAMEPLAY_CAM_MATCH_MAX_DIFF = 34 (100% nos 2 testes);
   - interface: papel de parede (botão; autopilot_data/papel_de_parede.*;
     WALLPAPER_BRIGHTNESS); cabeçalho virou Canvas pra imagem aparecer atrás;
   - atalho "interface.py - Shortcut" da área de trabalho: sem acesso ao PC, mandei

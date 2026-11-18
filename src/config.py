@@ -986,6 +986,7 @@ CONTENT_WINDOW_LOOKBACK_SECONDS = 30.0   # olha até isso antes do clipe (janela
 # STREAMER (jogo calmo e ele falando) x JOGO (ação ou voice chat).
 GAMEPLAY_MODE = False
 GAMEPLAY_LAYOUT = "alterna"             # "alterna" = tela cheia streamer x jogo; "empilhado" = webcam em cima, jogo embaixo
+GAMEPLAY_CAM_MATCH_MAX_DIFF = 34.0      # webcam "na tela" mesmo com a cadeira vazia (fundo parecido com o de referência)
 GAMEPLAY_NOCAM_CENTER = True            # gameplay sem webcam: recorte do centro do jogo (o personagem/carro fica no meio)
 GAMEPLAY_NOCAM_CAPTION_Y = 0.3          # ... e a legenda a 30% da altura (no meio ela cobria o carro/personagem)
 GAMEPLAY_STACK_CAM_FRAC = 0.4           # empilhado: altura MÁXIMA da faixa da webcam (ela ocupa a largura inteira; o jogo fica com o resto)

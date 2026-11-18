@@ -452,7 +452,10 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     # alterna jogo com facecam pequena e câmera em tela cheia)
     seen_face = np.array([fc is not None for fc in faces])
     near = np.convolve(seen_face.astype(float), np.ones(int(2 * RATE) + 1), mode="same") > 0  # rosto a até 1 s
-    thr = getattr(config, "REACT_CAM_MATCH_MAX_DIFF", 22.0)
+    # limite mais solto que o do react: com o streamer fora da cadeira o fundo
+    # da webcam muda um pouco (achado real, GTA RP: cadeira vazia dava 24-25,
+    # estável, contra o limite de 22 -- o clipe saía 77% sem o layout)
+    thr = max(getattr(config, "REACT_CAM_MATCH_MAX_DIFF", 22.0), getattr(config, "GAMEPLAY_CAM_MATCH_MAX_DIFF", 34.0))
     bg_ok = np.array([d is not None and d < thr for d in cam_bg])
     from .react_layout import _smooth_runs
     present = _smooth_runs(near | bg_ok, int(RATE))
