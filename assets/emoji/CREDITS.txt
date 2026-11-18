@@ -1,0 +1,7 @@
+Emojis: Twemoji (https://github.com/jdecked/twemoji), Copyright Twitter, Inc
+and other contributors. Graphics licensed under CC-BY 4.0:
+https://creativecommons.org/licenses/by/4.0/
+
+Os PNGs (256px) foram gerados a partir dos SVGs originais, sem alteração de
+desenho. Nome do arquivo = código Unicode do emoji. O mapa palavra -> emoji
+fica em src/emoji_map.py.
