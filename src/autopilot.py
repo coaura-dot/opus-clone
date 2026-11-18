@@ -261,7 +261,7 @@ _LOCAL_MARKERS = ("failed to initialize whisper context", "failed to load model"
 
 
 def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[str] = None,
-               game: bool = False) -> Optional[list]:
+               game: bool = False, game_layout: Optional[str] = None) -> Optional[list]:
     """Roda main.py num processo separado pra editar um vídeo. Devolve a
     lista de clipes gerados: None se a edição falhou, [] se terminou bem mas
     nenhum trecho prestou (ex.: o juiz de IA reprovou todos)."""
@@ -275,6 +275,8 @@ def run_worker(url: str, n_clips: int, out_dir: Path, log: Log, lang: Optional[s
         cmd += ["--lang", lang]  # canal em outro idioma (ex.: "...|en" na lista de canais)
     if game:
         cmd += ["--game"]  # canal de gameplay ("...|game"): câmera streamer x jogo
+        if game_layout:
+            cmd += ["--game-layout", game_layout]  # "empilhado": webcam em cima, jogo embaixo (GTA VI)
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     kw = {}
     if sys.platform == "win32":
@@ -536,6 +538,27 @@ def can_post_now(state: State, ignore_schedule: bool = False, live: Optional[lis
     return t <= now, t
 
 
+def _default_profile() -> str:
+    return getattr(config, "CONTENT_DEFAULT", "podcasts")
+
+
+def _perfil(c: dict) -> str:
+    """Tipo de conteúdo do clipe (config.CONTENT_PROFILES); fila antiga = o padrão."""
+    return c.get("perfil") or _default_profile()
+
+
+def _postable(state) -> list:
+    """Clipes da fila que podem ser postados agora: os do tipo de conteúdo da
+    sessão (interface: lista "Conteúdo") e os de prioridade (link colado na
+    mão, repostagem). Os outros esperam a sessão voltar pro tipo deles."""
+    queue = state.data["queue"]
+    if not getattr(config, "CONTENT_POST_ONLY_CURRENT", True):
+        return list(queue)
+    from . import control
+    cur = control.content_profile()
+    return [c for c in queue if _prio(c) or _perfil(c) == cur]
+
+
 def _prio(c: dict) -> int:
     """Prioridade de postagem: 2 = link colado na mão, 1 = repostagem de vídeo
     travado (filas antigas marcavam isso só com score 10**5/10**6)."""
@@ -580,7 +603,7 @@ def pool_ready(state: State, log: Log) -> bool:
     o primeiro que ficou pronto. Se o banco não enche (YouTube bloqueando
     download, por exemplo), posta o melhor que tiver depois de
     AUTOPILOT_POOL_MAX_WAIT_HOURS."""
-    queue = state.data["queue"]
+    queue = _postable(state)
     if any(_prio(c) for c in queue):
         return True  # link colado na mão / repostagem: já escolhidos
     need_n = getattr(config, "AUTOPILOT_POOL_MIN", 6)
@@ -734,13 +757,19 @@ def post_next(state: State, service, log: Log, ignore_schedule: bool = False,
     recent_src = {p.get("source_id") for p in posted_by(state, acc)
                   if gap and p.get("source_id") and now - p.get("at", 0) < gap}
 
+    from . import control
+    cur = control.content_profile()
+
     def key(c):
         div = 0.0 if strict else _diversity_penalty(state, c, acc)
         same = 1 if (c.get("source_id") in recent_src and not _prio(c)) else 0
-        return (-_prio(c), same, -(rank_key(c, weights) - div), c.get("added", 0))
+        other = 0 if _perfil(c) == cur else 1  # tipo de conteúdo da sessão primeiro
+        return (-_prio(c), other, same, -(rank_key(c, weights) - div), c.get("added", 0))
     _ai_compare(state, queue, key, log)
     queue.sort(key=key)
     item = queue[0]
+    if not _prio(item) and _perfil(item) != cur and getattr(config, "CONTENT_POST_ONLY_CURRENT", True):
+        return False  # nenhum clipe do tipo de conteúdo da sessão (o loop só chama com _postable)
     if not Path(item["video"]).exists():
         log(f"    arquivo sumiu, tirando da fila: {item['video']}")
         queue.pop(0)
@@ -1046,7 +1075,7 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
     log(f"  >> Editando: \"{source.get('title', vid)}\" -- {source['url']}")
     t0 = time.time()
     clips = run_worker(source["url"], n_clips, out_root / vid, log, lang=source.get("lang"),
-                       game=bool(source.get("game")))
+                       game=bool(source.get("game")), game_layout=source.get("game_layout"))
     if clips is None:
         state.mark_source(vid, "failed", title=source.get("title"), channel=source.get("channel"))
         return 0
@@ -1059,7 +1088,7 @@ def produce(state: State, source: dict, out_root: Path, log: Log, n_clips: Optio
     for c in clips:
         no_music = Path(c["video"]).with_name(Path(c["video"]).stem + "_sem_musica.mp4")
         item = {"video": c["video"], "meta": c["meta"], "score": c.get("score", 0),
-                "source_id": vid, "added": time.time(),
+                "source_id": vid, "added": time.time(), "perfil": source.get("perfil") or _default_profile(),
                 "video_sem_musica": str(no_music) if no_music.exists() else None}
         if judge(state, item, log):
             state.data["queue"].append(item)
@@ -1251,6 +1280,10 @@ def _run_forever(upload: bool = True):
     if lists["black"]:
         log(f"  nunca cortar (lista negra): {', '.join(b['canal'] for b in lists['black'])}")
     log(f"  buscas: {', '.join(getattr(config, 'AUTOPILOT_SEARCHES', [])) or '(nenhuma)'}")
+    from . import control as _ctl
+    _p = _ctl.content_profile_dict()
+    log(f"  conteúdo da sessão: {_p.get('nome', _p['id'])}"
+        + (f" -- buscas: {', '.join(_p['buscas'])}" if _p.get("buscas") else ""))
     from . import accounts
     accounts.migrate_state(state)  # antes da v46: um canal só
     accs = accounts.active() if upload else []
@@ -1296,6 +1329,7 @@ def _run_forever(upload: bool = True):
     failures = 0
     startup = True
     last_mode = None
+    last_prof = None
     _AUTO["on"] = True  # só o modo automático para a edição ao trocar pra "só postar"
     from . import youtube_uploader as yt
     while True:
@@ -1336,6 +1370,15 @@ def _run_forever(upload: bool = True):
                     cur["acc"] = aid
                     rights.check_recent_posts(state, svcs[aid], log, aid)
 
+            # tipo de conteúdo da sessão (interface: lista "Conteúdo") -- vale na próxima busca
+            prof = control.content_profile_dict()
+            if prof["id"] != last_prof:
+                if last_prof is not None:
+                    n = len(_postable(state))
+                    log(f"  >> Conteúdo da sessão: {prof.get('nome', prof['id'])} -- a próxima busca já é desse "
+                        f"tipo; {n} clipe(s) dele na fila pra postar (os de outro tipo esperam).")
+                last_prof = prof["id"]
+
             # modo SÓ POSTAR (src/control.py): lido a cada volta -- a interface
             # troca com o piloto ligado
             only_post = control.post_only()
@@ -1350,7 +1393,7 @@ def _run_forever(upload: bool = True):
             # clipes já tem opção de podcasts diferentes pra escolher o mais
             # viral (no só postar não chega clipe novo: posta o melhor que tiver)
             waiting_pool = False
-            if live and state.data["queue"]:
+            if live and _postable(state):
                 # o YouTube está entregando os últimos Shorts? (freio
                 # automático de cada canal, src/reach.py -- confere a cada 2 h)
                 for aid in live:
@@ -1377,7 +1420,7 @@ def _run_forever(upload: bool = True):
             target = max(getattr(config, "AUTOPILOT_QUEUE_TARGET", 8), total_per_day(len(live)) if live else 0)
             local_until = state.data.get("local_fail_until", 0)
             blocked_until = max(state.data.get("download_blocked_until", 0), local_until)
-            if (not only_post and len(state.data["queue"]) < target and time.time() >= blocked_until
+            if (not only_post and len(_postable(state)) < target and time.time() >= blocked_until
                     and make_room(state, out_root, log) and housekeeping.has_room(state, out_root, log)):
                 repair_models(log)
                 update_ytdlp(state, log)
@@ -1441,13 +1484,13 @@ def _run_forever(upload: bool = True):
             if only_post and not live:
                 _sleep_until(time.time() + 1800, log, "só postar: postagem indisponível (confira os canais do "
                              "YouTube na interface)")
-            elif only_post and not state.data["queue"]:
+            elif only_post and not _postable(state):
                 _sleep_until(time.time() + 1800, log, "só postar: a fila acabou, nada pra postar (ligue um "
                              "modo de GPU pra fazer mais clipes)")
             elif time.time() < blocked_until and not (live and state.data["queue"]):
                 _sleep_until(blocked_until, log, "edição pausada (problema no PC)" if blocked_until == local_until
                              else "downloads pausados pelo bloqueio do YouTube")
-            elif live and state.data["queue"]:
+            elif live and _postable(state):
                 nxt_acc, nxt = next_slot(state, live)
                 if waiting_pool:
                     nxt = _pool_deadline(state)  # posta o melhor que tiver nessa hora
@@ -1518,6 +1561,10 @@ def _run_once(url: str, n_clips: int, upload: bool = True):
             log("  Vou gerar os clipes mesmo assim; eles ficam na fila pra postar depois.")
     vid = _video_id(url) or f"manual_{int(time.time())}"
     source = {"id": vid, "url": url, "title": url}
+    from . import control
+    prof = control.content_profile_dict()
+    if prof.get("gameplay"):  # sessão de gameplay (ex.: GTA VI): o link sai no mesmo estilo
+        source.update(game=True, game_layout=prof.get("layout"), perfil=prof["id"])
     before = len(state.data["queue"])
     try:
         made = produce(state, source, out_root, log, n_clips=n_clips)

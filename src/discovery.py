@@ -135,9 +135,9 @@ def _list_channel(channel: str, n: int = 10) -> List[dict]:
     return out
 
 
-def search(query: str, n: int = 15) -> List[dict]:
+def search(query: str, n: int = 15, sp: Optional[str] = None) -> List[dict]:
     url = ("https://www.youtube.com/results?" +
-           urllib.parse.urlencode({"search_query": query, "sp": _SEARCH_FILTER, "hl": "pt-BR", "gl": "BR"}))
+           urllib.parse.urlencode({"search_query": query, "sp": sp or _SEARCH_FILTER, "hl": "pt-BR", "gl": "BR"}))
     with _ydl(flat=True) as y:
         y.params["playlistend"] = n
         info = y.extract_info(url, download=False)
@@ -146,6 +146,7 @@ def search(query: str, n: int = 15) -> List[dict]:
         if e and e.get("id") and len(e["id"]) == 11:
             out.append({"id": e["id"], "title": e.get("title") or "", "duration": e.get("duration"),
                         "view_count": e.get("view_count"), "channel": e.get("channel") or "",
+                        "channel_id": e.get("channel_id"), "uploader_id": e.get("uploader_id"),
                         "origin": f"busca '{query}'"})
     return out
 
@@ -231,12 +232,28 @@ def length_factor(duration) -> float:
     return 0.6 + 0.4 * max(duration - 8 * 60, 0) / max(pref - 8 * 60, 1)
 
 
-def _duration_ok(d) -> bool:
+def _duration_ok(d, prof: Optional[dict] = None) -> bool:
     if not d:
         return True  # desconhecida na listagem rápida: confere depois
-    lo = getattr(config, "AUTOPILOT_MIN_SOURCE_MINUTES", 8) * 60
-    hi = getattr(config, "AUTOPILOT_MAX_SOURCE_MINUTES", 240) * 60
+    prof = prof or {}
+    lo = prof.get("min_minutos", getattr(config, "AUTOPILOT_MIN_SOURCE_MINUTES", 8)) * 60
+    hi = prof.get("max_minutos", getattr(config, "AUTOPILOT_MAX_SOURCE_MINUTES", 240)) * 60
     return lo <= d <= hi
+
+
+def _lang_of(title: str, info: Optional[dict]) -> str:
+    """Idioma da fala de um vídeo achado na busca (tipo de conteúdo com
+    "idiomas"): o que o YouTube diz; senão, pelo título."""
+    lang = ((info or {}).get("language") or "").lower()
+    if lang.startswith("pt"):
+        return "pt"
+    if lang.startswith("en"):
+        return "en"
+    if looks_portuguese(title or ""):
+        return "pt"
+    if _ES_MARKERS.search((title or "").lower()):
+        return "es"
+    return "en"
 
 
 def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
@@ -244,11 +261,29 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
     """O melhor vídeo pra cortar agora (ou None se não achou nada novo).
     `seen`: IDs já usados/descartados. `recent_channels`: canal -> quantas
     vezes foi usado nas últimas 24h (pra variar a fonte)."""
-    from . import channel_lists
+    from . import channel_lists, control
     recent_channels = recent_channels or {}
     cands, fails = [], 0
+    # tipo de conteúdo da sessão (interface: lista "Conteúdo"; config.CONTENT_PROFILES).
+    # "podcasts": lista branca de canais. Outro (ex.: GTA VI): buscas no YouTube
+    # com filtro de título, duração e idioma, editado no modo gameplay
+    prof = control.content_profile_dict()
+    search_mode = bool(prof.get("buscas"))
+    title_re = re.compile(prof["titulo"], re.IGNORECASE) if prof.get("titulo") else None
+    excl_re = re.compile(prof["excluir"], re.IGNORECASE) if prof.get("excluir") else None
+    need_re = re.compile(prof["precisa"], re.IGNORECASE) if prof.get("precisa") else None
+
+    def fits(title) -> bool:
+        if not search_mode:
+            return True
+        t = title or ""
+        return bool((title_re is None or title_re.search(t)) and not (excl_re and excl_re.search(t))
+                    and (need_re is None or need_re.search(t)))
+
+    specs = list(prof.get("canais") or []) if search_mode else channel_lists.white_specs()
+    queries = list(prof["buscas"]) if search_mode else getattr(config, "AUTOPILOT_SEARCHES", [])
     # lista branca (interface: "Canais: cortar / não cortar"; src/channel_lists.py)
-    for ch in channel_lists.white_specs():
+    for ch in specs:
         try:
             got = list_channel(ch, getattr(config, "AUTOPILOT_VIDEOS_PER_CHANNEL", 30))
             cands += [dict(c, listed=True) for c in got]
@@ -257,9 +292,9 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
         except Exception as e:
             fails += 1
             log(f"    [busca] canal {ch}: {str(e).splitlines()[0][:120]}")
-    for q in getattr(config, "AUTOPILOT_SEARCHES", []):
+    for q in queries:
         try:
-            cands += [dict(c, rank=i) for i, c in enumerate(search(q))]
+            cands += [dict(c, rank=i) for i, c in enumerate(search(q, sp=prof.get("filtro_busca")))]
         except Exception as e:
             fails += 1
             log(f"    [busca] '{q}': {str(e).splitlines()[0][:120]}")
@@ -267,10 +302,10 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
     # canal da lista (escolhido por você): 5 mil views bastam -- com 50 mil o
     # Inteligência Ltda tinha 1 de 6 episódios elegíveis e episódio novo de
     # qualquer podcast nunca entrava. Busca (canal desconhecido): 50 mil.
-    min_views = getattr(config, "AUTOPILOT_MIN_VIEWS", 5000)
-    min_views_search = getattr(config, "AUTOPILOT_MIN_VIEWS_SEARCH", 50000)
+    min_views = prof.get("min_views", getattr(config, "AUTOPILOT_MIN_VIEWS", 5000))
+    min_views_search = prof.get("min_views", getattr(config, "AUTOPILOT_MIN_VIEWS_SEARCH", 50000))
     est_days = getattr(config, "AUTOPILOT_EST_DAYS_PER_VIDEO", 2.0)
-    max_age_d = getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 30) or 0
+    max_age_d = prof.get("max_dias", getattr(config, "AUTOPILOT_MAX_AGE_DAYS", 30)) or 0
 
     def velocity(views, age_d):
         return views / (age_d + 2.0) ** 0.6  # views por dia, suavizado
@@ -301,49 +336,60 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
     uniq = {}
     for c in cands:
         views = c.get("view_count")
-        if c["id"] in seen or c["id"] in uniq or not views or views < (min_views if c.get("listed") else min_views_search):
-            continue  # sem número de views = estreia/membros/live: pula
-        if not _duration_ok(c.get("duration")):
+        if c["id"] in seen or c["id"] in uniq:
             continue
-        if blocked(c.get("title"), c.get("channel")):
+        # busca: a listagem rápida do YouTube veio sem views (achado real, nov/2026):
+        # passa pra conferência completa, que traz as views de verdade
+        no_views_search = not views and not c.get("listed")
+        if not no_views_search and (not views or views < (min_views if c.get("listed") else min_views_search)):
+            continue  # sem número de views = estreia/membros/live: pula
+        if not _duration_ok(c.get("duration"), prof):
+            continue
+        if blocked(c.get("title"), c.get("channel")) or not fits(c.get("title")):
             continue
         if channel_lists.is_black(c.get("channel"), c.get("channel_id"), c.get("uploader_id"), c.get("spec")):
             continue  # lista negra (o usuário não quer cortes desse canal)
         if avoid_channels and c.get("channel") in avoid_channels:
             continue  # canal que já deu bloqueio de direitos autorais (src/rights.py)
-        est_age = (c.get("rank", 0) + 1) * est_days
+        # idade pela posição só na lista do canal (vem do mais novo pro mais
+        # velho); resultado de busca: a data real vem na conferência
+        est_age = (c.get("rank", 0) + 1) * est_days if c.get("listed") else 3.0
         if max_age_d and est_age > max_age_d * 1.5:
             continue  # bem fundo na lista do canal: com certeza velho
-        c["score"] = score(c, est_age)
+        # sem views: a ordem da busca (já vem dos mais vistos) decide quem é conferido
+        c["score"] = score(c, est_age) if views else 1.0 / (1 + c.get("rank", 0))
         uniq[c["id"]] = c
     if not uniq:
         if not fails or cands:
+            where = f"nas buscas de {prof.get('nome', prof['id'])}" if search_mode else "nos canais configurados"
             log(f"    [busca] nenhum vídeo ainda não usado com {min_views:,} views ou mais "
-                f"nos canais configurados.".replace(",", "."))
+                f"{where}.".replace(",", "."))
         return None
 
     # os melhores pra conferir a fundo, no máximo 2 por canal (senão um canal
     # grande ocupava todas as vagas)
     shortlist, per = [], {}
     for c in sorted(uniq.values(), key=lambda c: -c["score"]):
-        if per.get(c.get("channel"), 0) >= 2:
+        grp = c.get("channel") or c["id"]  # busca sem o nome do canal: cada vídeo é um grupo
+        if per.get(grp, 0) >= 2:
             continue
-        per[c.get("channel")] = per.get(c.get("channel"), 0) + 1
+        per[grp] = per.get(grp, 0) + 1
         shortlist.append(c)
         if len(shortlist) >= getattr(config, "AUTOPILOT_CHECK_TOP", 10):
             break
 
     checked = []
     for c in shortlist:
+        orig_title = c.get("title") or ""  # o da busca: o YouTube não traduz (o da consulta completa, sim)
         info = full_info(c["id"])
         if info:
             if info.get("live_status") in ("is_live", "is_upcoming", "post_live"):
                 continue
             if info.get("availability") not in (None, "public") or info.get("age_limit", 0) >= 18:
                 continue
-            if info.get("duration") and not _duration_ok(info["duration"]):
+            if info.get("duration") and not _duration_ok(info["duration"], prof):
                 continue
-            if blocked(info.get("title"), info.get("channel")):
+            if blocked(info.get("title"), info.get("channel")) or not (fits(info.get("title")) or fits(orig_title)):
                 continue
             if channel_lists.is_black(info.get("channel"), info.get("channel_id"), info.get("uploader_id")):
                 continue
@@ -357,13 +403,23 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
             c.update(title=info.get("title") or c["title"], channel=info.get("channel") or c["channel"],
                      timestamp=ts, view_count=info.get("view_count") or c["view_count"],
                      duration=info.get("duration") or c.get("duration"))
+        if not c.get("view_count") or c["view_count"] < (min_views if c.get("listed") else min_views_search):
+            continue  # views de verdade (a busca pode ter vindo sem)
         # idade: a data real; sem ela (consulta falhou/bloqueada), estima pela
         # posição na lista do canal (vem do mais novo pro mais velho) -- antes,
         # vídeo sem data escapava do limite de idade e ainda ganhava na nota
+        if search_mode and prof.get("idiomas"):
+            lang = _lang_of(orig_title, info)
+            if lang not in prof["idiomas"]:
+                continue
+            c["lang"] = None if lang == "pt" else lang
+        if search_mode:
+            c.update(perfil=prof["id"], game=bool(prof.get("gameplay")) or c.get("game"),
+                     game_layout=prof.get("layout"))
         if c.get("timestamp"):
             age_d = max((time.time() - c["timestamp"]) / 86400.0, 0.0)
         else:
-            age_d = (c.get("rank", 0) + 1) * est_days
+            age_d = (c.get("rank", 0) + 1) * est_days if c.get("listed") else 3.0
             c["age_estimated"] = True
             if max_age_d and age_d > max_age_d:
                 continue
@@ -371,8 +427,9 @@ def pick_source(seen: set, recent_channels: Optional[dict] = None, log=print,
         c["final"] = score(c, age_d)  # agora com a idade real
         checked.append(c)
     if not checked:
-        log(f"    [busca] nenhum vídeo dos últimos {max_age_d} dias passou nos filtros "
-            "(live/idade/duração/bloqueio); tento de novo depois.")
+        what = f"de {prof.get('nome', prof['id'])} " if search_mode else ""
+        log(f"    [busca] nenhum vídeo {what}dos últimos {max_age_d} dias passou nos filtros "
+            "(live/idade/duração/bloqueio" + ("/título/idioma" if search_mode else "") + "); tento de novo depois.")
         return None
     c = max(checked, key=lambda c: c["final"])
     c["url"] = f"https://www.youtube.com/watch?v={c['id']}"

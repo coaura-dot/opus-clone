@@ -985,6 +985,8 @@ CONTENT_WINDOW_LOOKBACK_SECONDS = 30.0   # olha até isso antes do clipe (janela
 # piloto passa --game pro main.py). Câmera em tela cheia alternando:
 # STREAMER (jogo calmo e ele falando) x JOGO (ação ou voice chat).
 GAMEPLAY_MODE = False
+GAMEPLAY_LAYOUT = "alterna"             # "alterna" = tela cheia streamer x jogo; "empilhado" = webcam em cima, jogo embaixo
+GAMEPLAY_STACK_CAM_FRAC = 0.4           # empilhado: altura da webcam (o jogo fica com o resto)
 GAMEPLAY_ACTION_MOTION = 26.0       # o jogo "mexe" isso (0-255, média de 0,75 s) = ação (PvP, tiro, parkour)
 GAMEPLAY_ACTION_RELATIVE = 1.8      # ... ou 1,8x o normal deste clipe (desde que acima de ~14)
 GAMEPLAY_MIN_HOLD_SECONDS = 2.0     # cada plano fica pelo menos isso na tela (sem pisca-pisca)
@@ -1137,6 +1139,37 @@ AUTOPILOT_SAME_SOURCE_GAP_HOURS = 24
 # pra achar vídeo bombando fora da lista acima. Vazio = só os canais.
 # Atenção: a busca traz canais que você não conhece -- confira se liberam corte.
 AUTOPILOT_SEARCHES = []
+# TIPO DE CONTEÚDO da sessão (v49; a interface escolhe na lista "Conteúdo" e
+# guarda em autopilot_data/conteudo.txt -- vale na próxima busca). "podcasts" =
+# os canais da lista branca (o de sempre). Os outros procuram no YouTube com as
+# regras de cada um. Só os clipes do tipo escolhido são postados
+# (CONTENT_POST_ONLY_CURRENT); os outros esperam na fila.
+CONTENT_DEFAULT = "podcasts"
+CONTENT_POST_ONLY_CURRENT = True
+CONTENT_PROFILES = {
+    "podcasts": {"nome": "Podcasts, reacts e TV (lista branca)"},
+    "gta6": {
+        "nome": "GTA VI (gameplay com webcam)",
+        # buscas no YouTube: vídeos LONGOS (mais de 20 min, lives e gameplays
+        # grandes) do último mês, mais vistos primeiro
+        "buscas": ["GTA 6 gameplay", "GTA VI gameplay", "GTA 6 ao vivo", "GTA 6 live", "GTA 6 gameplay PT-BR",
+                   "GTA VI full gameplay", "GTA 6 jogando"],
+        "filtro_busca": "CAMSBggEEAEYAg==",   # mais vistos + este mês + vídeo + mais de 20 min
+        "canais": [],                          # streamers de GTA pra acompanhar (@ ou link), além da busca
+        # o título TEM que ser de GTA VI; e não pode ser trailer/react/notícia/GTA 5
+        "titulo": r"\bgta\s*-?\s*(6|vi)\b|\bgta(6|vi)\b|grand theft auto\s*(6|vi)\b",
+        "excluir": r"\btrailer\b|\brea(gi|ct|ç)|\bteoria|\bprevis|\bnot[íi]cia|\bvazad|\bleak|\bgta\s*(5|v)\b",
+        # ...e tem que ser GAMEPLAY de verdade (achado no teste real: "GTA 6: 25 coisas que você
+        # precisa saber", 26 min, passava -- vídeo de informação, não de jogo)
+        "precisa": r"gameplay|jogando|ao vivo|\blive\b|walkthrough|playthrough|zerando|let'?s play|"
+                   r"\bparte?\s*\d|\bpart\s*\d|\bep\.?\s*\d|#\s*\d|miss[ãa]o|mission|primeir[ao]s?\s+(hora|vez|miss)|"
+                   r"first\s+(hour|mission|time)|\bstream|\bdia\s*\d|\bday\s*\d",
+        "gameplay": True,                      # webcam + jogo (src/gameplay.py)
+        "layout": "empilhado",                 # webcam em cima, jogo embaixo
+        "min_minutos": 20, "max_minutos": 240, "min_views": 10000, "max_dias": 30,
+        "idiomas": ["pt", "en"],               # vídeo em espanhol etc. fica de fora
+    },
+}
 AUTOPILOT_VIDEOS_PER_CHANNEL = 12       # últimos N vídeos de cada canal
 AUTOPILOT_CHECK_TOP = 10                # quantos candidatos conferir a fundo (data, live, duração) por rodada
 AUTOPILOT_MAX_AGE_DAYS = 30             # só vídeo publicado nos últimos N dias (0 = qualquer idade)

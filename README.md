@@ -311,6 +311,25 @@ adicionar com o piloto ligado: ele conecta o canal novo em segundos.
 - **Tamanho dos canais:** canal novo começa do zero; o freio de alcance dele
   só liga depois que ele tiver histórico de views.
 
+### Tipo de conteúdo da sessão (lista "Conteúdo")
+
+Na interface, a lista **Conteúdo** escolhe o que o piloto procura, corta e
+posta (`CONTENT_PROFILES` em `src/config.py`, escolha salva em
+`autopilot_data/conteudo.txt`; vale na próxima busca):
+- **Podcasts, reacts e TV:** os canais da lista branca (o de sempre).
+- **GTA VI (gameplay com webcam):** busca no YouTube vídeos **longos** (20 a
+  240 min: lives e gameplays grandes) do último mês, os mais vistos primeiro
+  ("GTA 6 gameplay", "GTA 6 ao vivo"...). O título tem que ser de GTA VI e de
+  gameplay (gameplay, ao vivo, jogando, parte 1, walkthrough...); trailer,
+  react, notícia, teoria e GTA 5 ficam de fora. Português e inglês (o idioma
+  vem do YouTube ou do título original). O corte sai no estilo **webcam em
+  cima, jogo embaixo** (`GAMEPLAY_LAYOUT = "empilhado"`, webcam com 40% da
+  altura, legenda na divisória); vídeo sem webcam sai com o enquadramento
+  normal. Dá pra pôr streamers fixos em `"canais"`.
+- Só os clipes do tipo escolhido são postados; os outros esperam na fila
+  (`CONTENT_POST_ONLY_CURRENT`). "Cortar um link" numa sessão de GTA também
+  sai no estilo empilhado.
+
 ### Canais: lista branca e lista negra
 
 Na interface, botão **☰ Canais: cortar / não cortar** (`src/channel_lists.py`,

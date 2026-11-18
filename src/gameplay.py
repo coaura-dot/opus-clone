@@ -29,6 +29,12 @@ Agora, em canal marcado como gameplay ("...|game" na lista de canais):
 
 Tem a mesma interface do plano do react (active/compose), então o
 reframer.py usa sem mudança nenhuma.
+
+Layout EMPILHADO (v49, pedido do usuário pros cortes de GTA VI: "estilo
+de gameplay, webcam com jogo"; GAMEPLAY_LAYOUT = "empilhado"): os dois ao
+mesmo tempo -- a webcam do streamer em cima (GAMEPLAY_STACK_CAM_FRAC da
+altura) e o jogo embaixo, sem a facecam, com a legenda na divisória. É o
+formato mais comum dos cortes de gameplay no Shorts/TikTok.
 """
 from typing import List, Optional, Tuple
 
@@ -78,8 +84,13 @@ def _enforce_hold(lab: np.ndarray, min_len: int) -> np.ndarray:
 
 
 class GameplayClipPlan:
-    """Plano de um clipe de gameplay: em cada instante, STREAMER ou JOGO."""
+    """Plano de um clipe de gameplay: em cada instante, STREAMER ou JOGO
+    (ou os dois empilhados, com `stacked`)."""
     split_screen = False
+    stacked = False
+    cam_h = 0
+    out_h = 0
+    game_window_stacked = None
 
     def __init__(self, layout: ReactLayout, times, views, faces, game_window, analysis_w: int, present=None):
         self.layout = layout
@@ -118,12 +129,26 @@ class GameplayClipPlan:
         return int(np.sum(v[1:] != v[:-1])) if len(v) > 1 else 0
 
     def compose(self, frame, t: float, out_w: int, out_h: int, zoom: float = 1.0) -> np.ndarray:
+        if self.stacked:
+            cam_h = int(round(out_h * self.cam_h / float(self.out_h or out_h) / 2.0)) * 2
+            top = self._streamer(frame, t, out_w, cam_h, 1.0)
+            bottom = self._game(frame, out_w, out_h - cam_h, zoom, self.game_window_stacked)
+            return np.vstack([top, bottom])
         if self.view_at(t) == STREAMER:
             return self._streamer(frame, t, out_w, out_h, zoom)
         return self._game(frame, out_w, out_h, zoom)
 
-    def _game(self, frame, out_w, out_h, zoom):
-        x, y, w, h = self.game_window
+    def caption_margin_v(self) -> int:
+        """Empilhado: legenda centrada na divisória entre a webcam e o jogo."""
+        font = getattr(config, "CAPTION_FONT_SIZE", 104)
+        return int(round(self.out_h - self.cam_h - font * 0.5))
+
+    def hook_bottom_y(self) -> int:
+        font = getattr(config, "CAPTION_FONT_SIZE", 104)
+        return int(self.out_h - self.caption_margin_v() - font - 40)
+
+    def _game(self, frame, out_w, out_h, zoom, window=None):
+        x, y, w, h = window or self.game_window
         z = max(zoom, 1.0)
         if z > 1.001:
             # zoom de edição puxando pro centro da tela (a mira)
@@ -428,6 +453,11 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
 
     window = _game_window(layout, W, H, out_w, out_h)
     plan = GameplayClipPlan(layout, times, lab, locked, window, W, present=present)
+    if getattr(config, "GAMEPLAY_LAYOUT", "alterna") == "empilhado":
+        frac = float(np.clip(getattr(config, "GAMEPLAY_STACK_CAM_FRAC", 0.4), 0.25, 0.55))
+        plan.stacked, plan.out_h = True, out_h
+        plan.cam_h = int(round(out_h * frac / 2.0)) * 2
+        plan.game_window_stacked = _game_window(layout, W, H, out_w, out_h - plan.cam_h)
     plan.n_action = int(_count_runs(action))
     plan.n_other = n_other + n_voice
     plan.n_voice = n_voice

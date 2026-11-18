@@ -172,7 +172,13 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
         from . import gameplay
         react_plan = gameplay.plan_clip(react_layout, source_path, candidate.start, candidate.end,
                                         config.TARGET_WIDTH, config.TARGET_HEIGHT, words=transcript_words)
-        if react_plan is not None:
+        if react_plan is not None and react_plan.stacked:
+            # empilhado (webcam em cima, jogo embaixo): legenda na divisória
+            caption_margin_v = react_plan.caption_margin_v()
+            hook_bottom_y = react_plan.hook_bottom_y()
+            print(f"    -> Clip {clip_index}: gameplay empilhado -- webcam em cima ({react_plan.cam_h}px), "
+                  f"jogo embaixo; {react_plan.active_fraction * 100:.0f}% do clipe com a webcam na tela")
+        elif react_plan is not None:
             extra = f", {react_plan.n_voice} fala(s) de outra pessoa (voice chat)" if react_plan.n_voice else ""
             cheia = (f"; {(1 - react_plan.active_fraction) * 100:.0f}% em câmera cheia (enquadramento normal)"
                      if react_plan.active_fraction < 0.98 else "")

@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v48
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v49
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -397,9 +397,26 @@ v48 (pedido: lista branca e lista negra de canais na interface):
     o loop reaplica quando o arquivo muda (_lists_changed);
   - interface: ChannelsWindow (botão "☰ Canais: cortar / não cortar").
 
+v49 (pedido: clipar GTA VI de vídeos grandes, estilo webcam + jogo, e lista pra escolher o
+  tipo de conteúdo da sessão):
+  - config.CONTENT_PROFILES ("podcasts", "gta6"), control.content_profile (conteudo.txt);
+  - discovery.pick_source: tipo com "buscas" usa search(sp=filtro_busca: mês + >20 min +
+    mais vistos), titulo/excluir/precisa, duração/views/idade do tipo, _lang_of (idioma do
+    YouTube ou título ORIGINAL da busca; o da consulta completa vem traduzido);
+    busca sem views na listagem (achado real) passa pra full_info e o mínimo vale lá;
+  - gameplay.py: layout "empilhado" (compose = _streamer em cima + _game embaixo com
+    janela própria; legenda na divisória); main.py --game-layout; run_worker passa;
+  - fila: item["perfil"]; _postable() = tipo da sessão + prioridade; post_next ordena
+    o tipo da sessão primeiro;
+  - interface: lista "Conteúdo" (OptionMenu) no card do piloto;
+  - em 18/11/2026 o GTA VI ainda não tinha saído: a busca real achava quase só vídeo
+    de informação (filtrado); gameplay de verdade aparece depois do lançamento;
+  - ambiente novo da nuvem: python3 -m pip install -r requirements.txt onnxruntime
+    pyflakes; tkinter só no /usr/bin/python3.12 (apt-get install python3-tk).
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v48 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v49 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

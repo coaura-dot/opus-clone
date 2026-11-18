@@ -483,6 +483,23 @@ class App:
         self.posts_hint = tk.Label(prow, text="", bg=CARD, fg=MUTED, font=(FONT, 9), justify="left", anchor="w",
                                    wraplength=430)
         self.posts_hint.pack(side="left", padx=14)
+        # tipo de conteúdo da sessão (v49): o que o piloto procura, corta e posta
+        crow = tk.Frame(body, bg=CARD)
+        crow.pack(fill="x", pady=(10, 0))
+        tk.Label(crow, text="Conteúdo:", bg=CARD, fg=TEXT, font=(FONT, 11, "bold")).pack(side="left")
+        self._profiles = getattr(config, "CONTENT_PROFILES", {}) or {"podcasts": {"nome": "Podcasts"}}
+        cur = self._profiles.get(control.content_profile(), {})
+        self.content_var = tk.StringVar(value=cur.get("nome", control.content_profile()))
+        om = tk.OptionMenu(crow, self.content_var, *[p_.get("nome", k) for k, p_ in self._profiles.items()],
+                           command=self._content_pick)
+        om.config(bg=CARD2, fg=TEXT, activebackground=LINE, activeforeground=TEXT, highlightthickness=0,
+                  relief="flat", font=(FONT, 10), width=34, anchor="w", cursor="hand2")
+        om["menu"].config(bg=CARD2, fg=TEXT, activebackground=BLUE_D, activeforeground=TEXT, font=(FONT, 10))
+        om.pack(side="left", padx=(12, 0))
+        self.content_hint = tk.Label(crow, text="", bg=CARD, fg=MUTED, font=(FONT, 9), justify="left", anchor="w",
+                                     wraplength=360)
+        self.content_hint.pack(side="left", padx=14)
+        self._content_show()
 
         # --- canais do YouTube (v46: vários canais; o piloto alterna entre eles)
         card, body = self._card(r, "CANAIS DO YOUTUBE")
@@ -915,6 +932,25 @@ class App:
         else:
             self.acc_hint.config(text=f"{len([a for a in accs if a.get('on', True)])} canais ativos: o piloto alterna "
                                       "entre eles. Cada clipe vai pra um canal só.")
+
+    def _content_pick(self, name: str):
+        key = next((k for k, p_ in self._profiles.items() if p_.get("nome", k) == name), None)
+        if key is None or key == control.content_profile():
+            return
+        control.set_content_profile(key)
+        self._content_show()
+        self._note(f"Conteúdo da sessão: {name}. Vale na próxima busca do piloto (a edição em andamento termina); "
+                   "só os clipes desse tipo são postados.")
+
+    def _content_show(self):
+        p_ = self._profiles.get(control.content_profile(), {})
+        if p_.get("buscas"):
+            style = ("webcam em cima, jogo embaixo" if p_.get("layout") == "empilhado"
+                     else "modo gameplay" if p_.get("gameplay") else "edição normal")
+            txt = (f"busca no YouTube vídeos longos ({p_.get('min_minutos', 20)}+ min) e corta: {style}")
+        else:
+            txt = "os canais da lista branca (botão ☰ Canais)"
+        self.content_hint.config(text=txt)
 
     def _posts_step(self, d: int):
         n = int(min(max(ap.daily_limit() + d, 1), 24))

@@ -118,6 +118,31 @@ def set_posts_per_day(n: int) -> None:
     POSTS.write_text(f"{int(n)}\n", encoding="utf-8")
 
 
+CONTENT = DATA_DIR / "conteudo.txt"
+
+
+def content_profile() -> str:
+    """Tipo de conteúdo da sessão (config.CONTENT_PROFILES), escolhido na interface."""
+    from . import config
+    profiles = getattr(config, "CONTENT_PROFILES", {})
+    try:
+        key = CONTENT.read_text(encoding="utf-8").strip()
+    except OSError:
+        key = ""
+    return key if key in profiles else getattr(config, "CONTENT_DEFAULT", "podcasts")
+
+
+def content_profile_dict() -> dict:
+    from . import config
+    key = content_profile()
+    return dict(getattr(config, "CONTENT_PROFILES", {}).get(key, {}), id=key)
+
+
+def set_content_profile(key: str) -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    CONTENT.write_text(f"{key}\n", encoding="utf-8")
+
+
 def request_stop() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     STOP.write_text(f"{time.time():.0f}\n", encoding="utf-8")

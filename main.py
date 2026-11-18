@@ -157,9 +157,13 @@ def main():
     # canal de gameplay com facecam ("...|game" na lista de canais): câmera
     # alterna entre o streamer e o jogo (ver src/gameplay.py)
     parser.add_argument("--game", action="store_true")
+    # "empilhado" = webcam em cima e jogo embaixo (tipo de conteúdo GTA VI)
+    parser.add_argument("--game-layout", default=None)
     cli_args, _ = parser.parse_known_args()
     if cli_args.game:
         config.GAMEPLAY_MODE = True
+    if cli_args.game_layout:
+        config.GAMEPLAY_LAYOUT = cli_args.game_layout
     if cli_args.lang:
         config.WHISPERCPP_LANGUAGE = cli_args.lang
         config.CONTENT_LANGUAGE = cli_args.lang
