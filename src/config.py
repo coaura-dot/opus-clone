@@ -1270,3 +1270,4 @@ YOUTUBE_HASHTAGS = ["#shorts"]          # só #shorts: muita hashtag em canal no
 YOUTUBE_DAILY_QUOTA = 10000             # unidades/dia do projeto pras consultas (upload tem balde
                                         # próprio: 100/dia por projeto, somando todos os canais)
 YOUTUBE_CREDENTIALS_DIR = "credentials"
+WALLPAPER_BRIGHTNESS = 0.55             # papel de parede da interface: 1.0 = brilho original (0.55 = escurecido)

@@ -311,6 +311,15 @@ adicionar com o piloto ligado: ele conecta o canal novo em segundos.
 - **Tamanho dos canais:** canal novo começa do zero; o freio de alcance dele
   só liga depois que ele tiver histórico de views.
 
+### Papel de parede da interface
+
+Botão **▣ Papel de parede** (embaixo, na interface): escolha uma imagem (PNG,
+JPG, BMP ou WEBP). Ela cobre a janela inteira, sem esticar (corta as sobras),
+escurecida pra o texto continuar legível (`WALLPAPER_BRIGHTNESS`, 0.55), e
+aparece no cabeçalho e entre os quadros. Fica guardada em
+`autopilot_data\papel_de_parede.*` (a atualização não apaga). Clicar de novo:
+trocar ou tirar.
+
 ### Tipo de conteúdo da sessão (lista "Conteúdo")
 
 Na interface, a lista **Conteúdo** escolhe o que o piloto procura, corta e

@@ -425,6 +425,7 @@ class App:
             self._note(f"Piloto já estava ligado (desde {datetime.fromtimestamp(info.get('started', 0)):%d/%m %H:%M}).")
         self._tick()
         self._stats()
+        self.root.after(300, lambda: self._wall_render(force=True))
 
     # ------------------------------------------------------------ tela ---
     def _card(self, parent, title):
@@ -442,15 +443,20 @@ class App:
         r.geometry(f"940x{max(min(r.winfo_screenheight() - 90, 1000), 700)}")
         r.minsize(760, 620)
 
-        head = tk.Frame(r, bg=BG)
-        head.pack(fill="x", padx=20, pady=(16, 10))
-        left = tk.Frame(head, bg=BG)
-        left.pack(side="left")
-        tk.Label(left, text="Auto Clipper", bg=BG, fg=TEXT, font=(FONT, 20, "bold")).pack(anchor="w")
-        tk.Label(left, text="Acha vídeo bombando, corta, edita e posta nos seus canais", bg=BG, fg=MUTED,
-                 font=(FONT, 10)).pack(anchor="w")
-        self.status = tk.Label(head, text="", bg=CARD, fg=TEXT, font=(FONT, 11, "bold"), padx=16, pady=8)
-        self.status.pack(side="right")
+        # papel de parede (v50): fica atrás de tudo; o cabeçalho é desenhado por cima dele
+        self.wall_lbl = tk.Label(r, bd=0, bg=BG)
+        self.wall_lbl.place(x=0, y=0, relwidth=1, relheight=1)
+        self.wall_lbl.lower()
+        self._wall = {"img": None, "head": None, "size": None, "job": None}
+        self.head = tk.Canvas(r, height=78, bg=BG, highlightthickness=0, bd=0)
+        self.head.pack(fill="x", pady=(0, 6))
+        self._head_bg = self.head.create_image(0, 0, anchor="nw")
+        self.head.create_text(20, 16, text="Auto Clipper", anchor="nw", fill=TEXT, font=(FONT, 20, "bold"))
+        self.head.create_text(21, 52, text="Acha vídeo bombando, corta, edita e posta nos seus canais", anchor="nw",
+                              fill=MUTED, font=(FONT, 10))
+        self.status = tk.Label(self.head, text="", bg=CARD, fg=TEXT, font=(FONT, 11, "bold"), padx=16, pady=8)
+        self._head_status = self.head.create_window(0, 20, anchor="ne", window=self.status)
+        r.bind("<Configure>", self._on_resize, add="+")
 
         # --- ligar / modos
         card, body = self._card(r, "PILOTO AUTOMÁTICO")
@@ -550,10 +556,10 @@ class App:
         # --- ferramentas (antes do log: o log é que estica)
         tools = tk.Frame(r, bg=BG)
         tools.pack(side="bottom", fill="x", padx=20, pady=(0, 16))
-        for text, cmd in [("✂  Cortar um link…", self._cut_link),
-                          ("☰  Canais: cortar / não cortar", lambda: ChannelsWindow(self)),
+        for text, cmd in [("✂  Cortar um link…", self._cut_link), ("▣  Papel de parede", self._wall_pick),
+                          ("☰  Canais", lambda: ChannelsWindow(self)),
                           ("Pasta: postar à mão", lambda: _open(MANUAL_DIR)), ("Pasta dos cortes", lambda: _open(OUT_DIR)),
-                          ("▶  YouTube Studio", lambda: webbrowser.open("https://studio.youtube.com"))]:
+                          ("▶  Studio", lambda: webbrowser.open("https://studio.youtube.com"))]:
             Button(tools, text, cmd, font=(FONT, 9), pady=7, padx=12).pack(side="left", padx=(0, 8))
 
         # --- log
@@ -575,6 +581,96 @@ class App:
         self.log.configure(state="disabled")
 
         r.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # -------------------------------------------------- papel de parede ---
+    def _wall_file(self):
+        found = sorted(ap.DATA_DIR.glob("papel_de_parede.*"))
+        return found[0] if found else None
+
+    def _wall_pick(self):
+        """Escolhe (ou tira) a imagem de fundo da janela. Guarda uma cópia em
+        autopilot_data (a atualização não apaga)."""
+        cur = self._wall_file()
+        if cur is not None:
+            ans = messagebox.askyesnocancel("Papel de parede", "Sim: escolher outra imagem.\n"
+                                            "Não: tirar o papel de parede.\nCancelar: deixar como está.")
+            if ans is None:
+                return
+            if ans is False:
+                cur.unlink(missing_ok=True)
+                self._wall_render(force=True)
+                self._note("Papel de parede removido.")
+                return
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="Escolha a imagem do papel de parede", parent=self.root,
+                                          filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp"),
+                                                     ("Todos os arquivos", "*.*")])
+        if not path:
+            return
+        if self._wall_load(Path(path)) is None:
+            messagebox.showwarning("Papel de parede", "Não consegui abrir essa imagem (use PNG, JPG, BMP ou WEBP).")
+            return
+        for old in ap.DATA_DIR.glob("papel_de_parede.*"):
+            old.unlink(missing_ok=True)
+        ap.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copyfile(path, ap.DATA_DIR / ("papel_de_parede" + Path(path).suffix.lower()))
+        self._wall_render(force=True)
+        self._note(f"Papel de parede: {Path(path).name}")
+
+    @staticmethod
+    def _wall_load(path: Path):
+        try:
+            import cv2
+            import numpy as np
+            img = cv2.imdecode(np.fromfile(str(path), dtype=np.uint8), cv2.IMREAD_COLOR)  # caminho com acento ok
+            return img if img is not None and img.size else None
+        except Exception:
+            return None
+
+    def _on_resize(self, event=None):
+        if event is not None and event.widget is not self.root:
+            return
+        w = self.root.winfo_width()
+        self.head.coords(self._head_status, max(w - 20, 200), 20)
+        if self._wall["job"]:
+            self.root.after_cancel(self._wall["job"])
+        self._wall["job"] = self.root.after(200, self._wall_render)
+
+    def _wall_render(self, force: bool = False):
+        """Imagem cobrindo a janela inteira (corta as sobras, sem esticar),
+        escurecida pra o texto continuar legível."""
+        self._wall["job"] = None
+        w, h = max(self.root.winfo_width(), 50), max(self.root.winfo_height(), 50)
+        path = self._wall_file()
+        if path is None:
+            self.wall_lbl.config(image="", bg=BG)
+            self.head.itemconfig(self._head_bg, image="")
+            self._wall.update(img=None, head=None, size=None)
+            return
+        if not force and self._wall["size"] == (w, h, str(path)):
+            return
+        img = self._wall_load(path)
+        if img is None:
+            return
+        import base64
+        import cv2
+        ih, iw = img.shape[:2]
+        k = max(w / iw, h / ih)
+        img = cv2.resize(img, (max(int(round(iw * k)), w), max(int(round(ih * k)), h)), interpolation=cv2.INTER_AREA)
+        y0, x0 = (img.shape[0] - h) // 2, (img.shape[1] - w) // 2
+        img = (img[y0:y0 + h, x0:x0 + w].astype("float32") * getattr(config, "WALLPAPER_BRIGHTNESS", 0.55))
+        img = img.clip(0, 255).astype("uint8")
+
+        def photo(a):
+            ok, png = cv2.imencode(".png", a)
+            return tk.PhotoImage(data=base64.b64encode(png.tobytes())) if ok else None
+        self._wall["img"] = photo(img)
+        hh = max(self.head.winfo_height(), 1)
+        self._wall["head"] = photo(img[:hh])
+        self._wall["size"] = (w, h, str(path))
+        self.wall_lbl.config(image=self._wall["img"])
+        self.head.itemconfig(self._head_bg, image=self._wall["head"])
 
     # ------------------------------------------------------------- log ---
     def _append(self, lines):
