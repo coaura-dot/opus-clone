@@ -986,7 +986,9 @@ CONTENT_WINDOW_LOOKBACK_SECONDS = 30.0   # olha até isso antes do clipe (janela
 # STREAMER (jogo calmo e ele falando) x JOGO (ação ou voice chat).
 GAMEPLAY_MODE = False
 GAMEPLAY_LAYOUT = "alterna"             # "alterna" = tela cheia streamer x jogo; "empilhado" = webcam em cima, jogo embaixo
-GAMEPLAY_STACK_CAM_FRAC = 0.4           # empilhado: altura da webcam (o jogo fica com o resto)
+GAMEPLAY_NOCAM_CENTER = True            # gameplay sem webcam: recorte do centro do jogo (o personagem/carro fica no meio)
+GAMEPLAY_NOCAM_CAPTION_Y = 0.3          # ... e a legenda a 30% da altura (no meio ela cobria o carro/personagem)
+GAMEPLAY_STACK_CAM_FRAC = 0.4           # empilhado: altura MÁXIMA da faixa da webcam (ela ocupa a largura inteira; o jogo fica com o resto)
 GAMEPLAY_ACTION_MOTION = 26.0       # o jogo "mexe" isso (0-255, média de 0,75 s) = ação (PvP, tiro, parkour)
 GAMEPLAY_ACTION_RELATIVE = 1.8      # ... ou 1,8x o normal deste clipe (desde que acima de ~14)
 GAMEPLAY_MIN_HOLD_SECONDS = 2.0     # cada plano fica pelo menos isso na tela (sem pisca-pisca)

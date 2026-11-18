@@ -131,7 +131,7 @@ class GameplayClipPlan:
     def compose(self, frame, t: float, out_w: int, out_h: int, zoom: float = 1.0) -> np.ndarray:
         if self.stacked:
             cam_h = int(round(out_h * self.cam_h / float(self.out_h or out_h) / 2.0)) * 2
-            top = self._streamer(frame, t, out_w, cam_h, 1.0)
+            top = self._cam_full(frame, t, out_w, cam_h)
             bottom = self._game(frame, out_w, out_h - cam_h, zoom, self.game_window_stacked)
             return np.vstack([top, bottom])
         if self.view_at(t) == STREAMER:
@@ -146,6 +146,22 @@ class GameplayClipPlan:
     def hook_bottom_y(self) -> int:
         font = getattr(config, "CAPTION_FONT_SIZE", 104)
         return int(self.out_h - self.caption_margin_v() - font - 40)
+
+    def _cam_full(self, frame, t, out_w, out_h):
+        """Empilhado: a webcam ocupando a faixa de cima inteira (o maior recorte
+        da facecam no formato da faixa, centrado no rosto). Achado no teste
+        real (xQc, GTA V RP): com o close do modo alterna, a webcam pequena
+        virava um painelzinho no meio de uma faixa escura e desfocada."""
+        bx, by, bw, bh = self.layout.cam_box
+        bx, by, bw, bh = bx + 0.02 * bw, by + 0.02 * bh, 0.96 * bw, 0.96 * bh
+        aspect = out_w / float(out_h)
+        cw = min(float(bw), bh * aspect)
+        ch = cw / aspect
+        fcx, fcy, _ = self.faces[self._i(t)]
+        x0 = int(np.clip(fcx - cw / 2, bx, bx + bw - cw))
+        y0 = int(np.clip(fcy - ch * 0.45, by, by + bh - ch))
+        crop = frame[y0:y0 + max(int(ch), 2), x0:x0 + max(int(cw), 2)]
+        return _upscale(crop, out_w, out_h, out_w / max(cw, 1.0))
 
     def _game(self, frame, out_w, out_h, zoom, window=None):
         x, y, w, h = window or self.game_window
@@ -200,6 +216,47 @@ class GameplayClipPlan:
         py = int(np.clip(round(out_h * 0.44 - ph / 2), 0, out_h - ph))
         out[py:py + ph, px:px + pw] = panel
         return out
+
+
+class CenterGamePlan:
+    """Gameplay SEM webcam (achado no teste real: GTA V RP do Buddha, só o
+    jogo): o reenquadramento comum procura rosto, não acha, e cortava o lado
+    do minimapa -- o carro, no meio da tela, saía do quadro. Num jogo em
+    terceira pessoa o personagem/carro fica no centro: recorte fixo do
+    centro, com o zoom de edição puxando pro meio."""
+    split_screen = False
+    stacked = False
+    active_fraction = 1.0
+    streamer_fraction = 0.0
+    switches = 0
+    n_voice = 0
+    cam_h = 0
+
+    def __init__(self, out_h: int = 1920):
+        self.out_h = out_h
+
+    def active(self, t: float) -> bool:
+        return True
+
+    def caption_margin_v(self) -> int:
+        """Legenda no terço de cima (céu/estrada): no meio ela cobria o
+        carro/personagem (teste real)."""
+        font = getattr(config, "CAPTION_FONT_SIZE", 104)
+        return int(round(self.out_h * (1.0 - getattr(config, "GAMEPLAY_NOCAM_CAPTION_Y", 0.3)) - font * 0.5))
+
+    def hook_bottom_y(self) -> int:
+        font = getattr(config, "CAPTION_FONT_SIZE", 104)
+        return int(self.out_h - self.caption_margin_v() - font - 40)
+
+    def compose(self, frame, t: float, out_w: int, out_h: int, zoom: float = 1.0) -> np.ndarray:
+        H, W = frame.shape[:2]
+        aspect = out_w / float(out_h)
+        ch = H / max(zoom, 1.0)
+        cw = min(ch * aspect, float(W))
+        ch = cw / aspect
+        x0, y0 = int((W - cw) / 2), int((H - ch) / 2)
+        crop = frame[y0:y0 + int(ch), x0:x0 + int(cw)]
+        return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_CUBIC if cw < out_w else cv2.INTER_AREA)
 
 
 def _upscale(crop, w, h, scale):
@@ -454,9 +511,13 @@ def plan_clip(layout: ReactLayout, source_path: str, start: float, end: float,
     window = _game_window(layout, W, H, out_w, out_h)
     plan = GameplayClipPlan(layout, times, lab, locked, window, W, present=present)
     if getattr(config, "GAMEPLAY_LAYOUT", "alterna") == "empilhado":
-        frac = float(np.clip(getattr(config, "GAMEPLAY_STACK_CAM_FRAC", 0.4), 0.25, 0.55))
+        # altura da faixa da webcam: a webcam inteira na largura da tela (sem
+        # cortar), entre 28% e GAMEPLAY_STACK_CAM_FRAC (40%) da altura
+        top = float(np.clip(getattr(config, "GAMEPLAY_STACK_CAM_FRAC", 0.4), 0.28, 0.55))
+        cbw, cbh = layout.cam_box[2], layout.cam_box[3]
+        want = out_w * cbh / float(max(cbw, 1))
         plan.stacked, plan.out_h = True, out_h
-        plan.cam_h = int(round(out_h * frac / 2.0)) * 2
+        plan.cam_h = int(round(float(np.clip(want, 0.28 * out_h, top * out_h)) / 2.0)) * 2
         plan.game_window_stacked = _game_window(layout, W, H, out_w, out_h - plan.cam_h)
     plan.n_action = int(_count_runs(action))
     plan.n_other = n_other + n_voice

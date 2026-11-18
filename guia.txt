@@ -1,4 +1,4 @@
-GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v49
+GUIA PARA CONTINUAR O TRABALHO (Auto Clipper) — atualizado em 16/10/2026, versão atual v50
 =====================================================================================
 
 Leia isto inteiro antes de mexer em qualquer coisa. Depois leia o README.md
@@ -414,9 +414,23 @@ v49 (pedido: clipar GTA VI de vídeos grandes, estilo webcam + jogo, e lista pra
   - ambiente novo da nuvem: python3 -m pip install -r requirements.txt onnxruntime
     pyflakes; tkinter só no /usr/bin/python3.12 (apt-get install python3-tk).
 
+v50 (pedido: conferir o gameplay com vídeos reais tipo GTA V; atalho; papel de parede):
+  - YouTube bloqueia download na nuvem (403); testes com VODs da Twitch (yt-dlp
+    --download-sections funciona): xQc (GTA V RP, webcam 238x124 no canto), Paulinho
+    (RP BR, webcam no canto) e Buddha (sem webcam). Scratchpad gv5/;
+    v49/stack_real.py monta quadros empilhados de um vídeo real sem rodar tudo;
+  - achado: webcam pequena virava painelzinho numa faixa escura -> _cam_full (webcam
+    na largura toda; faixa = formato da webcam entre 28% e 40%);
+  - achado: sem webcam, o enquadramento comum pegava o minimapa e o carro saía ->
+    CenterGamePlan (recorte do centro, legenda a 30% da altura);
+  - interface: papel de parede (botão; autopilot_data/papel_de_parede.*;
+    WALLPAPER_BRIGHTNESS); cabeçalho virou Canvas pra imagem aparecer atrás;
+  - atalho "interface.py - Shortcut" da área de trabalho: sem acesso ao PC, mandei
+    um comando PowerShell que aponta o atalho pro .venv\pythonw + interface.py.
+
 8. ESTADO ATUAL E PRÓXIMOS PASSOS
 --------------------------------
-- Última entrega: v49 (zip enviado). Esperando o usuário instalar e mandar
+- Última entrega: v50 (zip enviado). Esperando o usuário instalar e mandar
   o próximo Short com problema.
 - Quando ele mandar um link de Short:
     1) pegar oar1-3 e a página do Short (achar "Corte de:" -> vídeo original);

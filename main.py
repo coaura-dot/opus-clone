@@ -248,8 +248,11 @@ def main():
                 str(source_path), info["duration"], info["width"], info["height"], relaxed=True)
             if react is not None:
                 x, y, w, h = react.cam_box
-                print(f"    -> Facecam em x={x} y={y} ({w}x{h}) -- câmera alterna entre o streamer "
-                      f"(jogo calmo, ele falando) e o jogo (ação, voice chat).")
+                if getattr(config, "GAMEPLAY_LAYOUT", "alterna") == "empilhado":
+                    print(f"    -> Facecam em x={x} y={y} ({w}x{h}) -- webcam em cima, jogo embaixo.")
+                else:
+                    print(f"    -> Facecam em x={x} y={y} ({w}x{h}) -- câmera alterna entre o streamer "
+                          f"(jogo calmo, ele falando) e o jogo (ação, voice chat).")
             else:
                 print("    -> Sem facecam fixa neste vídeo: reenquadramento comum.")
         elif getattr(config, "REACT_MODE_AUTO_DETECT", True):

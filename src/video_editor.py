@@ -185,6 +185,14 @@ def build_clip(source_path: str, candidate, clip_index: int, transcript_words,
             print(f"    -> Clip {clip_index}: gameplay -- streamer {react_plan.streamer_fraction * 100:.0f}% / "
                   f"jogo {(1 - react_plan.streamer_fraction) * 100:.0f}% do clipe, "
                   f"{react_plan.switches} corte(s) de câmera{extra}{cheia}")
+    elif react_layout is None and getattr(config, "GAMEPLAY_MODE", False) \
+            and getattr(config, "GAMEPLAY_NOCAM_CENTER", True):
+        # gameplay sem webcam: recorte do centro do jogo (src/gameplay.py, CenterGamePlan)
+        from . import gameplay
+        react_plan = gameplay.CenterGamePlan(config.TARGET_HEIGHT)
+        caption_margin_v = react_plan.caption_margin_v()
+        hook_bottom_y = react_plan.hook_bottom_y()
+        print(f"    -> Clip {clip_index}: gameplay sem webcam -- recorte do centro do jogo, legenda no terço de cima")
     elif react_layout is not None:
         react_plan = react_layout_mod.plan_clip(react_layout, source_path, candidate.start,
                                                 candidate.end, config.TARGET_WIDTH, config.TARGET_HEIGHT,

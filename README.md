@@ -333,8 +333,11 @@ posta (`CONTENT_PROFILES` em `src/config.py`, escolha salva em
   react, notícia, teoria e GTA 5 ficam de fora. Português e inglês (o idioma
   vem do YouTube ou do título original). O corte sai no estilo **webcam em
   cima, jogo embaixo** (`GAMEPLAY_LAYOUT = "empilhado"`, webcam com 40% da
-  altura, legenda na divisória); vídeo sem webcam sai com o enquadramento
-  normal. Dá pra pôr streamers fixos em `"canais"`.
+  altura, legenda na divisória). Testado em gameplays reais de GTA V RP
+  (Twitch): a webcam ocupa a faixa de cima inteira, no formato dela (28% a
+  40% da altura), e o jogo o resto, sem a webcam nem o chat. Vídeo **sem
+  webcam**: recorte do centro do jogo (o carro/personagem fica no meio) com a
+  legenda no terço de cima. Dá pra pôr streamers fixos em `"canais"`.
 - Só os clipes do tipo escolhido são postados; os outros esperam na fila
   (`CONTENT_POST_ONLY_CURRENT`). "Cortar um link" numa sessão de GTA também
   sai no estilo empilhado.
